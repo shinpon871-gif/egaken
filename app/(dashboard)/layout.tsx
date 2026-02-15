@@ -6,6 +6,9 @@ import { useEffect } from 'react';
 import { signOut } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 
+// このレイアウトはサーバーサイドでプリレンダリングしない
+export const dynamic = 'force-dynamic';
+
 export default function DashboardLayout({
   children,
 }: Readonly<{

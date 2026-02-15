@@ -23,7 +23,9 @@ export default function DashboardLayout({
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      if (auth) {
+        await signOut(auth);
+      }
       router.push('/auth/login');
     } catch (error) {
       console.error('ログアウトエラー:', error);

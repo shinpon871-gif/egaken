@@ -14,6 +14,7 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import Image from 'next/image';
+import { ShareButton } from './ShareButton';
 
 interface Record {
   id: string;
@@ -21,6 +22,7 @@ interface Record {
   imageUrl: string;
   comment: string;
   practiceMinutes: number;
+  aiComment?: string;
   createdAt: Timestamp | null;
 }
 
@@ -158,18 +160,9 @@ export function RecordList({ refresh }: RecordListProps) {
 
             {/* コンテンツ */}
             <div className="p-4">
-              <div className="mb-3 flex items-start justify-between">
-                <time className="text-sm text-gray-500">
-                  {formatDate(record.createdAt)}
-                </time>
-                <button
-                  onClick={() => handleDelete(record.id)}
-                  disabled={deletingId === record.id}
-                  className="rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
-                >
-                  {deletingId === record.id ? '削除中...' : '削除'}
-                </button>
-              </div>
+              <time className="mb-3 block text-sm text-gray-500">
+                {formatDate(record.createdAt)}
+              </time>
 
               {record.comment && (
                 <p className="mb-3 whitespace-pre-wrap text-gray-700">
@@ -178,11 +171,45 @@ export function RecordList({ refresh }: RecordListProps) {
               )}
 
               {record.practiceMinutes > 0 && (
-                <div className="flex items-center gap-2 rounded-lg bg-orange-50 px-3 py-2 text-sm text-orange-700">
+                <div className="flex items-center gap-2 rounded-lg bg-orange-50 px-3 py-2 text-sm text-orange-700 mb-3">
                   <span>⏱️</span>
                   <span>{record.practiceMinutes}分</span>
                 </div>
               )}
+
+              {/* AIコメント */}
+              <div className="rounded-lg bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-100 px-4 py-3 mb-4">
+                <div className="flex items-start gap-2">
+                  <span className="text-lg flex-shrink-0">🤖</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-blue-600 mb-1">えがけん応援コメント</p>
+                    {record.aiComment ? (
+                      <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-words">
+                        {record.aiComment}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-gray-500 italic">コメント生成中...</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* アクションボタン */}
+              <div className="flex flex-wrap items-center gap-2">
+                <ShareButton 
+                  comment={record.comment}
+                  practiceMinutes={record.practiceMinutes}
+                  aiComment={record.aiComment}
+                  imageUrl={record.imageUrl}
+                />
+                <button
+                  onClick={() => handleDelete(record.id)}
+                  disabled={deletingId === record.id}
+                  className="rounded-lg px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50 transition"
+                >
+                  {deletingId === record.id ? '削除中...' : '削除'}
+                </button>
+              </div>
             </div>
           </article>
         ))}

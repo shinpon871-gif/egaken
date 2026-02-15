@@ -3,7 +3,7 @@
 import { useRef, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { db, storage } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 interface CreateRecordFormProps {
@@ -54,13 +54,46 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       const imageUrl = await getDownloadURL(uploadResult.ref);
 
       // Firestoreにレコードを保存
-      await addDoc(collection(db, 'records'), {
+      const recordRef = await addDoc(collection(db, 'records'), {
         userId: user.uid,
         imageUrl,
         comment: comment.trim() || '',
         practiceMinutes: practiceMinutes ? parseInt(practiceMinutes, 10) : 0,
         createdAt: serverTimestamp(),
+        aiComment: '', // 初期値として空文字列を設定
       });
+
+      // AI コメント生成を別途実行（記録の保存を待たずに非同期で実行）
+      (async () => {
+        try {
+          const response = await fetch('/api/generate-comment', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              comment: comment.trim() || null,
+              practiceMinutes: practiceMinutes ? parseInt(practiceMinutes, 10) : null,
+            }),
+          });
+
+          if (!response.ok) {
+            console.error('AI コメント生成失敗:', response.statusText);
+            return;
+          }
+
+          const data = await response.json();
+          const aiComment = data.aiComment || '';
+
+          // Firestoreのレコードを更新
+          await updateDoc(doc(db, 'records', recordRef.id), {
+            aiComment,
+          });
+        } catch (error) {
+          console.error('AI コメント生成エラー:', error);
+          // ここでエラーを表示しない（ユーザー体験を損なわないため）
+        }
+      })();
 
       // フォームをリセット
       setSelectedFile(null);

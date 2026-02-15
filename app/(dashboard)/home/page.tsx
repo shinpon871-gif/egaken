@@ -4,9 +4,6 @@ import { useState } from 'react';
 import { CreateRecordForm } from '@/components/CreateRecordForm';
 import { RecordList } from '@/components/RecordList';
 
-// このページはサーバーサイドでプリレンダリングしない
-export const dynamic = 'force-dynamic';
-
 export default function HomePage() {
   const [showForm, setShowForm] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);

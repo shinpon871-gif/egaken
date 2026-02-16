@@ -14,7 +14,7 @@ export default function LoginPage() {
   // 既にログインしている場合はホーム画面へリダイレクト
   useEffect(() => {
     if (!loading && user) {
-      router.push('/dashboard/home');
+      router.push('/home');
     }
   }, [user, loading, router]);
 
@@ -27,7 +27,7 @@ export default function LoginPage() {
       }
       const result = await signInWithPopup(auth, provider);
       if (result.user) {
-        router.push('/dashboard/home');
+        router.push('/home');
       }
     } catch (error) {
       console.error('ログインエラー:', error);

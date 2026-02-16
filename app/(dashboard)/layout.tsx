@@ -17,7 +17,7 @@ export default function DashboardLayout({
   useEffect(() => {
     // ログインしていない場合はログインページへリダイレクト
     if (!loading && !user) {
-      router.push('/auth/login');
+      router.push('/login');
     }
   }, [user, loading, router]);
 
@@ -26,7 +26,7 @@ export default function DashboardLayout({
       if (auth) {
         await signOut(auth);
       }
-      router.push('/auth/login');
+      router.push('/login');
     } catch (error) {
       console.error('ログアウトエラー:', error);
     }

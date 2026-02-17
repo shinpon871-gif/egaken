@@ -3,8 +3,6 @@ import {
   collection,
   query,
   where,
-  orderBy,
-  limit,
   getDocs,
   Timestamp,
 } from 'firebase/firestore';
@@ -28,35 +26,49 @@ export interface GrowthData {
  */
 export async function getGrowthData(userId: string): Promise<GrowthData | null> {
   try {
-    // ユーザーの投稿をすべて取得（古い順）
-    const firstQuerySnapshot = await getDocs(
+    console.log('成長データ取得開始:', userId);
+    
+    // ユーザーの投稿をすべて取得（複合インデックスなしで実装）
+    const postsSnapshot = await getDocs(
       query(
         collection(db, 'posts'),
-        where('userId', '==', userId),
-        orderBy('createdAt', 'asc')
+        where('userId', '==', userId)
       )
     );
 
-    if (firstQuerySnapshot.size < 2) {
+    console.log('投稿数:', postsSnapshot.size);
+
+    if (postsSnapshot.size < 2) {
+      console.log('投稿数が2件未満です');
       return null; // 投稿が2件未満の場合はnull
     }
 
-    // 初回投稿を取得
-    const firstPost = firstQuerySnapshot.docs[0];
-    const firstData = firstPost.data();
+    // クライアント側でソート（複合インデックス不要）
+    const posts = postsSnapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        imageUrl: data.imageUrl || '',
+        createdAt: data.createdAt,
+      };
+    });
 
-    // 最新投稿を取得
-    const latestQuerySnapshot = await getDocs(
-      query(
-        collection(db, 'posts'),
-        where('userId', '==', userId),
-        orderBy('createdAt', 'desc'),
-        limit(1)
-      )
-    );
+    // createdAt でソート
+    posts.sort((a, b) => {
+      const timeA = (a.createdAt instanceof Timestamp) 
+        ? a.createdAt.toDate().getTime()
+        : new Date(a.createdAt).getTime();
+      const timeB = (b.createdAt instanceof Timestamp)
+        ? b.createdAt.toDate().getTime()
+        : new Date(b.createdAt).getTime();
+      return timeA - timeB;
+    });
 
-    const latestPost = latestQuerySnapshot.docs[0];
-    const latestData = latestPost.data();
+    const firstData = posts[0];
+    console.log('初回投稿:', firstData);
+
+    const latestData = posts[posts.length - 1];
+    console.log('最新投稿:', latestData);
 
     // タイムスタンプをDateに変換
     const firstDate = firstData.createdAt instanceof Timestamp 
@@ -72,6 +84,8 @@ export async function getGrowthData(userId: string): Promise<GrowthData | null> 
     const latestDateOnly = new Date(latestDate.getFullYear(), latestDate.getMonth(), latestDate.getDate());
     const totalDays = Math.floor((latestDateOnly.getTime() - firstDateOnly.getTime()) / (1000 * 60 * 60 * 24)) + 1;
 
+    console.log('成長データ取得成功:', { totalDays });
+
     return {
       firstImageUrl: firstData.imageUrl || '',
       latestImageUrl: latestData.imageUrl || '',
@@ -81,6 +95,11 @@ export async function getGrowthData(userId: string): Promise<GrowthData | null> 
     };
   } catch (error) {
     console.error('成長データ取得エラー:', error);
+    // Firestore インデックス エラーかどうかを確認
+    const errorMessage = (error as any)?.message || '';
+    if (errorMessage.includes('index')) {
+      console.error('Firestore複合インデックスが必要です。Firebase コンソールでインデックスを作成してください。');
+    }
     return null;
   }
 }
@@ -92,20 +111,33 @@ export async function getGrowthData(userId: string): Promise<GrowthData | null> 
  */
 export async function getLatestPost(userId: string) {
   try {
-    const querySnapshot = await getDocs(
+    const postsSnapshot = await getDocs(
       query(
         collection(db, 'posts'),
-        where('userId', '==', userId),
-        orderBy('createdAt', 'desc'),
-        limit(1)
+        where('userId', '==', userId)
       )
     );
 
-    if (querySnapshot.empty) {
+    if (postsSnapshot.empty) {
       return null;
     }
 
-    return querySnapshot.docs[0].data();
+    // クライアント側でソート
+    const posts = postsSnapshot.docs.map(doc => ({
+      ...doc.data(),
+    }));
+
+    posts.sort((a, b) => {
+      const timeA = (a.createdAt instanceof Timestamp)
+        ? a.createdAt.toDate().getTime()
+        : new Date(a.createdAt).getTime();
+      const timeB = (b.createdAt instanceof Timestamp)
+        ? b.createdAt.toDate().getTime()
+        : new Date(b.createdAt).getTime();
+      return timeB - timeA; // 降順
+    });
+
+    return posts[0];
   } catch (error) {
     console.error('最新投稿取得エラー:', error);
     return null;
@@ -119,20 +151,33 @@ export async function getLatestPost(userId: string) {
  */
 export async function getFirstPost(userId: string) {
   try {
-    const querySnapshot = await getDocs(
+    const postsSnapshot = await getDocs(
       query(
         collection(db, 'posts'),
-        where('userId', '==', userId),
-        orderBy('createdAt', 'asc'),
-        limit(1)
+        where('userId', '==', userId)
       )
     );
 
-    if (querySnapshot.empty) {
+    if (postsSnapshot.empty) {
       return null;
     }
 
-    return querySnapshot.docs[0].data();
+    // クライアント側でソート
+    const posts = postsSnapshot.docs.map(doc => ({
+      ...doc.data(),
+    }));
+
+    posts.sort((a, b) => {
+      const timeA = (a.createdAt instanceof Timestamp)
+        ? a.createdAt.toDate().getTime()
+        : new Date(a.createdAt).getTime();
+      const timeB = (b.createdAt instanceof Timestamp)
+        ? b.createdAt.toDate().getTime()
+        : new Date(b.createdAt).getTime();
+      return timeA - timeB; // 昇順
+    });
+
+    return posts[0];
   } catch (error) {
     console.error('初回投稿取得エラー:', error);
     return null;

@@ -26,15 +26,19 @@ export default function GrowthPage() {
       setIsLoading(true);
       setError(null);
       try {
+        console.log('ユーザーID:', user.uid);
         const data = await getGrowthData(user.uid);
         if (data) {
+          console.log('成長データ取得成功:', data);
           setGrowthData(data);
         } else {
+          console.log('成長データが null');
           setError('比較できるデータがまだ足りません。2つ以上の投稿が必要です。');
         }
       } catch (err) {
         console.error('成長データ取得エラー:', err);
-        setError('データ取得に失敗しました。');
+        const errorMsg = (err as any)?.message || '不明なエラー';
+        setError(`データ取得に失敗しました。${errorMsg}`);
       } finally {
         setIsLoading(false);
       }

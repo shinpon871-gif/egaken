@@ -21,7 +21,7 @@ interface Record {
   userId: string;
   imageUrl: string;
   comment: string;
-  practiceMinutes: number;
+  minutes: number;
   aiComment?: string;
   createdAt: Timestamp | null;
 }
@@ -41,7 +41,7 @@ export function RecordList({ refresh }: RecordListProps) {
     if (!user) return;
 
     const q = query(
-      collection(db, 'records'),
+      collection(db, 'posts'),
       where('userId', '==', user.uid),
       orderBy('createdAt', 'desc')
     );
@@ -82,7 +82,7 @@ export function RecordList({ refresh }: RecordListProps) {
 
     setDeletingId(recordId);
     try {
-      await deleteDoc(doc(db, 'records', recordId));
+      await deleteDoc(doc(db, 'posts', recordId));
     } catch (error) {
       console.error('削除エラー:', error);
       alert('削除に失敗しました');
@@ -170,10 +170,10 @@ export function RecordList({ refresh }: RecordListProps) {
                 </p>
               )}
 
-              {record.practiceMinutes > 0 && (
+              {record.minutes > 0 && (
                 <div className="flex items-center gap-2 rounded-lg bg-orange-50 px-3 py-2 text-sm text-orange-700 mb-3">
                   <span>⏱️</span>
-                  <span>{record.practiceMinutes}分</span>
+                  <span>{record.minutes}分</span>
                 </div>
               )}
 
@@ -198,7 +198,7 @@ export function RecordList({ refresh }: RecordListProps) {
               <div className="flex flex-wrap items-center gap-2">
                 <ShareButton 
                   comment={record.comment}
-                  practiceMinutes={record.practiceMinutes}
+                  practiceMinutes={record.minutes}
                   aiComment={record.aiComment}
                   imageUrl={record.imageUrl}
                 />

@@ -1,10 +1,12 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { CreateRecordForm } from '@/components/CreateRecordForm';
 import { RecordList } from '@/components/RecordList';
 
 export default function HomePage() {
+  const router = useRouter();
   const [showForm, setShowForm] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -17,15 +19,24 @@ export default function HomePage() {
   return (
     <div className="space-y-8 py-4">
       {/* CTA ボタン */}
-      <div className="text-center">
+      <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
         {!showForm && (
-          <button
-            onClick={() => setShowForm(true)}
-            className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-8 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-orange-600 active:scale-95"
-          >
-            <span className="text-2xl">✏️</span>
-            今日の記録
-          </button>
+          <>
+            <button
+              onClick={() => setShowForm(true)}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-8 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-orange-600 active:scale-95"
+            >
+              <span className="text-2xl">✏️</span>
+              今日の記録
+            </button>
+            <button
+              onClick={() => router.push('/growth')}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-purple-500 px-8 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-purple-600 active:scale-95"
+            >
+              <span className="text-2xl">📊</span>
+              成長を見る
+            </button>
+          </>
         )}
       </div>
 

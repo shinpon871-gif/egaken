@@ -53,14 +53,13 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       const uploadResult = await uploadBytes(storageRef, selectedFile);
       const imageUrl = await getDownloadURL(uploadResult.ref);
 
-      // Firestoreにレコードを保存
-      const recordRef = await addDoc(collection(db, 'records'), {
+      // Firestoreにレコードを投稿として保存
+      const recordRef = await addDoc(collection(db, 'posts'), {
         userId: user.uid,
         imageUrl,
+        minutes: practiceMinutes ? parseInt(practiceMinutes, 10) : 0,
         comment: comment.trim() || '',
-        practiceMinutes: practiceMinutes ? parseInt(practiceMinutes, 10) : 0,
         createdAt: serverTimestamp(),
-        aiComment: '', // 初期値として空文字列を設定
       });
 
       // AI コメント生成を別途実行（記録の保存を待たずに非同期で実行）
@@ -86,7 +85,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
           const aiComment = data.aiComment || '';
 
           // Firestoreのレコードを更新
-          await updateDoc(doc(db, 'records', recordRef.id), {
+          await updateDoc(doc(db, 'posts', recordRef.id), {
             aiComment,
           });
         } catch (error) {

@@ -7,10 +7,44 @@ interface GenerateTweetTextResult {
   length: number;
   isWarning: boolean;
   isOverLimit: boolean;
+  shortUrl?: string;
 }
 
 const MAX_CHAR_LIMIT = 140;
 const WARNING_THRESHOLD = 120;
+
+/**
+ * URLを短縮URLに置き換え（TinyURL APIを使用）
+ * @param url - 元のURL
+ * @returns 短縮済みURL、または元のURL（失敗時）
+ */
+export async function shortenUrl(url: string): Promise<string> {
+  if (!url) return url;
+  
+  try {
+    // TinyURL APIを使用してURLを短縮
+    const response = await fetch('https://tinyurl.com/api/create.php?url=' + encodeURIComponent(url), {
+      method: 'GET',
+    });
+    
+    if (!response.ok) {
+      console.warn('URL短縮失敗:', response.statusText);
+      return url;
+    }
+
+    const shortUrl = await response.text();
+    
+    // 有効なURLが返されたか確認
+    if (shortUrl.startsWith('http')) {
+      return shortUrl.trim();
+    }
+    
+    return url;
+  } catch (error) {
+    console.warn('URL短縮エラー:', error);
+    return url;
+  }
+}
 
 /**
  * Twitter投稿テキストを生成し、文字数情報を返す
@@ -47,6 +81,48 @@ export function generateTweetText(
     length,
     isWarning,
     isOverLimit,
+  };
+}
+
+/**
+ * Twitter投稿テキストを生成（画像URLを短縮URLに置き換え）
+ * @param minutes - 練習時間（分）
+ * @param userComment - ユーザーのコメント
+ * @param imageUrl - 画像URL（オプション）
+ * @returns 投稿テキスト、文字数、警告フラグ、超過フラグ、短縮URL
+ */
+export async function generateTweetTextWithShortUrl(
+  minutes: number,
+  userComment: string,
+  imageUrl?: string
+): Promise<GenerateTweetTextResult> {
+  // 投稿テンプレートを構築
+  let text = '#えがけん記録\n';
+  text += `練習時間: ${minutes}分\n`;
+  text += `${userComment}\n`;
+  text += '\n#えがけん';
+
+  let shortUrl = '';
+
+  // 画像URLがあれば短縮URLに置き換えて末尾に追加
+  if (imageUrl) {
+    shortUrl = await shortenUrl(imageUrl);
+    text += `\n${shortUrl}`;
+  }
+
+  // 文字数をカウント（改行も1文字）
+  const length = text.length;
+
+  // 警告フラグと超過フラグを判定
+  const isWarning = length >= WARNING_THRESHOLD && length <= MAX_CHAR_LIMIT;
+  const isOverLimit = length > MAX_CHAR_LIMIT;
+
+  return {
+    text,
+    length,
+    isWarning,
+    isOverLimit,
+    shortUrl,
   };
 }
 

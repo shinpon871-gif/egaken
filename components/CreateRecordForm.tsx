@@ -183,7 +183,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
           placeholder="何を描きましたか？今日の工夫した点は？"
           maxLength={500}
           disabled={isLoading}
-          className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm placeholder-gray-400 focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 disabled:bg-gray-50"
+          className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 disabled:bg-gray-50"
           rows={4}
         />
         <p className="mt-1 text-xs text-gray-500">{comment.length}/500</p>
@@ -203,7 +203,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
           min="0"
           max="1440"
           disabled={isLoading}
-          className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm placeholder-gray-400 focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 disabled:bg-gray-50"
+          className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 disabled:bg-gray-50"
         />
       </div>
 

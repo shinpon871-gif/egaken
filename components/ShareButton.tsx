@@ -11,6 +11,14 @@ interface ShareButtonProps {
   imageUrl: string;
 }
 
+/**
+ * iOSかどうかを判定
+ */
+function isIOS(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent);
+}
+
 export function ShareButton({ recordId, comment, practiceMinutes, aiComment, imageUrl }: ShareButtonProps) {
   const [isSharing, setIsSharing] = useState(false);
 
@@ -32,35 +40,50 @@ export function ShareButton({ recordId, comment, practiceMinutes, aiComment, ima
 
     setIsSharing(true);
     const shareText = tweetResult.text;
+    const iosDevice = isIOS();
 
     try {
       // Web Share API (モバイル等で画像付きシェア) を試行
       if (typeof navigator !== 'undefined' && navigator.share) {
         try {
-          // 画像を取得してFileオブジェクト化
-          const response = await fetch(imageUrl);
-          const blob = await response.blob();
-          const file = new File([blob], 'image.png', { type: blob.type });
-
-          // ファイル共有がサポートされているか確認
-          if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            await navigator.share({
-              text: shareText,
-              files: [file],
-            });
-            setIsSharing(false);
-            return;
-          }
+          console.log('Web Share API を試行...');
+          // まずテキストだけを共有してみる
+          await navigator.share({
+            text: shareText,
+          });
+          console.log('Web Share API で共有成功');
+          setIsSharing(false);
+          return;
         } catch (error) {
-          console.warn('Web Share APIでの画像共有に失敗しました（Web Intentへフォールバックします）:', error);
+          console.warn('Web Share APIでの共有に失敗:', error);
         }
       }
 
-      // --- Web Intent (PCや非対応ブラウザ用) ---
+      // iOS特有の処理
+      if (iosDevice) {
+        console.log('iOS デバイス: Twitter共有を試みます');
+        
+        const webIntentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`;
+        
+        // iOSでは標準的なwindow.openを使用
+        // _blank を指定しない（iOSでより確実に動作）
+        const newWindow = window.open(webIntentUrl);
+        
+        // フォールバック: ウィンドウが開かなかった場合の別案を表示
+        if (!newWindow) {
+          console.warn('window.open がブロックされました');
+          alert(`下記リンクをタップしてTwitterで投稿してください：\n\n${webIntentUrl}`);
+        }
+        
+        setIsSharing(false);
+        return;
+      }
+
+      // --- Mac/PC: Web Intent ---
       const encodedText = encodeURIComponent(shareText);
       const twitterUrl = `https://twitter.com/intent/tweet?text=${encodedText}`;
       
-      console.log('Twitter共有URL:', twitterUrl);
+      console.log('Twitter Web Intent を開く:', twitterUrl);
       console.log('投稿テキスト:', shareText);
       
       window.open(twitterUrl, '_blank');

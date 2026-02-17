@@ -19,6 +19,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "えがけん",
   description: "お絵描きの記録を毎日続けるシンプルなWebアプリ",
+  icons: {
+    icon: "/egaken.png",
+  },
 };
 
 export default function RootLayout({

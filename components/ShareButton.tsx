@@ -25,8 +25,8 @@ export function ShareButton({ recordId, comment, practiceMinutes, aiComment, ima
   // 記録詳細ページURLとツイートテキストを生成（useMemoで最適化）
   const tweetResult = useMemo(() => {
     const postUrl = typeof window !== 'undefined' 
-      ? `${window.location.origin}/post/${recordId}`
-      : `https://egaken.com/post/${recordId}`;
+      ? `${window.location.origin}/share/${recordId}`
+      : `https://egaken.com/share/${recordId}`;
     
     return generateTweetText(practiceMinutes, comment, postUrl);
   }, [practiceMinutes, comment, recordId]);

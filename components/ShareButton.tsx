@@ -12,20 +12,26 @@ interface ShareButtonProps {
 
 export function ShareButton({ comment, practiceMinutes, aiComment, imageUrl }: ShareButtonProps) {
   const [isSharing, setIsSharing] = useState(false);
-  const [isShorteningUrl, setIsShorteningUrl] = useState(false);
-  const [tweetResultShort, setTweetResultShort] = useState(generateTweetText(practiceMinutes, comment, imageUrl));
+  const [isShorteningUrl, setIsShorteningUrl] = useState(true); // 初期状態を true に
+  const [tweetResultShort, setTweetResultShort] = useState(() => 
+    generateTweetText(practiceMinutes, comment, imageUrl)
+  );
 
   // コンポーネントマウント時に短縮URLを生成
   useEffect(() => {
     const generateShortTweet = async () => {
       setIsShorteningUrl(true);
       try {
+        console.log('短縮URL生成開始:', { practiceMinutes, comment, imageUrl });
         const result = await generateTweetTextWithShortUrl(practiceMinutes, comment, imageUrl);
+        console.log('短縮URL生成完了:', result);
         setTweetResultShort(result);
       } catch (error) {
         console.error('短縮URL生成エラー:', error);
         // 失敗時は元のテキストを使用
-        setTweetResultShort(generateTweetText(practiceMinutes, comment, imageUrl));
+        const fallbackResult = generateTweetText(practiceMinutes, comment, imageUrl);
+        console.log('フォールバック使用:', fallbackResult);
+        setTweetResultShort(fallbackResult);
       } finally {
         setIsShorteningUrl(false);
       }
@@ -80,9 +86,9 @@ export function ShareButton({ comment, practiceMinutes, aiComment, imageUrl }: S
   return (
     <div className="space-y-3">
       {/* Twitter投稿プレビュー */}
-      <div className="rounded-lg border border-gray-300 bg-gray-50 p-4">
+      <div className="rounded-lg border border-gray-300 bg-gray-50 p-4 overflow-hidden w-full">
         <p className="mb-2 text-xs font-semibold text-gray-600">投稿プレビュー</p>
-        <div className="mb-3 whitespace-pre-wrap rounded bg-white p-3 text-sm text-gray-800">
+        <div className="mb-3 whitespace-pre-wrap rounded bg-white p-3 text-sm text-gray-800 break-all overflow-hidden max-w-full min-w-0">
           {isShorteningUrl ? (
             <span className="text-gray-500 italic">短縮URLを生成中...</span>
           ) : (

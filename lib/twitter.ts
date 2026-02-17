@@ -14,7 +14,7 @@ const MAX_CHAR_LIMIT = 140;
 const WARNING_THRESHOLD = 120;
 
 /**
- * URLを短縮URLに置き換え（TinyURL APIを使用）
+ * URLを短縮URLに置き換え（is.gd APIを使用）
  * @param url - 元のURL
  * @returns 短縮済みURL、または元のURL（失敗時）
  */
@@ -22,8 +22,8 @@ export async function shortenUrl(url: string): Promise<string> {
   if (!url) return url;
   
   try {
-    // TinyURL APIを使用してURLを短縮
-    const response = await fetch('https://tinyurl.com/api/create.php?url=' + encodeURIComponent(url), {
+    // is.gd APIを使用してURLを短縮（CORS対応）
+    const response = await fetch('https://is.gd/create.php?format=json&url=' + encodeURIComponent(url), {
       method: 'GET',
     });
     
@@ -32,16 +32,18 @@ export async function shortenUrl(url: string): Promise<string> {
       return url;
     }
 
-    const shortUrl = await response.text();
+    const data = await response.json();
     
     // 有効なURLが返されたか確認
-    if (shortUrl.startsWith('http')) {
-      return shortUrl.trim();
+    if (data.shorturl) {
+      return data.shorturl;
     }
     
+    console.warn('URL短縮エラー: 短縮URLが返されませんでした', data);
     return url;
   } catch (error) {
     console.warn('URL短縮エラー:', error);
+    // フォールバック: 元のURLを使用
     return url;
   }
 }

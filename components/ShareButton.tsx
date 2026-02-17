@@ -1,35 +1,48 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { generateTweetText, generateTweetTextWithShortUrl } from '@/lib/twitter';
+import { generateTweetText } from '@/lib/twitter';
 
 interface ShareButtonProps {
+  recordId: string;
   comment: string;
   practiceMinutes: number;
   aiComment?: string;
   imageUrl: string;
 }
 
-export function ShareButton({ comment, practiceMinutes, aiComment, imageUrl }: ShareButtonProps) {
+export function ShareButton({ recordId, comment, practiceMinutes, aiComment, imageUrl }: ShareButtonProps) {
   const [isSharing, setIsSharing] = useState(false);
   const [isShorteningUrl, setIsShorteningUrl] = useState(true); // 初期状態を true に
-  const [tweetResultShort, setTweetResultShort] = useState(() => 
-    generateTweetText(practiceMinutes, comment, imageUrl)
-  );
+  const [tweetResultShort, setTweetResultShort] = useState(() => {
+    // 記録詳細ページのURLを生成
+    const postUrl = typeof window !== 'undefined' 
+      ? `${window.location.origin}/post/${recordId}`
+      : `https://egaken.com/post/${recordId}`;
+    return generateTweetText(practiceMinutes, comment, postUrl);
+  });
 
-  // コンポーネントマウント時に短縮URLを生成
+  // コンポーネントマウント時に記録ページURLを投稿テキストに含める
   useEffect(() => {
     const generateShortTweet = async () => {
       setIsShorteningUrl(true);
       try {
-        console.log('短縮URL生成開始:', { practiceMinutes, comment, imageUrl });
-        const result = await generateTweetTextWithShortUrl(practiceMinutes, comment, imageUrl);
-        console.log('短縮URL生成完了:', result);
+        // 記録詳細ページのURLを生成
+        const postUrl = typeof window !== 'undefined' 
+          ? `${window.location.origin}/post/${recordId}`
+          : `https://egaken.com/post/${recordId}`;
+        
+        console.log('投稿URL:', postUrl);
+        const result = generateTweetText(practiceMinutes, comment, postUrl);
+        console.log('投稿テキスト生成完了:', result);
         setTweetResultShort(result);
       } catch (error) {
-        console.error('短縮URL生成エラー:', error);
+        console.error('投稿テキスト生成エラー:', error);
         // 失敗時は元のテキストを使用
-        const fallbackResult = generateTweetText(practiceMinutes, comment, imageUrl);
+        const postUrl = typeof window !== 'undefined' 
+          ? `${window.location.origin}/post/${recordId}`
+          : `https://egaken.com/post/${recordId}`;
+        const fallbackResult = generateTweetText(practiceMinutes, comment, postUrl);
         console.log('フォールバック使用:', fallbackResult);
         setTweetResultShort(fallbackResult);
       } finally {
@@ -38,7 +51,7 @@ export function ShareButton({ comment, practiceMinutes, aiComment, imageUrl }: S
     };
 
     generateShortTweet();
-  }, [practiceMinutes, comment, imageUrl]);
+  }, [practiceMinutes, comment, recordId]);
 
   const handleShare = async () => {
     // 文字数制限をチェック

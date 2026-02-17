@@ -197,6 +197,7 @@ export function RecordList({ refresh }: RecordListProps) {
               {/* アクションボタン */}
               <div className="flex flex-wrap items-center gap-2">
                 <ShareButton 
+                  recordId={record.id}
                   comment={record.comment}
                   practiceMinutes={record.minutes}
                   aiComment={record.aiComment}

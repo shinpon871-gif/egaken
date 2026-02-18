@@ -23,6 +23,7 @@ export default function HomePage() {
       <StatsDisplay />
 
       {/* デバッグリンク （開発時のみ） */}
+      {/*
       <div className="text-center">
         <a
           href="/debug-storage"
@@ -31,6 +32,7 @@ export default function HomePage() {
           🔧 Firebase ストレージデバッグ
         </a>
       </div>
+      */}
 
       {/* CTA ボタン */}
       <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">

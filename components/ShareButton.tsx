@@ -43,50 +43,25 @@ export function ShareButton({ recordId, comment, practiceMinutes, aiComment, ima
     const iosDevice = isIOS();
 
     try {
-      // Web Share API (モバイル等で画像付きシェア) を試行
-      if (typeof navigator !== 'undefined' && navigator.share) {
-        try {
-          console.log('Web Share API を試行...');
-          // まずテキストだけを共有してみる
-          await navigator.share({
-            text: shareText,
-          });
-          console.log('Web Share API で共有成功');
-          setIsSharing(false);
-          return;
-        } catch (error) {
-          console.warn('Web Share APIでの共有に失敗:', error);
-        }
-      }
-
-      // iOS特有の処理
-      if (iosDevice) {
-        console.log('iOS デバイス: Twitter共有を試みます');
-        
-        const webIntentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`;
-        
-        // iOSでは標準的なwindow.openを使用
-        // _blank を指定しない（iOSでより確実に動作）
-        const newWindow = window.open(webIntentUrl);
-        
-        // フォールバック: ウィンドウが開かなかった場合の別案を表示
-        if (!newWindow) {
-          console.warn('window.open がブロックされました');
-          alert(`下記リンクをタップしてTwitterで投稿してください：\n\n${webIntentUrl}`);
-        }
-        
-        setIsSharing(false);
-        return;
-      }
-
-      // --- Mac/PC: Web Intent ---
+      // --- Twitter Web Intent（全環境共通） ---
       const encodedText = encodeURIComponent(shareText);
       const twitterUrl = `https://twitter.com/intent/tweet?text=${encodedText}`;
-      
+
       console.log('Twitter Web Intent を開く:', twitterUrl);
       console.log('投稿テキスト:', shareText);
-      
-      window.open(twitterUrl, '_blank');
+
+      if (iosDevice) {
+        // iOSは_blankを付けない方が安定
+        const newWindow = window.open(twitterUrl);
+
+        if (!newWindow) {
+          console.warn('window.open がブロックされました');
+          alert(`下記リンクをタップしてTwitterで投稿してください：\n\n${twitterUrl}`);
+        }
+      } else {
+        window.open(twitterUrl, '_blank');
+      }
+
     } catch (error) {
       console.error('シェアエラー:', error);
       alert('共有に失敗しました');

@@ -201,7 +201,7 @@ export function RecordList({ refresh }: RecordListProps) {
                   <textarea
                     value={editComment}
                     onChange={(e) => setEditComment(e.target.value)}
-                    className="w-full rounded border border-gray-300 p-2 text-sm focus:border-orange-500 focus:outline-none"
+                    className="w-full rounded border border-gray-300 p-2 text-sm text-gray-900 focus:border-orange-500 focus:outline-none"
                     rows={3}
                     placeholder="コメントを入力..."
                   />

@@ -12,6 +12,8 @@ import {
   deleteDoc,
   doc,
   Timestamp,
+  updateDoc,
+  serverTimestamp,
 } from 'firebase/firestore';
 import { ShareButton } from './ShareButton';
 
@@ -35,6 +37,8 @@ export function RecordList({ refresh }: RecordListProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [indexUrl, setIndexUrl] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editComment, setEditComment] = useState('');
 
   useEffect(() => {
     if (!user) return;
@@ -87,6 +91,32 @@ export function RecordList({ refresh }: RecordListProps) {
       alert('削除に失敗しました');
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleEditClick = (record: Record) => {
+    setEditingId(record.id);
+    setEditComment(record.comment || '');
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setEditComment('');
+  };
+
+  const handleSaveEdit = async (recordId: string) => {
+    if (editComment.length > 140) return;
+
+    try {
+      await updateDoc(doc(db, 'posts', recordId), {
+        comment: editComment,
+        updatedAt: serverTimestamp(),
+      });
+      setEditingId(null);
+      setEditComment('');
+    } catch (error) {
+      console.error('コメント更新エラー:', error);
+      alert('コメントの更新に失敗しました');
     }
   };
 
@@ -166,10 +196,51 @@ export function RecordList({ refresh }: RecordListProps) {
                 {formatDate(record.createdAt)}
               </time>
 
-              {record.comment && (
-                <p className="mb-3 whitespace-pre-wrap text-gray-700">
-                  {record.comment}
-                </p>
+              {editingId === record.id ? (
+                <div className="mb-4 rounded-lg bg-gray-50 p-3">
+                  <textarea
+                    value={editComment}
+                    onChange={(e) => setEditComment(e.target.value)}
+                    className="w-full rounded border border-gray-300 p-2 text-sm focus:border-orange-500 focus:outline-none"
+                    rows={3}
+                    placeholder="コメントを入力..."
+                  />
+                  <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-xs">
+                      <span
+                        className={
+                          editComment.length > 140
+                            ? 'font-bold text-red-600'
+                            : editComment.length >= 120
+                            ? 'font-bold text-yellow-600'
+                            : 'text-gray-500'
+                        }
+                      >
+                        {editComment.length} / 140文字
+                      </span>
+                      {editComment.length >= 120 && editComment.length <= 140 && (
+                        <span className="block text-yellow-600 sm:ml-2 sm:inline">
+                          ⚠️ 文章が途切れる可能性があります
+                        </span>
+                      )}
+                      {editComment.length > 140 && (
+                        <span className="block text-red-600 sm:ml-2 sm:inline">
+                          ❌ 140文字以内にしてください
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex gap-2 self-end sm:self-auto">
+                      <button onClick={handleCancelEdit} className="rounded px-3 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-200">
+                        キャンセル
+                      </button>
+                      <button onClick={() => handleSaveEdit(record.id)} disabled={editComment.length > 140} className="rounded bg-orange-500 px-3 py-1 text-xs font-semibold text-white hover:bg-orange-600 disabled:opacity-50">
+                        保存
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                record.comment && <p className="mb-3 whitespace-pre-wrap text-gray-700">{record.comment}</p>
               )}
 
               {record.minutes > 0 && (
@@ -205,6 +276,14 @@ export function RecordList({ refresh }: RecordListProps) {
                   aiComment={record.aiComment}
                   imageUrl={record.imageUrl}
                 />
+                {editingId !== record.id && (
+                  <button
+                    onClick={() => handleEditClick(record)}
+                    className="rounded-lg px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-50 transition"
+                  >
+                    編集
+                  </button>
+                )}
                 <button
                   onClick={() => handleDelete(record.id)}
                   disabled={deletingId === record.id}

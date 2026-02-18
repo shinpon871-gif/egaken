@@ -116,14 +116,15 @@ export default function RecordDetailPage() {
       <div className="rounded-lg bg-white shadow-md overflow-hidden">
         {/* 画像 */}
         <div className="relative w-full bg-gray-100" style={{ paddingBottom: '100%' }}>
-          <Image
+          <img
             src={post.imageUrl}
             alt={post.comment || 'drawing'}
-            fill
-            className="object-cover"
-            priority
+            className="absolute inset-0 w-full h-full object-cover"
             onError={(e) => {
-              console.error('画像読み込みエラー:', post.imageUrl);
+              console.error('[RecordDetail] img onError 発火:', post.imageUrl);
+            }}
+            onLoad={() => {
+              console.log('[RecordDetail] img 読み込み完了:', post.imageUrl);
             }}
           />
         </div>

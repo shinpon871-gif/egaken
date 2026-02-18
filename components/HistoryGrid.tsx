@@ -126,14 +126,19 @@ export function HistoryGrid() {
                     </div>
                   </div>
                 ) : (
-                  // 画像表示
-                  <Image
+                  // 画像表示 - 通常の img タグを使用
+                  <img
                     src={post.imageUrl}
                     alt={post.comment || 'drawing'}
-                    fill
-                    className="object-cover"
-                    sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
-                    onError={() => handleImageError(post.id, post.imageUrl)}
+                    className="w-full h-full object-cover"
+                    onError={() => {
+                      console.error(`[HistoryGrid] img onError 発火: ${post.id}`);
+                      handleImageError(post.id, post.imageUrl);
+                    }}
+                    onLoad={() => {
+                      console.log(`[HistoryGrid] img 読み込み完了: ${post.id}`);
+                    }}
+                    loading="lazy"
                   />
                 )}
               </div>

@@ -1,9 +1,8 @@
 'use client';
 
 import { createContext, useContext, ReactNode, useEffect, useState } from 'react';
-import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
-import { User } from 'firebase/auth';
+import { User, onAuthStateChanged } from 'firebase/auth';
 
 interface AuthContextType {
   user: User | null | undefined;
@@ -19,10 +18,32 @@ const AuthContext = createContext<AuthContextType>({
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isClient, setIsClient] = useState(false);
-  const [user, loading, error] = useAuthState(auth || undefined);
+  const [user, setUser] = useState<User | null | undefined>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | undefined>(undefined);
 
   useEffect(() => {
     setIsClient(true);
+
+    if (!auth) {
+      setLoading(false);
+      return;
+    }
+
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (u) => {
+        setUser(u);
+        setLoading(false);
+      },
+      (e) => {
+        console.error('onAuthStateChanged error:', e);
+        setError(e as Error);
+        setLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
   }, []);
 
   // クライアントサイドで初期化されるまで何も表示しない、またはローディング状態を表示

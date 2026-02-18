@@ -5,7 +5,6 @@ import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase';
 import { doc, getDoc, Timestamp } from 'firebase/firestore';
-import Image from 'next/image';
 
 interface RecordPost {
   id: string;
@@ -76,6 +75,10 @@ export default function RecordDetailPage() {
     });
   };
 
+  const getProxyImageUrl = (imageUrl: string) => {
+    return `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center min-h-screen py-8">
@@ -117,7 +120,7 @@ export default function RecordDetailPage() {
         {/* 画像 */}
         <div className="relative w-full bg-gray-100" style={{ paddingBottom: '100%' }}>
           <img
-            src={post.imageUrl}
+            src={getProxyImageUrl(post.imageUrl)}
             alt={post.comment || 'drawing'}
             className="absolute inset-0 w-full h-full object-cover"
             onError={(e) => {

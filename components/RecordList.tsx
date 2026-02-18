@@ -13,7 +13,6 @@ import {
   doc,
   Timestamp,
 } from 'firebase/firestore';
-import Image from 'next/image';
 import { ShareButton } from './ShareButton';
 
 interface Record {
@@ -103,6 +102,10 @@ export function RecordList({ refresh }: RecordListProps) {
     });
   };
 
+  const getProxyImageUrl = (imageUrl: string) => {
+    return `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center py-12">
@@ -149,12 +152,11 @@ export function RecordList({ refresh }: RecordListProps) {
           >
             {/* 画像 */}
             <div className="relative aspect-square w-full overflow-hidden bg-gray-100">
-              <Image
-                src={record.imageUrl}
+              <img
+                src={getProxyImageUrl(record.imageUrl)}
                 alt={record.comment || '記録'}
-                fill
-                className="object-cover"
-                sizes="(max-width: 640px) 100vw, (max-width: 1024px) 90vw, 600px"
+                className="w-full h-full object-cover"
+                loading="lazy"
               />
             </div>
 

@@ -22,6 +22,16 @@ export default function HomePage() {
       {/* 統計情報表示 */}
       <StatsDisplay />
 
+      {/* デバッグリンク （開発時のみ） */}
+      <div className="text-center">
+        <a
+          href="/debug-storage"
+          className="text-xs text-gray-500 hover:text-gray-700 underline"
+        >
+          🔧 Firebase ストレージデバッグ
+        </a>
+      </div>
+
       {/* CTA ボタン */}
       <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
         {!showForm && (

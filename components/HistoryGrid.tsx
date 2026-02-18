@@ -79,6 +79,11 @@ export function HistoryGrid() {
     });
   };
 
+  const getProxyImageUrl = (imageUrl: string) => {
+    // URL をクエリパラメータとしてエンコード
+    return `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+  };
+
   const handleImageError = (postId: string, imageUrl: string) => {
     console.error(`[HistoryGrid] 画像読み込み失敗 ${postId}:`, imageUrl);
     setImageErrors((prev) => new Set([...prev, postId]));
@@ -111,15 +116,15 @@ export function HistoryGrid() {
           <Link
             key={post.id}
             href={`/record/${post.id}`}
-            className="group relative overflow-hidden rounded-lg bg-gray-100 hover:shadow-lg transition-shadow block"
+            className="group relative overflow-hidden rounded-lg hover:shadow-lg transition-shadow block"
           >
             {/* アスペクト比コンテナ */}
-            <div className="relative w-full" style={{ paddingBottom: '100%' }}>
+            <div className="relative w-full bg-white" style={{ paddingBottom: '100%' }}>
               {/* 画像 または フォールバック */}
-              <div className="absolute inset-0">
+              <div className="absolute inset-0 bg-gray-100">
                 {hasError || !post.imageUrl ? (
                   // エラーまたはURL不在の場合
-                  <div className="w-full h-full bg-gray-200 flex items-center justify-center">
+                  <div className="w-full h-full flex items-center justify-center">
                     <div className="text-center">
                       <span className="text-3xl block mb-1">⚠️</span>
                       <p className="text-xs text-gray-600">読み込み失敗</p>
@@ -128,23 +133,28 @@ export function HistoryGrid() {
                 ) : (
                   // 画像表示 - 通常の img タグを使用
                   <img
-                    src={post.imageUrl}
+                    src={getProxyImageUrl(post.imageUrl)}
                     alt={post.comment || 'drawing'}
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-cover block"
+                    style={{ backgroundColor: 'transparent' }}
                     onError={() => {
                       console.error(`[HistoryGrid] img onError 発火: ${post.id}`);
                       handleImageError(post.id, post.imageUrl);
                     }}
-                    onLoad={() => {
-                      console.log(`[HistoryGrid] img 読み込み完了: ${post.id}`);
+                    onLoad={(e) => {
+                      const img = e.currentTarget as HTMLImageElement;
+                      console.log(`[HistoryGrid] img 読み込み完了: ${post.id}`, {
+                        naturalWidth: img.naturalWidth,
+                        naturalHeight: img.naturalHeight,
+                      });
                     }}
                     loading="lazy"
                   />
                 )}
               </div>
 
-              {/* ホバー時の情報表示 */}
-              <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-60 transition-all duration-200 flex flex-col justify-end p-3">
+              {/* ホバー時の情報表示（透明→RGBAホバーに切替） */}
+              <div className="absolute inset-0 transition-all duration-200 flex flex-col justify-end p-3 bg-[rgba(0,0,0,0)] group-hover:bg-[rgba(0,0,0,0.6)]">
                 <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                   <p className="text-white text-xs font-semibold">
                     {formatDate(post.createdAt)}

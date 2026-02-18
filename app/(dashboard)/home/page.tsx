@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CreateRecordForm } from '@/components/CreateRecordForm';
 import { RecordList } from '@/components/RecordList';
+import { StatsDisplay } from '@/components/StatsDisplay';
 
 export default function HomePage() {
   const router = useRouter();
@@ -18,6 +19,9 @@ export default function HomePage() {
 
   return (
     <div className="space-y-8 py-4">
+      {/* 統計情報表示 */}
+      <StatsDisplay />
+
       {/* CTA ボタン */}
       <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
         {!showForm && (
@@ -28,6 +32,13 @@ export default function HomePage() {
             >
               <span className="text-2xl">✏️</span>
               今日の記録
+            </button>
+            <button
+              onClick={() => router.push('/history')}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-500 px-8 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-cyan-600 active:scale-95"
+            >
+              <span className="text-2xl">🖼️</span>
+              ヒストリーを見る
             </button>
             <button
               onClick={() => router.push('/growth')}

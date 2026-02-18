@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { db, storage } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ImageUploadArea } from './ImageUploadArea';
 
 interface CreateRecordFormProps {
   onSuccess?: () => void;
@@ -12,7 +13,6 @@ interface CreateRecordFormProps {
 
 export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const { user } = useAuth();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [comment, setComment] = useState('');
@@ -20,19 +20,21 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-      
-      // プレビュー画像の生成
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setPreview(event.target?.result as string);
-      };
-      reader.readAsDataURL(file);
-      setError(null);
-    }
+  const handleFileSelect = (file: File) => {
+    setSelectedFile(file);
+    
+    // プレビュー画像の生成
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setPreview(event.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+    setError(null);
+  };
+
+  const handlePreviewClear = () => {
+    setSelectedFile(null);
+    setPreview(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -99,9 +101,6 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       setPreview(null);
       setComment('');
       setPracticeMinutes('');
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
 
       onSuccess?.();
     } catch (error) {
@@ -128,46 +127,11 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
           画像を選択 <span className="text-red-500">*</span>
         </label>
         
-        {preview ? (
-          <div className="mb-4 flex flex-col gap-4">
-            <img
-              src={preview}
-              alt="削除"
-              className="max-h-80 w-full rounded-lg object-contain border border-gray-200"
-            />
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedFile(null);
-                setPreview(null);
-                if (fileInputRef.current) {
-                  fileInputRef.current.value = '';
-                }
-              }}
-              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-            >
-              別の画像を選択
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="w-full rounded-lg border-2 border-dashed border-gray-300 p-8 text-center transition hover:border-orange-400 hover:bg-orange-50"
-          >
-            <div className="text-4xl mb-2">🖼️</div>
-            <p className="font-semibold text-gray-700">クリックして画像を選択</p>
-            <p className="text-xs text-gray-500">PNG, JPG, GIF</p>
-          </button>
-        )}
-        
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          onChange={handleFileChange}
-          className="hidden"
-          disabled={isLoading}
+        <ImageUploadArea
+          onFileSelect={handleFileSelect}
+          preview={preview}
+          onPreviewClear={handlePreviewClear}
+          isLoading={isLoading}
         />
       </div>
 

@@ -1,36 +1,45 @@
-export const dynamic = 'force-static';
+import type { Metadata } from 'next';
+import SharePostClient from './SharePostClient';
 
-export async function generateMetadata({ params }) {
+export const dynamic = 'force-dynamic';
+
+export async function generateMetadata({
+  params,
+}: {
+  params: { recordId: string };
+}): Promise<Metadata> {
   const url = `https://egaken.vercel.app/share/${params.recordId}`;
+  const imageUrl = 'https://egaken.vercel.app/ogp.png';
 
   return {
-    title: 'えがけん',
-    description: 'お絵描き記録',
+    title: 'えがけん記録',
+    description: 'イラスト練習の記録',
     openGraph: {
-      title: 'えがけん',
-      description: 'お絵描き記録',
+      title: 'えがけん記録',
+      description: 'イラスト練習の記録',
       url,
-      images: ['https://egaken.vercel.app/ogp.png'],
       type: 'website',
+      images: [
+        {
+          url: imageUrl,
+          width: 1200,
+          height: 630,
+        },
+      ],
     },
     twitter: {
       card: 'summary_large_image',
-      title: 'えがけん',
-      description: 'お絵描き記録',
-      images: ['https://egaken.vercel.app/ogp.png'],
+      title: 'えがけん記録',
+      description: 'イラスト練習の記録',
+      images: [imageUrl],
     },
   };
 }
 
-import SharePostClient from './SharePostClient';
-
-export default function Page({ params }) {
-  const url = `https://egaken.vercel.app/share/${params.recordId}`;
-  const imageUrl = `https://egaken.vercel.app/ogp.png`;
-
-  return (
-    <>
-      <SharePostClient recordId={params.recordId} />
-    </>
-  );
+export default function Page({
+  params,
+}: {
+  params: { recordId: string };
+}) {
+  return <SharePostClient recordId={params.recordId} />;
 }

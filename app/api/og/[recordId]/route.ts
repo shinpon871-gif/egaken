@@ -3,8 +3,8 @@ import type { NextRequest } from 'next/server';
 
 export const runtime = 'edge';
 
-export async function GET(req: NextRequest, { params }: { params: { recordId: string } }) {
-  const { recordId } = params;
+export async function GET(req: NextRequest, { params }: { params: Promise<{ recordId: string }> }) {
+  const { recordId } = await params;
   const imageUrl = `https://egaken.vercel.app/api/image/${recordId}`;
 
   // 画像が存在するかHEADリクエストで確認

@@ -46,29 +46,25 @@ export function ShareButton({ recordId, comment, practiceMinutes, aiComment, ima
     setIsSharing(true);
     const shareText = tweetResult.text;
     const iosDevice = isIOS();
-
-    try {
-      // --- Twitter Web Intent（全環境共通） ---
-      const encodedText = encodeURIComponent(shareText);
-      // intent用URLもキャッシュ対策URLを使用
-      const shareUrl = createShareUrl(recordId);
+    const shareUrl = `https://egaken.vercel.app/share/${recordId}`;
+    const tweetText = useMemo(() => generateTweetText(practiceMinutes, comment, shareUrl), [practiceMinutes, comment, recordId]);
       const twitterUrl = `https://twitter.com/intent/tweet?text=${encodedText}&url=${encodeURIComponent(shareUrl)}`;
 
       console.log('Twitter Web Intent を開く:', twitterUrl);
-      console.log('投稿テキスト:', shareText);
+      if (tweetText.isOverLimit) {
 
       if (iosDevice) {
         // iOSは_blankを付けない方が安定
         const newWindow = window.open(twitterUrl);
 
-        if (!newWindow) {
+      const shareText = tweetText.text;
           console.warn('window.open がブロックされました');
           alert(`下記リンクをタップしてTwitterで投稿してください：\n\n${twitterUrl}`);
         }
       } else {
         window.open(twitterUrl, '_blank');
       }
-
+        const intentUrl = `https://twitter.com/intent/tweet?text=${encodedText}&url=${encodeURIComponent(shareUrl)}`;
     } catch (error) {
       console.error('シェアエラー:', error);
       alert('共有に失敗しました');
@@ -101,7 +97,7 @@ export function ShareButton({ recordId, comment, practiceMinutes, aiComment, ima
           </span>
         </div>
 
-        {/* 警告メッセージ */}
+            {tweetText.text}
         {tweetResult.isWarning && (
           <p className="mt-2 text-xs text-orange-600">
             ⚠️ 投稿が長いため、Twitterで文章が途切れる可能性があります

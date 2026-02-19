@@ -29,11 +29,16 @@ export async function generateMetadata({ params }: { params: { recordId: string 
     const snap = await getDoc(ref);
     if (snap.exists()) {
       const data = snap.data() as Post;
-      if (data.imageUrl) imageUrl = data.imageUrl;
+      // Firebase Storageの画像URLは絶対パスで格納されている前提
+      if (data.imageUrl && /^https?:\/\//.test(data.imageUrl)) {
+        imageUrl = data.imageUrl;
+      }
       if (data.title) title = data.title;
       if (data.comment) description = data.comment;
     }
-  } catch {}
+  } catch (e) {
+    console.warn('OGP画像取得失敗:', e);
+  }
   return {
     title,
     description,

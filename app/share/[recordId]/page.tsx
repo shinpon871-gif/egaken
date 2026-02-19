@@ -7,18 +7,17 @@ type Props = {
   searchParams: { img?: string };
 };
 
-export function generateMetadata({ params, searchParams }: Props): Metadata {
-  // フォールバック画像
-  const fallback = 'https://egaken.vercel.app/ogp.png';
 
-  // searchParams.img があればデコードして使用
+export function generateMetadata({ params, searchParams }: Props): Metadata {
+  const fallback = 'https://egaken.vercel.app/ogp.png';
   const image = searchParams?.img
     ? decodeURIComponent(searchParams.img)
     : fallback;
 
   const url = `https://egaken.vercel.app/share/${params.recordId}`;
 
-  return {
+  // Turbopack 対応: まず変数に格納
+  const metadata: Metadata = {
     title: 'えがけん記録',
     description: 'イラスト練習の記録',
     openGraph: {
@@ -43,6 +42,8 @@ export function generateMetadata({ params, searchParams }: Props): Metadata {
       ],
     },
   };
+
+  return metadata;
 }
 
 export default function Page({

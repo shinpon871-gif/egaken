@@ -3,30 +3,53 @@
 
 import { useEffect, useState } from 'react';
 
+import { useEffect, useState } from 'react';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+
+type Post = {
+  id: string;
+  title: string;
+  description: string;
+};
+
 type Props = {
   recordId: string;
   version?: string;
 };
 
 export default function SharePostClient({ recordId, version }: Props) {
-  const [data, setData] = useState<any>(null);
+  const [post, setPost] = useState<Post | null>(null);
 
   useEffect(() => {
     if (!recordId) return;
 
-    // API 呼び出し
-    fetch(`/api/records/${recordId}?v=${version || ''}`)
-      .then((res) => res.json())
-      .then(setData)
-      .catch(console.error);
-  }, [recordId, version]);
+    const fetchPost = async () => {
+      try {
+        const docRef = doc(db, 'posts', recordId);
+        const postSnap = await getDoc(docRef);
+        if (!postSnap.exists()) {
+          console.error('Record not found');
+          return;
+        }
+        const data = postSnap.data();
+        setPost({
+          id: recordId,
+          ...(data as Omit<Post, 'id'>),
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    fetchPost();
+  }, [recordId]);
 
-  if (!data) return <p className="text-gray-600">読み込み中...</p>;
+  if (!post) return <p className="text-gray-600">読み込み中...</p>;
 
   return (
     <div>
-      <h1>{data.title}</h1>
-      <p>{data.description}</p>
+      <h1>{post.title}</h1>
+      <p>{post.description}</p>
     </div>
   );
 }

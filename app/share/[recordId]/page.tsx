@@ -2,6 +2,9 @@
 import type { Metadata } from 'next';
 import SharePostClient from './SharePostClient';
 
+import type { Metadata } from 'next';
+import SharePostClient from './SharePostClient';
+
 type Props = {
   params: { recordId: string };
   searchParams: { img?: string };
@@ -41,7 +44,7 @@ export function generateMetadata({ params, searchParams }: Props): Metadata {
   return metadata;
 }
 
-export default function Page({ params }: { params: { recordId: string } }) {
+export default function Page({ params }: Props) {
   return <SharePostClient recordId={params.recordId} />;
 }
       url,

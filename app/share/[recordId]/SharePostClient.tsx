@@ -1,22 +1,17 @@
 "use client";
 
-import { useEffect, useState } from 'react';
-import { doc, getDoc, Timestamp } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
-import Image from 'next/image';
-import Link from 'next/link';
-import { ShareButton } from '@/components/ShareButton';
+import { useEffect, useState } from "react";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
 type Post = {
   id: string;
   title: string;
-  description?: string;
   comment?: string;
   minutes?: number;
   aiComment?: string;
   imageUrl?: string;
-  createdAt?: Timestamp | null;
-  userId?: string;
+  createdAt?: any;
 };
 
 type Props = {
@@ -24,10 +19,9 @@ type Props = {
   version?: string;
 };
 
-export default function SharePostClient({ recordId }: Props) {
+export default function SharePostClient({ recordId, version }: Props) {
   const [post, setPost] = useState<Post | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!recordId) return;
@@ -35,21 +29,13 @@ export default function SharePostClient({ recordId }: Props) {
     const fetchPost = async () => {
       setIsLoading(true);
       try {
-        const docRef = doc(db, 'posts', recordId);
-        const postSnap = await getDoc(docRef);
-        if (!postSnap.exists()) {
-          setError('Record not found');
+        const ref = doc(db, "posts", recordId);
+        const snap = await getDoc(ref);
+        if (!snap.exists()) {
+          console.error("not found");
           return;
         }
-        const data = postSnap.data();
-        setPost({
-          id: recordId,
-          ...(data as Omit<Post, 'id'>),
-        });
-        setError(null);
-      } catch (err) {
-        console.error('投稿取得エラー:', err);
-        setError('投稿を取得できませんでした');
+        setPost({ id: recordId, ...(snap.data() as Omit<Post, "id">) });
       } finally {
         setIsLoading(false);
       }
@@ -58,17 +44,8 @@ export default function SharePostClient({ recordId }: Props) {
     fetchPost();
   }, [recordId]);
 
-  if (isLoading) {
-    return <p className="text-gray-600">読み込み中...</p>;
-  }
-  if (!post) {
-    return <p>投稿がありません</p>;
-  }
+  if (isLoading) return <p className="text-gray-600">読み込み中...</p>;
+  if (!post) return <p>投稿がありません</p>;
 
-  return (
-    <div>
-      <h1>{post.title}</h1>
-      {/* ここに表示内容 */}
-    </div>
-  );
+  return <div>{post.title}</div>;
 }

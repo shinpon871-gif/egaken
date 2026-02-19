@@ -13,16 +13,21 @@ export function generateMetadata({ params, searchParams }: Props): Metadata {
   const image = searchParams?.img ? decodeURIComponent(searchParams.img) : fallback;
   const url = `https://egaken.vercel.app/share/${params.recordId}`;
 
-  return {
+  // 変数に格納して return するだけで Turbopack のパースエラーを回避
+  const metadata: Metadata = {
     title: 'えがけん記録',
     description: 'イラスト練習の記録',
     openGraph: {
       title: 'えがけん記録',
       description: 'イラスト練習の記録',
-      url,
+      url: url,
       type: 'website',
       images: [
-        { url: image, width: 1200, height: 630 }
+        {
+          url: image,
+          width: 1200,
+          height: 630,
+        },
       ],
     },
     twitter: {
@@ -32,6 +37,8 @@ export function generateMetadata({ params, searchParams }: Props): Metadata {
       images: [image],
     },
   };
+
+  return metadata;
 }
 
 export default function Page({ params }: { params: { recordId: string } }) {

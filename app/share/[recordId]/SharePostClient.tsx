@@ -51,13 +51,7 @@ export default function SharePostClient({ recordId }: Props) {
         console.error('投稿取得エラー:', err);
         setError('投稿を取得できませんでした');
       } finally {
-        "use client";
-
-        import { useEffect, useState } from "react";
-        import { doc, getDoc } from "firebase/firestore";
-        import { db } from "@/lib/firebase";
-
-        type Post = {
+        setIsLoading(false);
           id: string;
           title: string;
           comment?: string;

@@ -1,4 +1,7 @@
 
+
+export const revalidate = 0; // キャッシュ無効化
+
 import SharePostClient from '@/components/SharePostClient';
 import { Metadata } from 'next';
 import { doc, getDoc } from 'firebase/firestore';
@@ -14,13 +17,13 @@ type Post = {
   createdAt?: any;
 };
 
-type Props = {
   params: { recordId: string };
   searchParams?: { v?: string };
 };
 
-export async function generateMetadata({ params }: { params: { recordId: string } }): Promise<Metadata> {
+export async function generateMetadata({ params, searchParams }: Props): Promise<Metadata> {
   const recordId = params.recordId;
+  const v = searchParams?.v || `${Date.now()}`;
   let imageUrl = 'https://egaken.vercel.app/ogp.png';
   let title = 'えがけん記録';
   let description = 'イラスト練習の記録';
@@ -30,7 +33,7 @@ export async function generateMetadata({ params }: { params: { recordId: string 
     if (snap.exists()) {
       const data = snap.data() as Post;
       // Firebase Storageの画像URLは絶対パスで格納されている前提
-      if (data.imageUrl && /^https?:\/\//.test(data.imageUrl)) {
+      if (typeof data.imageUrl === 'string' && /^https?:\/\//.test(data.imageUrl)) {
         imageUrl = data.imageUrl;
       }
       if (data.title) title = data.title;
@@ -39,13 +42,14 @@ export async function generateMetadata({ params }: { params: { recordId: string 
   } catch (e) {
     console.warn('OGP画像取得失敗:', e);
   }
+  const shareUrl = `https://egaken.vercel.app/share/${recordId}?v=${v}`;
   return {
     title,
     description,
     openGraph: {
       title,
       description,
-      url: `https://egaken.vercel.app/share/${recordId}`,
+      url: shareUrl,
       type: 'website',
       images: [
         {
@@ -64,8 +68,8 @@ export async function generateMetadata({ params }: { params: { recordId: string 
   };
 }
 
-export default async function SharePage({ params, searchParams }: Props) {
   const recordId = params.recordId;
+  const version = searchParams?.v || `${Date.now()}`;
   let initialData: Post | null = null;
   if (recordId) {
     try {
@@ -77,6 +81,5 @@ export default async function SharePage({ params, searchParams }: Props) {
       }
     } catch {}
   }
-  const version = searchParams?.v;
   return <SharePostClient initialData={initialData} recordId={recordId} version={version} />;
 }

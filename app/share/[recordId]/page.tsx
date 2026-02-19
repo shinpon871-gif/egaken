@@ -1,4 +1,4 @@
-export const dynamic = 'force-dynamic';
+export const dynamic = 'force-static';
 
 import type { Metadata } from 'next';
 import SharePostClient from './SharePostClient';
@@ -6,17 +6,17 @@ import SharePostClient from './SharePostClient';
 export async function generateMetadata(
   { params }: { params: { recordId: string } }
 ): Promise<Metadata> {
-  const shareUrl = `https://egaken.vercel.app/share/${params.recordId}`;
-  const imageUrl = `https://egaken.vercel.app/api/og/${params.recordId}`;
+  const url = `https://egaken.vercel.app/share/${params.recordId}`;
+  const imageUrl = `https://egaken.vercel.app/ogp.png`;
 
   return {
     title: 'えがけん記録',
-    description: 'お絵描きの記録を共有しました',
+    description: '今日のイラスト練習記録',
     openGraph: {
       title: 'えがけん記録',
-      description: 'お絵描きの記録を共有しました',
-      url: shareUrl,
-      type: 'article',
+      description: '今日のイラスト練習記録',
+      url: url,
+      siteName: 'えがけん',
       images: [
         {
           url: imageUrl,
@@ -24,11 +24,13 @@ export async function generateMetadata(
           height: 630,
         },
       ],
+      type: 'website',
+      locale: 'ja_JP',
     },
     twitter: {
       card: 'summary_large_image',
       title: 'えがけん記録',
-      description: 'お絵描きの記録を共有しました',
+      description: '今日のイラスト練習記録',
       images: [imageUrl],
     },
   };

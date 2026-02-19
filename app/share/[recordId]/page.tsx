@@ -1,5 +1,6 @@
 
 
+
 export const revalidate = 0; // キャッシュ無効化
 
 import SharePostClient from '@/components/SharePostClient';
@@ -17,6 +18,7 @@ type Post = {
   createdAt?: any;
 };
 
+type Props = {
   params: { recordId: string };
   searchParams?: { v?: string };
 };
@@ -68,6 +70,7 @@ export async function generateMetadata({ params, searchParams }: Props): Promise
   };
 }
 
+export default async function SharePage({ params, searchParams }: Props) {
   const recordId = params.recordId;
   const version = searchParams?.v || `${Date.now()}`;
   let initialData: Post | null = null;

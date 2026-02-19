@@ -51,58 +51,66 @@ export default function SharePostClient({ recordId }: Props) {
         console.error('投稿取得エラー:', err);
         setError('投稿を取得できませんでした');
       } finally {
-        setIsLoading(false);
-      }
-    };
+        "use client";
 
-    fetchPost();
-  }, [recordId]);
+        import { useEffect, useState } from "react";
+        import { doc, getDoc } from "firebase/firestore";
+        import { db } from "@/lib/firebase";
 
-  const formatDate = (timestamp: Timestamp | null) => {
-    if (!timestamp) return '';
-    const date = timestamp.toDate();
-    return date.toLocaleDateString('ja-JP', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
+        type Post = {
+          id: string;
+          title: string;
+          comment?: string;
+          minutes?: number;
+          aiComment?: string;
+          imageUrl?: string;
+          createdAt?: any;
+        };
 
-  if (isLoading) {
-    return (
-      <div className="flex justify-center py-12">
-        <p className="text-gray-600">読み込み中...</p>
-      </div>
-    );
-  }
+        type Props = {
+          recordId: string;
+          version?: string;
+        };
 
-  if (error || !post) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
-        <div className="rounded-lg bg-white p-8 shadow-md text-center max-w-md">
-          <div className="mb-4 text-5xl">📝</div>
-          <h2 className="mb-2 text-2xl font-bold text-gray-800">えがけん</h2>
-          <p className="text-sm text-gray-600">
-            このリンクを共有して、あなたの成長を友達に見せましょう！
-          </p>
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-6 py-3 font-semibold text-white transition hover:bg-orange-600"
-          >
-            ホームへ
-          </Link>
-        </div>
-      </div>
-    );
-  }
+        export default function SharePostClient({ recordId }: Props) {
+          const [post, setPost] = useState<Post | null>(null);
+          const [isLoading, setIsLoading] = useState(true);
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="border-b border-gray-200 bg-white shadow-sm">
-        <div className="mx-auto max-w-2xl px-4 py-4">
-          <div className="flex items-center gap-2">
+          useEffect(() => {
+            if (!recordId) return;
+
+            const fetchPost = async () => {
+              setIsLoading(true);
+              try {
+                const ref = doc(db, "posts", recordId);
+                const snap = await getDoc(ref);
+                if (!snap.exists()) {
+                  console.error("not found");
+                  return;
+                }
+                setPost(snap.data() as Post);
+              } finally {
+                setIsLoading(false);
+              }
+            };
+
+            fetchPost();
+          }, [recordId]);
+
+          if (isLoading) {
+            return <p className="text-gray-600">読み込み中...</p>;
+          }
+          if (!post) {
+            return <p>投稿がありません</p>;
+          }
+
+          return (
+            <div>
+              <h1>{post.title}</h1>
+              {/* ここに表示内容 */}
+            </div>
+          );
+        }
             <span className="text-2xl">🎨</span>
             <h1 className="text-2xl font-bold text-gray-800">えがけん</h1>
           </div>

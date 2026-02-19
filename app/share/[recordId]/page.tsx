@@ -1,3 +1,5 @@
+
+import { Metadata } from 'next';
 type Props = { params: { recordId: string }; searchParams?: { v?: string } };
 
 export function generateMetadata({ params }: Props): Metadata {

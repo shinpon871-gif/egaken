@@ -1,7 +1,3 @@
-
-import type { Metadata } from 'next';
-import SharePostClient from './SharePostClient';
-
 import type { Metadata } from 'next';
 import SharePostClient from './SharePostClient';
 
@@ -10,13 +6,15 @@ type Props = {
   searchParams: { img?: string };
 };
 
-
 export function generateMetadata({ params, searchParams }: Props): Metadata {
   const fallback = 'https://egaken.vercel.app/ogp.png';
-  const image = searchParams?.img ? decodeURIComponent(searchParams.img) : fallback;
+  const image = searchParams?.img
+    ? decodeURIComponent(searchParams.img)
+    : fallback;
+
   const url = `https://egaken.vercel.app/share/${params.recordId}`;
 
-  // 変数に格納して return するだけで Turbopack のパースエラーを回避
+  // 変数に格納する
   const metadata: Metadata = {
     title: 'えがけん記録',
     description: 'イラスト練習の記録',
@@ -37,14 +35,16 @@ export function generateMetadata({ params, searchParams }: Props): Metadata {
       card: 'summary_large_image',
       title: 'えがけん記録',
       description: 'イラスト練習の記録',
-      images: [image],
+      images: [
+        image
+      ],
     },
   };
 
   return metadata;
 }
 
-export default function Page({ params }: Props) {
+export default function Page({ params }: { params: { recordId: string } }) {
   return <SharePostClient recordId={params.recordId} />;
 }
       url,

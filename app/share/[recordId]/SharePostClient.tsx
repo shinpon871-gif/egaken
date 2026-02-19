@@ -49,12 +49,12 @@ export default function SharePostClient({ recordId, version }: Props) {
   return (
     <div>
       <h1>{post.title}</h1>
-      <p>{post.description}</p>
-    </div>
-  );
-}
 
-        const data = postSnap.data();
+      "use client";
+
+      import { useEffect, useState } from 'react';
+      import { doc, getDoc } from 'firebase/firestore';
+      import { db } from '@/lib/firebase';
 
         setPost({
           id: recordId,

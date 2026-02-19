@@ -1,6 +1,6 @@
 'use client';
 
-import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import { GoogleAuthProvider, signInWithPopup, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
@@ -18,6 +18,10 @@ export default function LoginPage() {
     }
   }, [user, loading, router]);
 
+  // Firebase AuthのauthDomainがカスタムドメインか確認してください。
+  // デフォルトの[PROJECT_ID].firebaseapp.comのままだとSafariでITPの影響を受けやすくなります。
+  // process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN をご確認ください。
+
   const handleGoogleLogin = async () => {
     setIsSigningIn(true);
     try {
@@ -25,13 +29,17 @@ export default function LoginPage() {
       if (!auth) {
         throw new Error('Firebase Auth instance is not initialized.');
       }
+      // 永続性を明示的に設定（ITP対策・セッション維持）
+      await setPersistence(auth, browserLocalPersistence);
+      // Safari/iOSではsignInWithRedirectは避け、signInWithPopupを使う
       const result = await signInWithPopup(auth, provider);
       if (result.user) {
         router.push('/home');
       }
-    } catch (error) {
+    } catch (error: any) {
+      // SafariのポップアップブロックやITPによるエラーもここで捕捉
       console.error('ログインエラー:', error);
-      alert('ログインに失敗しました');
+      alert('ログインに失敗しました: ' + (error?.message || '')); 
     } finally {
       setIsSigningIn(false);
     }

@@ -27,37 +27,10 @@ export default function SharePostClient({ recordId, version }: Props) {
   useEffect(() => {
     if (!recordId) {
       setError("Record ID が指定されていません");
-      "use client";
+      return;
+    }
 
-      import { useEffect, useState } from "react";
-      import Image from "next/image";
-      import Link from "next/link";
-      import { doc, getDoc } from "firebase/firestore";
-      import { db } from "@/lib/firebase";
-      import ShareButton from "@/components/ShareButton";
-
-      type Post = {
-        id: string;
-        title: string;
-        comment?: string;
-        minutes?: number;
-        aiComment?: string;
-        imageUrl?: string;
-        createdAt?: any;
-      };
-
-      type Props = {
-        recordId: string;
-      };
-
-      export default function SharePostClient({ recordId }: Props) {
-        const [post, setPost] = useState<Post | null>(null);
-        const [isLoading, setIsLoading] = useState(true);
-
-        useEffect(() => {
-          if (!recordId) return;
-
-          const fetchPost = async () => {
+    const fetchPost = async () => {
             setIsLoading(true);
             try {
               const ref = doc(db, "posts", recordId);

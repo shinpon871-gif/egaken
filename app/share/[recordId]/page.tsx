@@ -22,22 +22,45 @@ export async function generateMetadata(
   parent: ResolvingMetadata
 ): Promise<Metadata> {
   const { recordId } = params;
-  const ogImageUrl = `https://egaken.vercel.app/api/og/${recordId}`;
-  const title = 'えがけん｜お絵描き記録';
-  const description = 'お絵描きトレーニングの記録';
+  // Firestoreから画像URLを取得
+  const { getFirestore, doc, getDoc } = await import('firebase/firestore');
+  const { initializeApp, getApps, getApp } = await import('firebase/app');
+  const firebaseConfig = {
+    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+    authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  };
+  const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const postRef = doc(db, 'posts', recordId);
+  const postSnap = await getDoc(postRef);
+  let imageUrl = '';
+  let comment = '';
+  if (postSnap.exists()) {
+    const data = postSnap.data();
+    imageUrl = data.imageUrl;
+    comment = data.comment || '';
+  }
+  const pageUrl = `https://egaken.vercel.app/share/${recordId}`;
+  const title = 'えがけん記録';
+  const description = comment || 'お絵描きトレーニングの記録';
   return {
     title,
     description,
     openGraph: {
       title,
       description,
-      images: [ogImageUrl],
+      url: pageUrl,
+      images: imageUrl ? [imageUrl] : [],
     },
     twitter: {
       card: 'summary_large_image',
       title,
       description,
-      images: [ogImageUrl],
+      images: imageUrl ? [imageUrl] : [],
     },
   };
 }

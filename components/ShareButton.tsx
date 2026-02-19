@@ -1,6 +1,12 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+// Xキャッシュ対策: 共有URLにtimestampを付与
+function createShareUrl(recordId: string) {
+  const base = `https://egaken.vercel.app/share/${recordId}`;
+  const timestamp = Date.now();
+  return `${base}?v=${timestamp}`;
+}
 import { generateTweetText } from '@/lib/twitter';
 
 interface ShareButtonProps {
@@ -24,10 +30,9 @@ export function ShareButton({ recordId, comment, practiceMinutes, aiComment, ima
 
   // 記録詳細ページURLとツイートテキストを生成（useMemoで最適化）
   const tweetResult = useMemo(() => {
-    const postUrl = typeof window !== 'undefined' 
-      ? `${window.location.origin}/share/${recordId}`
+    const postUrl = typeof window !== 'undefined'
+      ? createShareUrl(recordId)
       : `https://egaken.com/share/${recordId}`;
-    
     return generateTweetText(practiceMinutes, comment, postUrl);
   }, [practiceMinutes, comment, recordId]);
 
@@ -45,7 +50,9 @@ export function ShareButton({ recordId, comment, practiceMinutes, aiComment, ima
     try {
       // --- Twitter Web Intent（全環境共通） ---
       const encodedText = encodeURIComponent(shareText);
-      const twitterUrl = `https://twitter.com/intent/tweet?text=${encodedText}`;
+      // intent用URLもキャッシュ対策URLを使用
+      const shareUrl = createShareUrl(recordId);
+      const twitterUrl = `https://twitter.com/intent/tweet?text=${encodedText}&url=${encodeURIComponent(shareUrl)}`;
 
       console.log('Twitter Web Intent を開く:', twitterUrl);
       console.log('投稿テキスト:', shareText);

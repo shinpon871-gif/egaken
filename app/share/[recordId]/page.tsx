@@ -1,25 +1,30 @@
 import type { Metadata } from 'next';
 import SharePostClient from './SharePostClient';
+import { getPostById } from '@/lib/getPost';
 
 type Props = {
-  params: Promise<{
+  params: {
     recordId: string;
-  }>;
+  };
 };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { recordId } = await params;
+  const post = await getPostById(params.recordId);
 
-  const url = `https://egaken.vercel.app/share/${recordId}`;
-  const image = 'https://egaken.vercel.app/ogp.png';
+  const image =
+    post?.imageUrl || 'https://egaken.vercel.app/ogp.png';
+  const title = post?.title || 'えがけん記録';
+  const description = post?.comment || 'イラスト練習の記録';
+  const url = `https://egaken.vercel.app/share/${params.recordId}`;
 
   return {
-    title: 'えがけん記録',
-    description: 'イラスト練習の記録',
+    title,
+    description,
     openGraph: {
-      title: 'えがけん記録',
-      description: 'イラスト練習の記録',
+      title,
+      description,
       url,
+      type: 'website',
       images: [
         {
           url: image,
@@ -27,18 +32,16 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
           height: 630,
         },
       ],
-      type: 'website',
     },
     twitter: {
       card: 'summary_large_image',
-      title: 'えがけん記録',
-      description: 'イラスト練習の記録',
+      title,
+      description,
       images: [image],
     },
   };
 }
 
-export default async function Page({ params }: Props) {
-  const { recordId } = await params;
-  return <SharePostClient recordId={recordId} />;
+export default function Page({ params }: Props) {
+  return <SharePostClient recordId={params.recordId} />;
 }

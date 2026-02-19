@@ -2,13 +2,15 @@ import type { Metadata } from 'next';
 import SharePostClient from './SharePostClient';
 
 type Props = {
-  params: {
+  params: Promise<{
     recordId: string;
-  };
+  }>;
 };
 
-export function generateMetadata({ params }: Props): Metadata {
-  const url = `https://egaken.vercel.app/share/${params.recordId}`;
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { recordId } = await params;
+
+  const url = `https://egaken.vercel.app/share/${recordId}`;
   const image = 'https://egaken.vercel.app/ogp.png';
 
   return {
@@ -36,6 +38,7 @@ export function generateMetadata({ params }: Props): Metadata {
   };
 }
 
-export default function Page({ params }: Props) {
-  return <SharePostClient recordId={params.recordId} />;
+export default async function Page({ params }: Props) {
+  const { recordId } = await params;
+  return <SharePostClient recordId={recordId} />;
 }

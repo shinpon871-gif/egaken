@@ -2,10 +2,14 @@
 
 
 
+
 export const revalidate = 0; // キャッシュ無効化
 
-
 import React from 'react';
+import type { Metadata } from 'next';
+import SharePostClient from '@/components/SharePostClient';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 // Firestoreデータ型
 interface Post {

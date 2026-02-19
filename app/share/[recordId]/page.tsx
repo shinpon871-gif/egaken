@@ -85,6 +85,7 @@ export default function SharePostPage() {
     };
 
     fetchPost();
+  import { ShareButton } from '@/components/ShareButton';
   }, [postId]);
 
   const formatDate = (timestamp: Timestamp | null) => {
@@ -113,11 +114,23 @@ export default function SharePostPage() {
         <div className="rounded-lg bg-white p-8 shadow-md text-center max-w-md">
           <div className="mb-4 text-5xl">📝</div>
           <h2 className="mb-2 text-2xl font-bold text-gray-800">えがけん</h2>
-          <p className="text-gray-600 mb-6">{error || '投稿が見つかりません'}</p>
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-6 py-3 font-semibold text-white transition hover:bg-orange-600"
-          >
+              <div className="rounded-lg bg-white p-6 shadow-md text-center">
+                <p className="text-sm text-gray-600">
+                  このリンクを共有して、あなたの成長を友達に見せましょう！
+                </p>
+                {/* Twitter(X)で共有ボタン */}
+                {post && (
+                  <div className="mt-4">
+                    <ShareButton
+                      recordId={post.id}
+                      comment={post.comment}
+                      practiceMinutes={post.minutes}
+                      aiComment={post.aiComment}
+                      imageUrl={post.imageUrl}
+                    />
+                  </div>
+                )}
+              </div>
             ホームへ
           </Link>
         </div>

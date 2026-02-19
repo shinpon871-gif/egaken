@@ -5,7 +5,7 @@ import { doc, getDoc, Timestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import Image from 'next/image';
 import Link from 'next/link';
-import ShareButton from '@/components/ShareButton';
+import { ShareButton } from '@/components/ShareButton';
 
 type Post = {
   id: string;

@@ -71,20 +71,4 @@ export default function SharePostClient({ recordId }: Props) {
       {/* ここに表示内容 */}
     </div>
   );
-
-          <div className="mt-8 rounded-lg bg-gradient-to-r from-orange-50 to-amber-50 border border-orange-200 p-4 text-center">
-            <p className="text-sm text-gray-700 mb-3">
-              このような記録を毎日続けることで、着実に成長できます
-            </p>
-            <Link
-              href="/"
-              className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-6 py-2 font-semibold text-white transition hover:bg-orange-600"
-            >
-              🎨 えがけんをはじめる
-            </Link>
-          </div>
-        </div>
-      </main>
-    </div>
-  );
 }

@@ -1,7 +1,12 @@
 // 短縮URLリダイレクトAPI (メモリ上のMapで管理)
 import { NextRequest, NextResponse } from 'next/server';
 
-// グローバルなメモリMap（プロセス生存中のみ有効）
+
+// globalThisに型を拡張
+declare global {
+  // eslint-disable-next-line no-var
+  var __imageMap: Map<string, string> | undefined;
+}
 const imageMap: Map<string, string> = globalThis.__imageMap || (globalThis.__imageMap = new Map());
 
 export function setImageHash(hash: string, url: string) {

@@ -11,40 +11,44 @@ export function generateMetadata({ params, searchParams }: Props): Metadata {
   const image = searchParams?.img
     ? decodeURIComponent(searchParams.img)
     : fallback;
-
   const url = `https://egaken.vercel.app/share/${params.recordId}`;
 
-  // 変数に格納する
+  const images = [
+    {
+      url: image,
+      width: 1200,
+      height: 630,
+    },
+  ];
+  const twitterImages = [
+    image
+  ];
+
+  const openGraph = {
+    title: 'えがけん記録',
+    description: 'イラスト練習の記録',
+    url,
+    type: 'website',
+    images,
+  };
+
+  const twitter = {
+    card: 'summary_large_image',
+    title: 'えがけん記録',
+    description: 'イラスト練習の記録',
+    images: twitterImages,
+  };
+
   const metadata: Metadata = {
     title: 'えがけん記録',
     description: 'イラスト練習の記録',
-    openGraph: {
-      title: 'えがけん記録',
-      description: 'イラスト練習の記録',
-      url: url,
-      type: 'website',
-      images: [
-        {
-          url: image,
-          width: 1200,
-          height: 630,
-        },
-      ],
-    },
-    twitter: {
-      card: 'summary_large_image',
-      title: 'えがけん記録',
-      description: 'イラスト練習の記録',
-      images: [
-        image
-      ],
-    },
+    openGraph,
+    twitter,
   };
 
   return metadata;
 }
 
-// JSX を安全に扱うため、Turbopack OFF の SWC ビルドで使用
 export default function Page({ params }: { params: { recordId: string } }) {
   return (
     <SharePostClient recordId={params.recordId} />

@@ -16,51 +16,35 @@ interface PostData {
   createdAt: Timestamp | null;
 }
 
-// 動的metadata生成
-export async function generateMetadata(
-  { params }: { params: { recordId: string } },
-  parent: ResolvingMetadata
-): Promise<Metadata> {
-  const { recordId } = params;
-  // Firestoreから画像URLを取得
-  const { getFirestore, doc, getDoc } = await import('firebase/firestore');
-  const { initializeApp, getApps, getApp } = await import('firebase/app');
-  const firebaseConfig = {
-    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-    authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-    storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-    messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-    appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-  };
-  const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-  const db = getFirestore(app);
-  const postRef = doc(db, 'posts', recordId);
-  const postSnap = await getDoc(postRef);
-  let imageUrl = '';
-  let comment = '';
-  if (postSnap.exists()) {
-    const data = postSnap.data();
-    imageUrl = data.imageUrl;
-    comment = data.comment || '';
-  }
-  const pageUrl = `https://egaken.vercel.app/share/${recordId}`;
-  const title = 'えがけん記録';
-  const description = comment || 'お絵描きトレーニングの記録';
+import type { Metadata } from 'next';
+
+export async function generateMetadata({ params }: { params: { recordId: string } }): Promise<Metadata> {
+  const recordId = params.recordId;
+  const url = `https://egaken.vercel.app/share/${recordId}`;
+  const imageUrl = `https://egaken.vercel.app/ogp.png`;
   return {
-    title,
-    description,
+    title: 'えがけん記録',
+    description: '今日のイラスト練習記録',
     openGraph: {
-      title,
-      description,
-      url: pageUrl,
-      images: imageUrl ? [imageUrl] : [],
+      title: 'えがけん記録',
+      description: '今日のイラスト練習記録',
+      url,
+      siteName: 'えがけん',
+      images: [
+        {
+          url: imageUrl,
+          width: 1200,
+          height: 630,
+        },
+      ],
+      locale: 'ja_JP',
+      type: 'website',
     },
     twitter: {
       card: 'summary_large_image',
-      title,
-      description,
-      images: imageUrl ? [imageUrl] : [],
+      title: 'えがけん記録',
+      description: '今日のイラスト練習記録',
+      images: [imageUrl],
     },
   };
 }

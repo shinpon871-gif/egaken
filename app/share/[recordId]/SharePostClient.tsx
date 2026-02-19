@@ -5,17 +5,21 @@ import { useEffect, useState } from 'react';
 
 type Props = {
   recordId: string;
+  version?: string;
 };
 
-export default function SharePostClient({ recordId }: Props) {
+export default function SharePostClient({ recordId, version }: Props) {
   const [data, setData] = useState<any>(null);
 
   useEffect(() => {
     if (!recordId) return;
-    fetch(`/api/records/${recordId}`)
+
+    // API 呼び出し
+    fetch(`/api/records/${recordId}?v=${version || ''}`)
       .then((res) => res.json())
-      .then(setData);
-  }, [recordId]);
+      .then(setData)
+      .catch(console.error);
+  }, [recordId, version]);
 
   if (!data) return <p className="text-gray-600">読み込み中...</p>;
 

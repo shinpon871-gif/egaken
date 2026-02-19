@@ -12,12 +12,16 @@ export function getImageUrl(hash: string): string | undefined {
   return imageMap.get(hash);
 }
 
-export async function GET(req: NextRequest, { params }: { params: { hash: string } }) {
-  const url = getImageUrl(params.hash);
+export const GET = async (
+  req: NextRequest,
+  context: { params: { hash: string } }
+) => {
+  const { hash } = context.params;
+  const url = getImageUrl(hash);
   if (url) {
     // 画像URLにリダイレクト
     return NextResponse.redirect(url, 302);
   }
   // 見つからなければフォールバック画像
   return NextResponse.redirect('https://egaken.vercel.app/ogp.png', 302);
-}
+};

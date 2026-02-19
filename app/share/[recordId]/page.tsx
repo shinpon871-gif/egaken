@@ -44,5 +44,9 @@ export function generateMetadata({ params, searchParams }: Props): Metadata {
   return metadata;
 }
 
+// JSX を安全に扱うため、Turbopack OFF の SWC ビルドで使用
 export default function Page({ params }: { params: { recordId: string } }) {
-  return <SharePostClient recordId={params.recordId} />;
+  return (
+    <SharePostClient recordId={params.recordId} />
+  );
+}

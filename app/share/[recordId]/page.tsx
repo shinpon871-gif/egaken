@@ -1,41 +1,31 @@
 export const dynamic = 'force-static';
 
-import type { Metadata } from 'next';
 import SharePostClient from './SharePostClient';
 
-export async function generateMetadata(
-  { params }: { params: { recordId: string } }
-): Promise<Metadata> {
+export default function Page({ params }: { params: { recordId: string } }) {
   const url = `https://egaken.vercel.app/share/${params.recordId}`;
   const imageUrl = `https://egaken.vercel.app/ogp.png`;
 
-  return {
-    title: 'えがけん記録',
-    description: '今日のイラスト練習記録',
-    openGraph: {
-      title: 'えがけん記録',
-      description: '今日のイラスト練習記録',
-      url: url,
-      siteName: 'えがけん',
-      images: [
-        {
-          url: imageUrl,
-          width: 1200,
-          height: 630,
-        },
-      ],
-      type: 'website',
-      locale: 'ja_JP',
-    },
-    twitter: {
-      card: 'summary_large_image',
-      title: 'えがけん記録',
-      description: '今日のイラスト練習記録',
-      images: [imageUrl],
-    },
-  };
-}
+  return (
+    <>
+      <head>
+        <title>えがけん記録</title>
 
-export default function Page({ params }: { params: { recordId: string } }) {
-  return <SharePostClient recordId={params.recordId} />;
+        <meta property="og:title" content="えがけん記録" />
+        <meta property="og:description" content="今日のイラスト練習記録" />
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content={url} />
+        <meta property="og:image" content={imageUrl} />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="えがけん記録" />
+        <meta name="twitter:description" content="今日のイラスト練習記録" />
+        <meta name="twitter:image" content={imageUrl} />
+      </head>
+
+      <SharePostClient recordId={params.recordId} />
+    </>
+  );
 }

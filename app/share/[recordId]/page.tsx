@@ -1,17 +1,13 @@
-import type { Metadata } from 'next';
 import SharePostClient from './SharePostClient';
+import type { Metadata } from 'next';
 
 type Props = {
   params: { recordId: string };
-  searchParams?: { img?: string };
 };
 
-export function generateMetadata({ params, searchParams }: Props): Metadata {
-  const fallbackImage = 'https://egaken.vercel.app/ogp.png';
-  const image = searchParams?.img ? decodeURIComponent(searchParams.img) : fallbackImage;
-
-  const recordId = params?.recordId ?? '';
-  const url = recordId ? `https://egaken.vercel.app/share/${recordId}` : 'https://egaken.vercel.app/';
+export function generateMetadata({ params }: Props): Metadata {
+  const recordId = params.recordId;
+  const url = `https://egaken.vercel.app/share/${recordId}`;
 
   return {
     title: 'えがけん記録',
@@ -23,7 +19,7 @@ export function generateMetadata({ params, searchParams }: Props): Metadata {
       type: 'website',
       images: [
         {
-          url: image,
+          url: 'https://egaken.vercel.app/ogp.png',
           width: 1200,
           height: 630,
         },
@@ -33,15 +29,12 @@ export function generateMetadata({ params, searchParams }: Props): Metadata {
       card: 'summary_large_image',
       title: 'えがけん記録',
       description: 'イラスト練習の記録',
-      images: [image],
+      images: ['https://egaken.vercel.app/ogp.png'],
     },
   };
 }
 
-export default function Page({ params }: { params: { recordId: string } }) {
-  if (!params?.recordId) {
-    return <div>Record ID が指定されていません</div>;
-  }
-
+// Page コンポーネントは server component として params を受け取る
+export default function Page({ params }: Props) {
   return <SharePostClient recordId={params.recordId} />;
 }

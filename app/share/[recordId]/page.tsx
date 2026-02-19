@@ -2,12 +2,14 @@
 import SharePostClient from './SharePostClient';
 
 type Props = {
-  params: { recordId: string };
+  params: { recordId?: string };
+  searchParams?: { v?: string };
 };
 
-export default function SharePage({ params }: Props) {
-  const { recordId } = params;
-  if (!recordId) return <p>Record ID が指定されていません</p>;
+export default function SharePage({ params, searchParams }: Props) {
+  const recordId = params?.recordId;
+  const version = searchParams?.v;
 
-  return <SharePostClient recordId={recordId} />;
+  // recordIdが未定義の場合はSharePostClient側でエラー表示
+  return <SharePostClient recordId={recordId} version={version} />;
 }

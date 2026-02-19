@@ -25,6 +25,8 @@ export default function SharePostClient({ recordId, version }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    console.log("SharePostClient mounted with recordId:", recordId);
+
     if (!recordId) {
       setError("Record ID が指定されていません");
       setIsLoading(false);
@@ -34,23 +36,19 @@ export default function SharePostClient({ recordId, version }: Props) {
     const fetchPost = async () => {
       setIsLoading(true);
       setError(null);
-      try {
-        console.log("Fetching record:", recordId);
 
+      try {
         const ref = doc(db, "posts", recordId);
         const snap = await getDoc(ref);
+        console.log("Firestore snap:", snap.exists(), snap.data());
 
         if (!snap.exists()) {
-          console.error("Firestore record not found:", recordId);
           setError("投稿が見つかりません");
           setPost(null);
           return;
         }
 
-        const data = snap.data();
-        console.log("Firestore data:", data);
-
-        setPost({ id: recordId, ...(data as Omit<Post, "id">) });
+        setPost({ id: recordId, ...(snap.data() as Omit<Post, "id">) });
       } catch (err) {
         console.error("Firestore fetch error:", err);
         setError("投稿を取得できませんでした");
@@ -70,12 +68,10 @@ export default function SharePostClient({ recordId, version }: Props) {
   return (
     <div className="p-4">
       <h1 className="text-2xl font-bold mb-2">{post.title}</h1>
-      {post.imageUrl && (
-        <img src={post.imageUrl} alt={post.title} className="w-full max-w-md mb-4 rounded" />
-      )}
-      {post.comment && <p className="mb-2">{post.comment}</p>}
-      {post.minutes !== undefined && <p>練習時間: {post.minutes}分</p>}
-      {post.aiComment && <p className="italic text-gray-600">AIコメント: {post.aiComment}</p>}
+      {post.comment && <p>{post.comment}</p>}
+      {post.minutes && <p>練習時間: {post.minutes}分</p>}
+      {post.aiComment && <p>AIコメント: {post.aiComment}</p>}
+      {post.imageUrl && <img src={post.imageUrl} alt={post.title} className="rounded" />}
     </div>
   );
 }

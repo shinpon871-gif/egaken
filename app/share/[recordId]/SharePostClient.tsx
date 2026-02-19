@@ -1,44 +1,31 @@
 "use client";
+"use client";
 
 import { useEffect, useState } from 'react';
-import { db } from '@/lib/firebase';
-import { doc, getDoc, Timestamp } from 'firebase/firestore';
-import Image from 'next/image';
-import Link from 'next/link';
-import { ShareButton } from '@/components/ShareButton';
 
-interface Props {
+type Props = {
   recordId: string;
-}
-
-interface PostData {
-  id: string;
-  userId: string;
-  imageUrl: string;
-  comment: string;
-  minutes: number;
-  aiComment?: string;
-  createdAt: Timestamp | null;
-}
+};
 
 export default function SharePostClient({ recordId }: Props) {
-  const [post, setPost] = useState<PostData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<any>(null);
 
   useEffect(() => {
     if (!recordId) return;
+    fetch(`/api/records/${recordId}`)
+      .then((res) => res.json())
+      .then(setData);
+  }, [recordId]);
 
-    const fetchPost = async () => {
-      try {
-        const postRef = doc(db, 'posts', recordId);
-        const postSnap = await getDoc(postRef);
+  if (!data) return <p className="text-gray-600">読み込み中...</p>;
 
-        if (!postSnap.exists()) {
-          setError('記録が見つかりません');
-          setIsLoading(false);
-          return;
-        }
+  return (
+    <div>
+      <h1>{data.title}</h1>
+      <p>{data.description}</p>
+    </div>
+  );
+}
 
         const data = postSnap.data();
 

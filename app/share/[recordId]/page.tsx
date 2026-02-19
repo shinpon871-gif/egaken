@@ -46,20 +46,3 @@ export function generateMetadata({ params, searchParams }: Props): Metadata {
 
 export default function Page({ params }: { params: { recordId: string } }) {
   return <SharePostClient recordId={params.recordId} />;
-}
-      url,
-      type: 'website',
-      images: [{ url: image, width: 1200, height: 630 }],
-    },
-    twitter: {
-      card: 'summary_large_image',
-      title: 'えがけん記録',
-      description: 'イラスト練習の記録',
-      images: [image],
-    },
-  };
-}
-
-export default function Page({ params }: Props) {
-  return <SharePostClient recordId={params.recordId} />;
-}

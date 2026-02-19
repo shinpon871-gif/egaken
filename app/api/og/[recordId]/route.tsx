@@ -3,8 +3,8 @@ import type { NextRequest } from 'next/server';
 
 export const runtime = 'edge';
 
-export async function GET(req: NextRequest, { params }: { params: Promise<{ recordId: string }> }) {
-  const { recordId } = await params;
+export async function GET(req: NextRequest, { params }: { params: { recordId: string } }) {
+  const { recordId } = params;
   const imageUrl = `https://egaken.vercel.app/api/image/${recordId}`;
 
   // 画像が存在するかHEADリクエストで確認
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ reco
   }
 
   // ロゴSVG
-  const logoSvg = `<svg width=\"80\" height=\"80\" viewBox=\"0 0 80 80\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"80\" height=\"80\" rx=\"16\" fill=\"#222\"/><text x=\"40\" y=\"50\" text-anchor=\"middle\" font-size=\"36\" fill=\"#fff\" font-family=\"sans-serif\">絵</text></svg>`;
+  const logoSvg = `<svg width="80" height="80" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="80" rx="16" fill="#222"/><text x="40" y="50" text-anchor="middle" font-size="36" fill="#fff" font-family="sans-serif">絵</text></svg>`;
 
   return new ImageResponse(
     (

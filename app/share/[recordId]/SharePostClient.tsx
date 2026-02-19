@@ -39,7 +39,8 @@ export default function SharePostClient({ recordId, version }: Props) {
                 console.error("投稿が存在しません");
                 setPost(null);
               } else {
-                setPost({ id: recordId, ...(snap.data() as Post) });
+                const data = snap.data() as Omit<Post, 'id'>;
+                setPost({ ...data, id: recordId });
               }
             } catch (e) {
               console.error("取得エラー", e);

@@ -20,11 +20,12 @@ type Post = {
 type Props = {
   recordId?: string;
   version?: string;
+  initialData: Post | null;
 };
 
-export default function SharePostClient({ recordId, version }: Props) {
-  const [post, setPost] = useState<Post | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+export default function SharePostClient({ recordId, version, initialData }: Props) {
+  const [post, setPost] = useState<Post | null>(initialData);
+  const [isLoading, setIsLoading] = useState<boolean>(!initialData);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -33,6 +34,7 @@ export default function SharePostClient({ recordId, version }: Props) {
       setIsLoading(false);
       return;
     }
+    if (initialData) return; // サーバーから初期データが来ていれば再取得しない
 
     const fetchPost = async () => {
       setIsLoading(true);
@@ -55,7 +57,7 @@ export default function SharePostClient({ recordId, version }: Props) {
       }
     };
     fetchPost();
-  }, [recordId]);
+  }, [recordId, initialData]);
 
   if (isLoading) {
     return <p className="text-gray-600">読み込み中…</p>;

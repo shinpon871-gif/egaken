@@ -1,5 +1,6 @@
 
 import { Metadata } from 'next';
+import SharePostClient from './SharePostClient';
 type Props = { params: { recordId: string }; searchParams?: { v?: string } };
 
 export function generateMetadata({ params }: Props): Metadata {
@@ -23,12 +24,10 @@ export function generateMetadata({ params }: Props): Metadata {
   };
 }
 
-export default function Page({ params, searchParams }: Props) {
-  const { recordId } = params;
-  const { v } = searchParams || {};
+export default function SharePage({ params, searchParams }: Props) {
+  const recordId = params.recordId;
+  const v = searchParams?.v;
 
-  if (!recordId) return <div>Record ID が指定されていません</div>;
-
-  // client component に props で recordId と query を渡す
+  // client component に props で recordId と version を渡す
   return <SharePostClient recordId={recordId} version={v} />;
 }

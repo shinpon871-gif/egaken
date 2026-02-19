@@ -1,27 +1,5 @@
-// SharePostClient: 画像URLを短縮し共有ボタンに渡す
+// SharePostClient: 画像URLをencodeURIComponentで共有URLに埋め込むだけ
 'use client';
-import { useMemo } from 'react';
-import { ShareButton } from './ShareButton';
-
-// 簡易ハッシュ関数（依存なし）
-function simpleHash(str: string): string {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash << 5) - hash + str.charCodeAt(i);
-    hash |= 0;
-  }
-  return Math.abs(hash).toString(36);
-}
-
-// グローバルMapに画像URLを登録
-function registerImageUrl(imageUrl: string): string {
-  const hash = simpleHash(imageUrl);
-  if (typeof window !== 'undefined') {
-    // クライアント側でwindow経由でAPIに登録（本来はAPI推奨だが依存禁止のため）
-    fetch(`/i/${hash}?set=${encodeURIComponent(imageUrl)}`);
-  }
-  return hash;
-}
 
 interface Props {
   recordId: string;
@@ -31,17 +9,24 @@ interface Props {
   aiComment?: string;
 }
 
+function createShareUrl(recordId: string, imageUrl: string) {
+  // 軽量化のためBase64やハッシュ化は行わず、URLをそのままクエリに
+  const encodedImg = encodeURIComponent(imageUrl);
+  const ts = Date.now(); // キャッシュ回避
+  return `/share/${recordId}?img=${encodedImg}&v=${ts}`;
+}
+
 export default function SharePostClient(props: Props) {
-  // 画像URLを短縮し、ShareButtonに渡す
-  const hash = useMemo(() => registerImageUrl(props.imageUrl), [props.imageUrl]);
-  const shortUrl = `/i/${hash}`;
+  const shareUrl = createShareUrl(props.recordId, props.imageUrl);
+  // X投稿ボタン例
   return (
-    <ShareButton
-      recordId={props.recordId}
-      comment={props.comment}
-      practiceMinutes={props.practiceMinutes}
-      aiComment={props.aiComment}
-      imageUrl={shortUrl}
-    />
+    <button
+      onClick={() => {
+        const intent = `https://twitter.com/intent/tweet?url=${encodeURIComponent(shareUrl)}`;
+        window.open(intent, '_blank');
+      }}
+    >
+      Xで共有
+    </button>
   );
 }

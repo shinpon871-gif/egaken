@@ -1,6 +1,8 @@
+
+export const runtime = 'nodejs';
 import type { Metadata } from 'next';
 import SharePostClient from './SharePostClient';
-import { getPostById } from '@/lib/getPost';
+
 
 type Props = {
   params: {
@@ -8,21 +10,27 @@ type Props = {
   };
 };
 
+// firebase-admin未導入時も安全な画像取得
+async function getImageSafe(recordId: string): Promise<string> {
+  try {
+    const { getPostById } = await import('@/lib/getPost');
+    const post = await getPostById(recordId);
+    return post?.imageUrl || 'https://egaken.vercel.app/ogp.png';
+  } catch {
+    return 'https://egaken.vercel.app/ogp.png';
+  }
+}
+
+
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const post = await getPostById(params.recordId);
-
-  const image =
-    post?.imageUrl || 'https://egaken.vercel.app/ogp.png';
-  const title = post?.title || 'えがけん記録';
-  const description = post?.comment || 'イラスト練習の記録';
+  const image = await getImageSafe(params.recordId);
   const url = `https://egaken.vercel.app/share/${params.recordId}`;
-
   return {
-    title,
-    description,
+    title: 'えがけん記録',
+    description: 'イラスト練習の記録',
     openGraph: {
-      title,
-      description,
+      title: 'えがけん記録',
+      description: 'イラスト練習の記録',
       url,
       type: 'website',
       images: [
@@ -35,8 +43,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     },
     twitter: {
       card: 'summary_large_image',
-      title,
-      description,
+      title: 'えがけん記録',
+      description: 'イラスト練習の記録',
       images: [image],
     },
   };

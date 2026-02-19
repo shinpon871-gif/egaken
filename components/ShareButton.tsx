@@ -28,43 +28,31 @@ function isIOS(): boolean {
 export function ShareButton({ recordId, comment, practiceMinutes, aiComment, imageUrl }: ShareButtonProps) {
   const [isSharing, setIsSharing] = useState(false);
 
-  // 記録詳細ページURLとツイートテキストを生成（useMemoで最適化）
-  const tweetResult = useMemo(() => {
-    const postUrl = typeof window !== 'undefined'
-      ? createShareUrl(recordId)
-      : `https://egaken.com/share/${recordId}`;
-    return generateTweetText(practiceMinutes, comment, postUrl);
-  }, [practiceMinutes, comment, recordId]);
+
+  // シェア用URLは常に1回だけtext末尾に含める。/share/[recordId]形式に統一。
+  const shareUrl = `https://egaken.vercel.app/share/${recordId}`;
+  const tweetResult = useMemo(() => generateTweetText(practiceMinutes, comment, shareUrl), [practiceMinutes, comment, recordId]);
 
   const handleShare = async () => {
-    // 文字数制限をチェック
     if (tweetResult.isOverLimit) {
       alert('140文字以内に収めてください');
       return;
     }
-
     setIsSharing(true);
     const shareText = tweetResult.text;
     const iosDevice = isIOS();
-    const shareUrl = `https://egaken.vercel.app/share/${recordId}`;
-    const tweetText = useMemo(() => generateTweetText(practiceMinutes, comment, shareUrl), [practiceMinutes, comment, recordId]);
-      const twitterUrl = `https://twitter.com/intent/tweet?text=${encodedText}&url=${encodeURIComponent(shareUrl)}`;
-
-      console.log('Twitter Web Intent を開く:', twitterUrl);
-      if (tweetText.isOverLimit) {
-
+    const intentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`;
+    try {
       if (iosDevice) {
         // iOSは_blankを付けない方が安定
-        const newWindow = window.open(twitterUrl);
-
-      const shareText = tweetText.text;
+        const newWindow = window.open(intentUrl);
+        if (!newWindow) {
           console.warn('window.open がブロックされました');
-          alert(`下記リンクをタップしてTwitterで投稿してください：\n\n${twitterUrl}`);
+          alert(`下記リンクをタップしてTwitterで投稿してください：\n\n${intentUrl}`);
         }
       } else {
-        window.open(twitterUrl, '_blank');
+        window.open(intentUrl, '_blank');
       }
-        const intentUrl = `https://twitter.com/intent/tweet?text=${encodedText}&url=${encodeURIComponent(shareUrl)}`;
     } catch (error) {
       console.error('シェアエラー:', error);
       alert('共有に失敗しました');
@@ -78,12 +66,12 @@ export function ShareButton({ recordId, comment, practiceMinutes, aiComment, ima
   return (
     <div className="space-y-3">
       {/* Twitter投稿プレビュー */}
+
       <div className="rounded-lg border border-gray-300 bg-gray-50 p-4 overflow-hidden w-full">
         <p className="mb-2 text-xs font-semibold text-gray-600">投稿プレビュー</p>
         <div className="mb-3 whitespace-pre-wrap rounded bg-white p-3 text-sm text-gray-800 break-all overflow-hidden max-w-full min-w-0">
           {tweetResult.text}
         </div>
-        
         {/* 文字数カウンター */}
         <div className="flex items-center justify-between">
           <span className={`text-sm font-semibold ${
@@ -96,14 +84,11 @@ export function ShareButton({ recordId, comment, practiceMinutes, aiComment, ima
             {tweetResult.length} / {140}文字
           </span>
         </div>
-
-            {tweetText.text}
         {tweetResult.isWarning && (
           <p className="mt-2 text-xs text-orange-600">
             ⚠️ 投稿が長いため、Twitterで文章が途切れる可能性があります
           </p>
         )}
-
         {tweetResult.isOverLimit && (
           <p className="mt-2 text-xs text-red-600">
             ❌ 140文字以内に収めてください

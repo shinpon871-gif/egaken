@@ -8,8 +8,13 @@ type Props = {
 };
 
 export function generateMetadata({ params, searchParams }: Props): Metadata {
+  // フォールバック画像
   const fallback = 'https://egaken.vercel.app/ogp.png';
-  const image = searchParams?.img ? decodeURIComponent(searchParams.img) : fallback;
+
+  // searchParams.img があればデコードして使用
+  const image = searchParams?.img
+    ? decodeURIComponent(searchParams.img)
+    : fallback;
 
   const url = `https://egaken.vercel.app/share/${params.recordId}`;
 
@@ -33,7 +38,9 @@ export function generateMetadata({ params, searchParams }: Props): Metadata {
       card: 'summary_large_image',
       title: 'えがけん記録',
       description: 'イラスト練習の記録',
-      images: [image],
+      images: [
+        image
+      ],
     },
   };
 }

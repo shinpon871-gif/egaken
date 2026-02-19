@@ -52,32 +52,25 @@ export default function SharePostClient({ recordId }: Props) {
         setError('投稿を取得できませんでした');
       } finally {
         setIsLoading(false);
-                if (!snap.exists()) {
-                  console.error("not found");
-                  return;
-                }
-                setPost(snap.data() as Post);
-              } finally {
-                setIsLoading(false);
-              }
-            };
+      }
+    };
 
-            fetchPost();
-          }, [recordId]);
+    fetchPost();
+  }, [recordId]);
 
-          if (isLoading) {
-            return <p className="text-gray-600">読み込み中...</p>;
-          }
-          if (!post) {
-            return <p>投稿がありません</p>;
-          }
+  if (isLoading) {
+    return <p className="text-gray-600">読み込み中...</p>;
+  }
+  if (!post) {
+    return <p>投稿がありません</p>;
+  }
 
-          return (
-            <div>
-              <h1>{post.title}</h1>
-              {/* ここに表示内容 */}
-            </div>
-          );
+  return (
+    <div>
+      <h1>{post.title}</h1>
+      {/* ここに表示内容 */}
+    </div>
+  );
         }
             <span className="text-2xl">🎨</span>
             <h1 className="text-2xl font-bold text-gray-800">えがけん</h1>

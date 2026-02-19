@@ -1,13 +1,6 @@
-import { adminDb } from './firebaseAdmin';
 
+// Firebase Admin依存を排除したダミー実装
 export async function getPostById(recordId: string) {
-  const doc = await adminDb.collection('posts').doc(recordId).get();
-
-  if (!doc.exists) return null;
-
-  return doc.data() as {
-    imageUrl?: string;
-    title?: string;
-    comment?: string;
-  };
+  // 必要ならここでAPI経由取得やfetch等に書き換えてください
+  return null;
 }

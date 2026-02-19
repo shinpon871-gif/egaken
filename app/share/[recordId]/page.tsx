@@ -43,7 +43,7 @@ export default function SharePage({ params, searchParams }: Props) {
   return (
     <SharePostClient
       recordId={recordId}
-      version={version}
+      version={v}
     />
   );
 }

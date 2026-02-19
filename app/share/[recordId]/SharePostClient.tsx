@@ -25,8 +25,6 @@ export default function SharePostClient({ recordId, version }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    console.log("SharePostClient mounted with recordId:", recordId);
-
     if (!recordId) {
       setError("Record ID が指定されていません");
       setIsLoading(false);
@@ -35,24 +33,19 @@ export default function SharePostClient({ recordId, version }: Props) {
 
     const fetchPost = async () => {
       setIsLoading(true);
-      setError(null);
-
       try {
         const ref = doc(db, "posts", recordId);
         const snap = await getDoc(ref);
-        console.log("Firestore snap:", snap.exists(), snap.data());
-
         if (!snap.exists()) {
           setError("投稿が見つかりません");
           setPost(null);
-          return;
+        } else {
+          setPost({ id: recordId, ...(snap.data() as Omit<Post, "id">) });
+          setError(null);
         }
-
-        setPost({ id: recordId, ...(snap.data() as Omit<Post, "id">) });
       } catch (err) {
-        console.error("Firestore fetch error:", err);
-        setError("投稿を取得できませんでした");
-        setPost(null);
+        console.error(err);
+        setError("投稿取得中にエラーが発生しました");
       } finally {
         setIsLoading(false);
       }
@@ -66,12 +59,14 @@ export default function SharePostClient({ recordId, version }: Props) {
   if (!post) return <p>投稿がありません</p>;
 
   return (
-    <div className="p-4">
-      <h1 className="text-2xl font-bold mb-2">{post.title}</h1>
+    <div>
+      <h1 className="text-2xl font-bold">{post.title}</h1>
       {post.comment && <p>{post.comment}</p>}
       {post.minutes && <p>練習時間: {post.minutes}分</p>}
       {post.aiComment && <p>AIコメント: {post.aiComment}</p>}
-      {post.imageUrl && <img src={post.imageUrl} alt={post.title} className="rounded" />}
+      {post.imageUrl && (
+        <img src={post.imageUrl} alt="投稿画像" className="w-full mt-4 rounded" />
+      )}
     </div>
   );
 }

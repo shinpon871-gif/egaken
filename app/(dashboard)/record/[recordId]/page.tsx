@@ -20,18 +20,18 @@ export default function RecordDetailPage() {
   const router = useRouter();
   const params = useParams();
   const { user } = useAuth();
-  const postId = params?.postId as string;
+  const recordId = params?.recordId as string;
 
   const [post, setPost] = useState<RecordPost | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!postId || !user) return;
+    if (!recordId || !user) return;
 
     const fetchPost = async () => {
       try {
-        const docRef = doc(db, 'posts', postId);
+        const docRef = doc(db, 'posts', recordId);
         const docSnap = await getDoc(docRef);
 
         if (!docSnap.exists()) {
@@ -62,7 +62,7 @@ export default function RecordDetailPage() {
     };
 
     fetchPost();
-  }, [postId, user]);
+  }, [recordId, user]);
 
   const formatDate = (timestamp: Timestamp | null) => {
     if (!timestamp) return '';

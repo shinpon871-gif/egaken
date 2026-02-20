@@ -32,6 +32,7 @@ egaken/
 ├── app/
 │   ├── (auth)/login/
 │   ├── (dashboard)/home/
+│   ├── record/[recordId]/page.tsx
 │   ├── share/[recordId]/page.tsx
 │   └── layout.tsx
 ├── components/

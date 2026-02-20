@@ -39,16 +39,35 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
     console.error("OGP Metadata Fetch Error:", e);
   }
 
+  // 絶対パス保証
+  if (!imageUrl.startsWith('https')) {
+    imageUrl = 'https://egaken.vercel.app/ogp.png';
+  }
+
   return {
     title,
     description,
+    alternates: {
+      canonical: `https://egaken.vercel.app/share/${recordId}?v=${v || '1'}`,
+    },
     openGraph: {
       title,
       description,
-      images: [{ url: imageUrl }],
+      url: `https://egaken.vercel.app/share/${recordId}?v=${v || '1'}`,
+      images: [
+        {
+          url: imageUrl,
+          width: 1200,
+          height: 630,
+          alt: 'お絵描き記録',
+        },
+      ],
+      type: 'article',
     },
     twitter: {
       card: 'summary_large_image',
+      title,
+      description,
       images: [imageUrl],
     },
   };

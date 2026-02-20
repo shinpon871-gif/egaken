@@ -19,11 +19,11 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
   const { recordId } = await params;
   const sParams = await searchParams;
   const v = typeof sParams.v === 'string' ? sParams.v : undefined;
-
-  let imageUrl = 'https://egaken.vercel.app/ogp.png';
+  
+  // デフォルト画像（絶対パス）
+  let finalImageUrl = 'https://egaken.vercel.app/ogp.png';
   const title = 'えがけん記録';
   const description = '練習の記録をシェアしました。';
-  const canonicalUrl = `https://egaken.vercel.app/share/${recordId}?v=${v || Date.now()}`;
 
   try {
     const docRef = doc(db, 'posts', recordId);
@@ -31,51 +31,40 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
     if (snap.exists()) {
       const data = snap.data() as Post;
       if (data.imageUrl) {
-        // 既にトークン等のクエリ(?...)がある場合は & を、なければ ? を使う
-        const joiner = data.imageUrl.includes('?') ? '&' : '?';
-        imageUrl = v ? `${data.imageUrl}${joiner}v=${v}` : data.imageUrl;
+        // 【修正ポイント】クローラーが混乱しないよう、imageUrlをそのまま使用。
+        // キャッシュバスターが必要なのは「ページURL」であり「画像URL」ではないため。
+        finalImageUrl = data.imageUrl;
       }
     }
   } catch (e) {
-    console.error('OGP Metadata Fetch Error:', e);
+    console.error('Metadata Fetch Error:', e);
   }
 
-  if (!imageUrl.startsWith('https')) {
-    imageUrl = 'https://egaken.vercel.app/ogp.png';
-  }
+  // クローラーに「このページのユニークなURL」を教える（ここがキャッシュ対策の肝）
+  const canonicalUrl = `https://egaken.vercel.app/share/${recordId}${v ? `?v=${v}` : ''}`;
 
   return {
     title,
     description,
-    alternates: {
-      canonical: canonicalUrl,
-    },
+    alternates: { canonical: canonicalUrl },
     openGraph: {
       title,
       description,
       url: canonicalUrl,
-      images: [
-        {
-          url: imageUrl,
-          width: 1200,
-          height: 630,
-          alt: 'お絵描き記録',
-        },
-      ],
+      images: [{ url: finalImageUrl, width: 1200, height: 630 }],
       type: 'article',
     },
     twitter: {
       card: 'summary_large_image',
-      title,
-      description,
-      images: [imageUrl],
+      images: [finalImageUrl],
     },
   };
 }
 
 export default async function SharePage({ params, searchParams }: PageProps) {
   const { recordId } = await params;
-  await searchParams; // Next.js 15 await維持
+  const sParams = await searchParams;
+  const v = typeof sParams.v === 'string' ? sParams.v : undefined;
 
   let initialData: any = null;
   try {
@@ -85,8 +74,10 @@ export default async function SharePage({ params, searchParams }: PageProps) {
       initialData = { ...snap.data(), id: recordId };
     }
   } catch (e) {
-    console.error('Page Data Fetch Error:', e);
+    console.error('Page Fetch Error:', e);
   }
 
-  return <SharePostClient recordId={recordId} initialData={initialData} />;
+  // データがない場合は、Clientに任せずServer側で「投稿なし」を判定してもよいが、
+  // 現状の構成を維持するためPropsを渡す。vも渡すことでクライアント側のURL生成と同期。
+  return <SharePostClient recordId={recordId} initialData={initialData} v={v} />;
 }

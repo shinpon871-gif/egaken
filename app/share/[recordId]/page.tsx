@@ -3,9 +3,9 @@
 
 
 
+
 export const revalidate = 0; // キャッシュ無効化
 
-import React from 'react';
 import type { Metadata } from 'next';
 import SharePostClient from '@/components/SharePostClient';
 import { doc, getDoc } from 'firebase/firestore';
@@ -25,7 +25,7 @@ interface Post {
 // Next.js 15+ PageProps型
 interface PageProps {
   params: Promise<{ recordId: string }>;
-  searchParams: Promise<{ v?: string }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }
 
 // クライアントコンポーネント用Props型
@@ -35,7 +35,6 @@ interface SharePostClientProps {
   version: string;
 }
 
-export async function generateMetadata({ params, searchParams }: PageProps): Promise<Metadata> {
   const { recordId } = await params;
   const { v } = await searchParams;
   let imageUrl: string = 'https://egaken.vercel.app/ogp.png';
@@ -81,7 +80,6 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
   };
 }
 
-export default async function SharePage({ params, searchParams }: PageProps): Promise<JSX.Element> {
   const { recordId } = await params;
   const { v } = await searchParams;
   let initialData: Post | null = null;
@@ -93,7 +91,7 @@ export default async function SharePage({ params, searchParams }: PageProps): Pr
       initialData = { ...data, id: recordId };
     }
   } catch {}
-  const version: string = v || `${Date.now()}`;
+  const version: string = typeof v === 'string' ? v : `${Date.now()}`;
   const props: SharePostClientProps = {
     initialData,
     recordId,

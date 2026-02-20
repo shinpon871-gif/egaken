@@ -1,54 +1,58 @@
 # 🎨 えがけん（MVP）
 
-お絵描きの記録を毎日続けるシンプルな Webアプリ。
+お絵描きの記録を毎日続けるシンプルなWebアプリ。
 
-> **MVP（最小機能実装版）:** 投稿と一覧表示ができるシンプル版です。  
-> スコアやランキング、AI機能は実装していません。
+## 主な機能
 
-## 🌟 主な機能
+- Googleログイン認証
+- 画像＋コメント＋練習時間の記録投稿
+- 記録の一覧表示（新しい順）
+- 記録削除
+- 投稿直後のリアルタイム反映
+- OGP画像・SNSシェア完全対応（画像URLはそのまま、ページURLに?v=...付与）
+- 画像アップロード時はcontentType指定、Imageタグはunoptimized
+- CORS設定済み
 
-- **Google ログイン** - 簡単・安全な認証
-- **記録投稿** - 画像 + コメント + 練習時間を記録
-- **一覧表示** - 過去の記録を新しい順に表示
-- **記録削除** - 不要な記録は削除可能
-- **リアルタイム更新** - 投稿後すぐに反映
-
-## 🛠️ 技術スタック
+## 技術スタック
 
 | 概要 | 技術 |
-|-----|-----|
-| フロントエンド | Next.js 16 (App Router) + React 19 + TypeScript |
+|------|------|
+| フロント | Next.js 15+ (App Router) + React 19 + TypeScript |
 | スタイリング | Tailwind CSS 4 |
 | バックエンド | Firebase |
 | 認証 | Firebase Authentication (Google) |
 | データベース | Firestore |
 | ストレージ | Cloud Storage |
-| UI フック | react-firebase-hooks |
+| UIフック | react-firebase-hooks |
 
-## 📁 フォルダ構成
+## フォルダ構成
 
-```
+```Bash
 egaken/
-├── app/                          # Next.js App Router
-│   ├── (auth)/login/            # ログインページ
-│   ├── (dashboard)/home/        # ホーム画面（記録投稿・一覧）
-│   ├── layout.tsx               # ルートレイアウト
-│   ├── page.tsx                 # リダイレクト画面
-│   └── globals.css              # グローバルスタイル
+├── app/
+│   ├── (auth)/login/
+│   ├── (dashboard)/home/
+│   ├── share/[recordId]/page.tsx
+│   └── layout.tsx
 ├── components/
-│   ├── CreateRecordForm.tsx     # 記録投稿フォーム
-│   └── RecordList.tsx           # 記録一覧コンポーネント
+│   ├── CreateRecordForm.tsx
+│   ├── SharePostClient.tsx
+│   ├── ShareButton.tsx
+│   └── ...
 ├── contexts/
-│   └── AuthContext.tsx          # 認証コンテキスト
+│   └── AuthContext.tsx
 ├── lib/
-│   ├── firebase.ts              # Firebase設定
-│   └── utils.ts                 # ユーティリティ関数
-└── public/                      # 静的ファイル
+│   ├── firebase.ts
+│   └── utils.ts
+├── public/
+│   └── ogp.png
+├── OGP_FIX_REPORT.md
+├── ...
 ```
 
-## 🚀 クイックスタート
+## クイックスタート
 
-詳細は [QUICKSTART.md](./QUICKSTART.md) を参照してください。
+詳しくは [QUICKSTART.md](./QUICKSTART.md) を参照してください。
 
 ```bash
 # 1. リポジトリをクローン
@@ -58,12 +62,6 @@ cd egaken
 # 2. 環境変数を設定
 cp .env.local.example .env.local
 # .env.local に Firebase 設定を記入
-
-# 3. 依存パッケージをインストール
-npm install
-
-# 4. 開発サーバー起動
-npm run dev
 ```
 
 ブラウザで [http://localhost:3000](http://localhost:3000) を開く
@@ -71,7 +69,7 @@ npm run dev
 ## 📚 ドキュメント
 
 | ドキュメント | 内容 |
-|-----------|------|
+| ----------- | ------ |
 | [QUICKSTART.md](./QUICKSTART.md) | 5分で始めるガイド |
 | [SETUP_GUIDE.md](./SETUP_GUIDE.md) | 詳細セットアップ＆フォルダ構成 |
 | [FIREBASE_SETUP.md](./FIREBASE_SETUP.md) | Firebase初期化＆セキュリティルール |
@@ -93,7 +91,7 @@ npm run dev
 
 ## ✅ 動作確認チェック
 
-```
+```Bash
 [ ] Google ログイン
 [ ] ホーム画面表示
 [ ] 記録投稿（画像選択）
@@ -167,6 +165,6 @@ MIT License
 
 ---
 
-**Happy drawing! 🎨**
+**Happy drawing!**
 
 [セットアップをはじめる →](./QUICKSTART.md)

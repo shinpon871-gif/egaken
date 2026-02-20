@@ -9,7 +9,7 @@ import Link from "next/link";
 
 type Post = {
   id: string;
-  title: string;
+  title?: string;
   comment?: string;
   minutes?: number;
   aiComment?: string;
@@ -88,7 +88,7 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
 
   return (
     <div className="min-h-screen bg-gray-50 px-4 py-8 max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-4">{post.title}</h1>
+      <h1 className="text-2xl font-bold mb-4">{post.title || 'お絵描きの記録'}</h1>
 
       {post.imageUrl && (
         <div className="mb-4 w-full aspect-square relative rounded-lg overflow-hidden border bg-gray-100">

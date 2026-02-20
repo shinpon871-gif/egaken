@@ -21,9 +21,10 @@ type Props = {
   recordId?: string;
   version?: string;
   initialData: Post | null;
+  v?: string;
 };
 
-export default function SharePostClient({ recordId, version, initialData }: Props) {
+export default function SharePostClient({ recordId, version, initialData, v }: Props) {
   const [post, setPost] = useState<Post | null>(initialData);
   const [isLoading, setIsLoading] = useState<boolean>(!initialData);
   const [error, setError] = useState<string | null>(null);

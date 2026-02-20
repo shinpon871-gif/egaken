@@ -31,8 +31,9 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
     if (snap.exists()) {
       const data = snap.data() as Post;
       if (data.imageUrl) {
-        // Firebase Storage URLには必ず?が含まれるため、&v=で結合
-        imageUrl = v ? `${data.imageUrl}&v=${v}` : data.imageUrl;
+        // 既にトークン等のクエリ(?...)がある場合は & を、なければ ? を使う
+        const joiner = data.imageUrl.includes('?') ? '&' : '?';
+        imageUrl = v ? `${data.imageUrl}${joiner}v=${v}` : data.imageUrl;
       }
     }
   } catch (e) {

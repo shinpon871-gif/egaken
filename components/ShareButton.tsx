@@ -28,18 +28,30 @@ function isIOS(): boolean {
 export function ShareButton({ recordId, comment, practiceMinutes, aiComment, imageUrl }: ShareButtonProps) {
   const [isSharing, setIsSharing] = useState(false);
 
+  // シェア用URLは常に最新のタイムスタンプ付きで1回だけtext末尾に含める
+  const getShareUrl = () => {
+    if (!recordId) return '';
+    const baseUrl = window.location.origin || 'https://egaken.vercel.app';
+    return `${baseUrl}/share/${recordId}?v=${Date.now()}`;
+  };
 
-  // シェア用URLは常に1回だけtext末尾に含める。/share/[recordId]形式に統一。
-  const shareUrl = `https://egaken.vercel.app/share/${recordId}`;
-  const tweetResult = useMemo(() => generateTweetText(practiceMinutes, comment, shareUrl), [practiceMinutes, comment, recordId]);
+  const tweetResult = useMemo(() => {
+    // 初期値は空文字（SSR時）
+    return generateTweetText(practiceMinutes, comment, '');
+  }, [practiceMinutes, comment]);
 
   const handleShare = async () => {
+    if (!recordId) {
+      alert('記録IDが不正です');
+      return;
+    }
     if (tweetResult.isOverLimit) {
       alert('140文字以内に収めてください');
       return;
     }
     setIsSharing(true);
-    const shareText = tweetResult.text;
+    const shareUrl = getShareUrl();
+    const shareText = generateTweetText(practiceMinutes, comment, shareUrl).text;
     const iosDevice = isIOS();
     const intentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`;
     try {

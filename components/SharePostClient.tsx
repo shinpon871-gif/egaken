@@ -92,7 +92,7 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
 
       {post.imageUrl && (
         <div className="mb-4 w-full aspect-square relative rounded-lg overflow-hidden border bg-gray-100">
-          <Image src={post.imageUrl} alt="投稿画像" fill className="object-cover" />
+          <Image src={post.imageUrl} alt="投稿画像" fill className="object-cover" unoptimized />
         </div>
       )}
 

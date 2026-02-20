@@ -21,7 +21,7 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
   const v = typeof sParams.v === 'string' ? sParams.v : undefined;
   
   // デフォルト画像（絶対パス）
-  let finalImageUrl = 'https://egaken.vercel.app/ogp.png';
+    let imageUrl = 'https://egaken.vercel.app/ogp.png';
   const title = 'えがけん記録';
   const description = '練習の記録をシェアしました。';
 
@@ -33,7 +33,7 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
       if (data.imageUrl) {
         // 【修正ポイント】クローラーが混乱しないよう、imageUrlをそのまま使用。
         // キャッシュバスターが必要なのは「ページURL」であり「画像URL」ではないため。
-        finalImageUrl = data.imageUrl;
+          imageUrl = data.imageUrl;
       }
     }
   } catch (e) {
@@ -41,7 +41,7 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
   }
 
   // クローラーに「このページのユニークなURL」を教える（ここがキャッシュ対策の肝）
-  const canonicalUrl = `https://egaken.vercel.app/share/${recordId}${v ? `?v=${v}` : ''}`;
+    const canonicalUrl = `https://egaken.vercel.app/share/${recordId}${v ? `?v=${v}` : ''}`;
 
   return {
     title,
@@ -50,13 +50,20 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
     openGraph: {
       title,
       description,
-      url: canonicalUrl,
-      images: [{ url: finalImageUrl, width: 1200, height: 630 }],
+        url: canonicalUrl,
+        images: [
+          {
+            url: imageUrl,
+            width: 1200,
+            height: 630,
+            alt: 'お絵描き記録',
+          },
+        ],
       type: 'article',
     },
     twitter: {
       card: 'summary_large_image',
-      images: [finalImageUrl],
+        images: [imageUrl],
     },
   };
 }

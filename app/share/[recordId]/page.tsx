@@ -19,10 +19,11 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
   const { recordId } = await params;
   const sParams = await searchParams;
   const v = typeof sParams.v === 'string' ? sParams.v : undefined;
-  
-  let imageUrl = '[https://egaken.vercel.app/ogp.png](https://egaken.vercel.app/ogp.png)';
+
+  let imageUrl = 'https://egaken.vercel.app/ogp.png';
   const title = 'えがけん記録';
   const description = '練習の記録をシェアしました。';
+  const canonicalUrl = `https://egaken.vercel.app/share/${recordId}?v=${v || Date.now()}`;
 
   try {
     const docRef = doc(db, 'posts', recordId);
@@ -30,16 +31,14 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
     if (snap.exists()) {
       const data = snap.data() as Post;
       if (data.imageUrl) {
-        // Firebase Storage URLのトークンを壊さないよう結合
-        const separator = data.imageUrl.includes('?') ? '&' : '?';
-        imageUrl = v ? `${data.imageUrl}${separator}v=${encodeURIComponent(v)}` : data.imageUrl;
+        // Firebase Storage URLには必ず?が含まれるため、&v=で結合
+        imageUrl = v ? `${data.imageUrl}&v=${v}` : data.imageUrl;
       }
     }
   } catch (e) {
-    console.error("OGP Metadata Fetch Error:", e);
+    console.error('OGP Metadata Fetch Error:', e);
   }
 
-  // 絶対パス保証
   if (!imageUrl.startsWith('https')) {
     imageUrl = 'https://egaken.vercel.app/ogp.png';
   }
@@ -48,12 +47,12 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
     title,
     description,
     alternates: {
-      canonical: `https://egaken.vercel.app/share/${recordId}?v=${v || '1'}`,
+      canonical: canonicalUrl,
     },
     openGraph: {
       title,
       description,
-      url: `https://egaken.vercel.app/share/${recordId}?v=${v || '1'}`,
+      url: canonicalUrl,
       images: [
         {
           url: imageUrl,
@@ -75,8 +74,8 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
 
 export default async function SharePage({ params, searchParams }: PageProps) {
   const { recordId } = await params;
-  const sParams = await searchParams; // Await even if not used to satisfy Next.js 15
-  
+  await searchParams; // Next.js 15 await維持
+
   let initialData: any = null;
   try {
     const docRef = doc(db, 'posts', recordId);
@@ -85,7 +84,7 @@ export default async function SharePage({ params, searchParams }: PageProps) {
       initialData = { ...snap.data(), id: recordId };
     }
   } catch (e) {
-    console.error("Page Data Fetch Error:", e);
+    console.error('Page Data Fetch Error:', e);
   }
 
   return <SharePostClient recordId={recordId} initialData={initialData} />;

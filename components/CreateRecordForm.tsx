@@ -49,10 +49,10 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
     setError(null);
 
     try {
-      // Firebase Storageに画像をアップロード
+      // Firebase Storageに画像をアップロード（contentTypeを明示指定）
       const fileName = `${user.uid}/${Date.now()}_${selectedFile.name}`;
       const storageRef = ref(storage, `records/${fileName}`);
-      const uploadResult = await uploadBytes(storageRef, selectedFile);
+      const uploadResult = await uploadBytes(storageRef, selectedFile, { contentType: selectedFile.type });
       const imageUrl = await getDownloadURL(uploadResult.ref);
 
       // Firestoreにレコードを投稿として保存

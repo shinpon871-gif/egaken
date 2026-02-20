@@ -1,12 +1,6 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-// Xキャッシュ対策: 共有URLにtimestampを付与
-function createShareUrl(recordId: string) {
-  const base = `https://egaken.vercel.app/share/${recordId}`;
-  const timestamp = Date.now();
-  return `${base}?v=${timestamp}`;
-}
 import { generateTweetText } from '@/lib/twitter';
 
 interface ShareButtonProps {
@@ -15,6 +9,7 @@ interface ShareButtonProps {
   practiceMinutes: number;
   aiComment?: string;
   imageUrl: string;
+  v?: string; // ← ここに v を追加することで page.tsx からの型エラーを解消
 }
 
 /**
@@ -25,18 +20,28 @@ function isIOS(): boolean {
   return /iPad|iPhone|iPod/.test(navigator.userAgent);
 }
 
-export function ShareButton({ recordId, comment, practiceMinutes, aiComment, imageUrl }: ShareButtonProps) {
+export function ShareButton({ 
+  recordId, 
+  comment, 
+  practiceMinutes, 
+  aiComment, 
+  imageUrl,
+  v // Propsとして受け取る
+}: ShareButtonProps) {
   const [isSharing, setIsSharing] = useState(false);
 
-  // シェア用URLは常に最新のタイムスタンプ付きで1回だけtext末尾に含める
+  // シェア用URLの生成ロジック
   const getShareUrl = () => {
     if (!recordId) return '';
     const baseUrl = window.location.origin || 'https://egaken.vercel.app';
-    return `${baseUrl}/share/${recordId}?v=${Date.now()}`;
+    
+    // すでにURLパラメータ(v)がある場合はそれを使用し、なければ現在の時間を付与
+    const cacheBuster = v || Date.now().toString();
+    return `${baseUrl}/share/${recordId}?v=${cacheBuster}`;
   };
 
   const tweetResult = useMemo(() => {
-    // 初期値は空文字（SSR時）
+    // プレビュー表示用。URLを含めない状態のテキストを生成
     return generateTweetText(practiceMinutes, comment, '');
   }, [practiceMinutes, comment]);
 
@@ -50,13 +55,16 @@ export function ShareButton({ recordId, comment, practiceMinutes, aiComment, ima
       return;
     }
     setIsSharing(true);
+
     const shareUrl = getShareUrl();
+    // 実際のツイート本文。末尾にパラメータ付きURLを1つだけ挿入
     const shareText = generateTweetText(practiceMinutes, comment, shareUrl).text;
+    
     const iosDevice = isIOS();
     const intentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`;
+
     try {
       if (iosDevice) {
-        // iOSは_blankを付けない方が安定
         const newWindow = window.open(intentUrl);
         if (!newWindow) {
           console.warn('window.open がブロックされました');
@@ -78,13 +86,12 @@ export function ShareButton({ recordId, comment, practiceMinutes, aiComment, ima
   return (
     <div className="space-y-3">
       {/* Twitter投稿プレビュー */}
-
       <div className="rounded-lg border border-gray-300 bg-gray-50 p-4 overflow-hidden w-full">
         <p className="mb-2 text-xs font-semibold text-gray-600">投稿プレビュー</p>
         <div className="mb-3 whitespace-pre-wrap rounded bg-white p-3 text-sm text-gray-800 break-all overflow-hidden max-w-full min-w-0">
           {tweetResult.text}
         </div>
-        {/* 文字数カウンター */}
+        
         <div className="flex items-center justify-between">
           <span className={`text-sm font-semibold ${
             tweetResult.isOverLimit
@@ -93,9 +100,10 @@ export function ShareButton({ recordId, comment, practiceMinutes, aiComment, ima
                 ? 'text-orange-600'
                 : 'text-green-600'
           }`}>
-            {tweetResult.length} / {140}文字
+            {tweetResult.length} / 140文字
           </span>
         </div>
+        
         {tweetResult.isWarning && (
           <p className="mt-2 text-xs text-orange-600">
             ⚠️ 投稿が長いため、Twitterで文章が途切れる可能性があります

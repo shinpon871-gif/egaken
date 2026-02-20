@@ -18,24 +18,23 @@ type Post = {
 };
 
 type Props = {
-  recordId?: string;
-  version?: string;
+  recordId: string; // 必須に変更
   initialData: Post | null;
-  v?: string;
+  v?: string;       // キャッシュバスター用パラメータ
 };
 
-export default function SharePostClient({ recordId, version, initialData, v }: Props) {
+export default function SharePostClient({ recordId, initialData, v }: Props) {
   const [post, setPost] = useState<Post | null>(initialData);
   const [isLoading, setIsLoading] = useState<boolean>(!initialData);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!recordId) {
-      setError("Record ID が指定されていません");
+    // サーバーからの初期データがあれば、クライアント側での再取得はスキップ
+    if (initialData) {
+      setPost(initialData);
       setIsLoading(false);
       return;
     }
-    if (initialData) return; // サーバーから初期データが来ていれば再取得しない
 
     const fetchPost = async () => {
       setIsLoading(true);
@@ -57,33 +56,31 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
         setIsLoading(false);
       }
     };
-    fetchPost();
+
+    if (recordId) {
+      fetchPost();
+    }
   }, [recordId, initialData]);
 
   if (isLoading) {
-    return <p className="text-gray-600">読み込み中…</p>;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <p className="text-gray-600">読み込み中…</p>
+      </div>
+    );
   }
 
-  if (error) {
-    return <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="bg-white p-6 rounded shadow text-center">
-        <p className="text-red-600 font-semibold mb-2">{error}</p>
-        <Link href="/" className="inline-block mt-4 px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600">
-          ホームへ
-        </Link>
+  if (error || !post) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="bg-white p-6 rounded shadow text-center">
+          <p className="text-red-600 font-semibold mb-2">{error || "投稿が見つかりませんでした"}</p>
+          <Link href="/" className="inline-block mt-4 px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600">
+            ホームへ
+          </Link>
+        </div>
       </div>
-    </div>;
-  }
-
-  if (!post) {
-    return <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="bg-white p-6 rounded shadow text-center">
-        <p>投稿がありません</p>
-        <Link href="/" className="inline-block mt-4 px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600">
-          ホームへ
-        </Link>
-      </div>
-    </div>;
+    );
   }
 
   return (
@@ -92,7 +89,13 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
 
       {post.imageUrl && (
         <div className="mb-4 w-full aspect-square relative rounded-lg overflow-hidden border bg-gray-100">
-          <Image src={post.imageUrl} alt="投稿画像" fill className="object-cover" />
+          <Image 
+            src={post.imageUrl} 
+            alt="投稿画像" 
+            fill 
+            className="object-cover" 
+            priority // OGP画像と一致させるため優先読み込み
+          />
         </div>
       )}
 
@@ -117,12 +120,16 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
       )}
 
       <div className="mb-4">
+        {/* ShareButton 内のリンク生成ロジックでも 
+          ?v=${v} が使われるように Props を渡せるようにしておくと完璧です
+        */}
         <ShareButton
           recordId={post.id}
           comment={post.comment || ""}
           practiceMinutes={post.minutes || 0}
           aiComment={post.aiComment || ""}
           imageUrl={post.imageUrl || ""}
+          v={v} // キャッシュバスターを継承
         />
       </div>
 

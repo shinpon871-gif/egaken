@@ -1,15 +1,9 @@
-
-
-
-
-
-
-export const revalidate = 0; // キャッシュ無効化
-
-import type { Metadata } from 'next';
+import { Metadata } from 'next';
 import SharePostClient from '@/components/SharePostClient';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+
+export const revalidate = 0;
 
 // Firestoreデータ型
 interface Post {
@@ -22,132 +16,70 @@ interface Post {
   createdAt?: any;
 }
 
-// Next.js 15+ PageProps型
-interface PageProps {
+// NEXT.JS 15準拠: paramsとsearchParamsはPromise型
+type PageProps = {
   params: Promise<{ recordId: string }>;
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-}
+};
 
-// クライアントコンポーネント用Props型
-interface SharePostClientProps {
-  initialData: Post | null;
-  recordId: string;
-  version: string;
-}
-
+// OGP画像生成用
+export async function generateMetadata({ params, searchParams }: PageProps): Promise<Metadata> {
   const { recordId } = await params;
-  const { v } = await searchParams;
-  let imageUrl: string = 'https://egaken.vercel.app/ogp.png';
+  const sParams = await searchParams;
+  const v = typeof sParams.v === 'string' ? sParams.v : undefined;
+  
+  let imageUrl = 'https://egaken.vercel.app/ogp.png';
 
-  import { Metadata } from "next";
-  import { doc, getDoc } from "firebase/firestore";
-  import { db } from "@/lib/firebase";
-  import SharePostClient from "@/components/SharePostClient";
-
-  // 1. 型定義 (Next.js 15準拠)
-  interface PageProps {
-    params: Promise<{ recordId: string }>;
-    searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+  try {
+    const docRef = doc(db, 'posts', recordId);
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const data = snap.data() as Post;
+      if (data.imageUrl) {
+        // Firebase Storage URLにクエリを追加する場合は、既存の?の有無を確認
+        const separator = data.imageUrl.includes('?') ? '&' : '?';
+        imageUrl = v ? `${data.imageUrl}${separator}v=${encodeURIComponent(v)}` : data.imageUrl;
+      }
+    }
+  } catch (e) {
+    console.error("OGP Metadata Error:", e);
   }
 
-  interface Post {
-    id: string;
-    title: string;
-    imageUrl: string;
-    comment?: string;
-    minutes?: number;
-    aiComment?: string;
-    createdAt?: any;
+  const title = 'えがけん記録';
+  const description = '練習の記録をシェアしました。';
+
+  return {
+    title,
+    description,
+    openGraph: {
+      title,
+      description,
+      images: [{ url: imageUrl }],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      images: [imageUrl],
+    },
+  };
+}
+
+// サーバーコンポーネント本体
+export default async function SharePage({ params, searchParams }: PageProps) {
+  const { recordId } = await params;
+  // searchParamsは不要ならawaitだけでOK、使うなら展開
+  await searchParams;
+
+  let initialData: Post | null = null;
+  try {
+    const docRef = doc(db, 'posts', recordId);
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const data = snap.data() as Post;
+      initialData = { ...data, id: recordId };
+    }
+  } catch (e) {
+    console.error("Page Data Fetch Error:", e);
   }
 
-  // 2. メタデータ生成 (Async Function)
-  export async function generateMetadata({ params, searchParams }: PageProps): Promise<Metadata> {
-    const { recordId } = await params;
-    const { v } = await searchParams;
-    let imageUrl: string = "https://egaken.vercel.app/ogp.png";
-
-    import { Metadata } from "next";
-    import { doc, getDoc } from "firebase/firestore";
-    import { db } from "@/lib/firebase";
-    import SharePostClient from "@/components/SharePostClient";
-
-    interface PageProps {
-      params: Promise<{ recordId: string }>;
-      searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-    }
-
-    interface Post {
-      imageUrl: string;
-      comment?: string;
-    }
-
-    export async function generateMetadata({ params, searchParams }: PageProps): Promise<Metadata> {
-      const { recordId } = await params;
-      const { v } = await searchParams;
-  
-      // デフォルト値
-      const title = "えがけん記録";
-      const description = "練習の記録をシェアしました。";
-      let imageUrl = "https://egaken.vercel.app/ogp.png"; // 絶対パス
-
-      try {
-        const docRef = doc(db, "posts", recordId);
-        const snap = await getDoc(docRef);
-
-        import { Metadata } from "next";
-        import { doc, getDoc } from "firebase/firestore";
-        import { db } from "@/lib/firebase";
-        import SharePostClient from "@/components/SharePostClient";
-
-        interface PageProps {
-          params: Promise<{ recordId: string }>;
-          searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-        }
-
-        interface Post {
-          imageUrl: string;
-          comment?: string;
-        }
-
-        export async function generateMetadata({ params, searchParams }: PageProps): Promise<Metadata> {
-          const { recordId } = await params;
-          const { v } = await searchParams;
-  
-          const title = "えがけん記録";
-          const description = "練習の記録をシェアしました。";
-          let imageUrl = "[https://egaken.vercel.app/ogp.png](https://egaken.vercel.app/ogp.png)";
-
-          try {
-            const docRef = doc(db, "posts", recordId);
-            const snap = await getDoc(docRef);
-            if (snap.exists()) {
-              const data = snap.data() as Post;
-              if (data.imageUrl) imageUrl = data.imageUrl;
-            }
-          } catch (e) {
-            console.error("Metadata fetch error:", e);
-          }
-
-          return {
-            title,
-            description,
-            openGraph: {
-              title,
-              description,
-              images: [imageUrl],
-            },
-            twitter: {
-              card: "summary_large_image",
-              images: [imageUrl],
-            },
-          };
-        }
-
-        export default async function SharePage({ params, searchParams }: PageProps) {
-          const { recordId } = await params;
-          const { v } = await searchParams;
-
-          return (
-            <SharePostClient recordId={recordId} v={v as string | undefined} />
-          );
-        }
+  return <SharePostClient recordId={recordId} initialData={initialData} />;
+}

@@ -93,36 +93,61 @@ interface SharePostClientProps {
       try {
         const docRef = doc(db, "posts", recordId);
         const snap = await getDoc(docRef);
-        if (snap.exists()) {
-          const data = snap.data() as Post;
-          if (data.imageUrl) imageUrl = data.imageUrl;
+
+        import { Metadata } from "next";
+        import { doc, getDoc } from "firebase/firestore";
+        import { db } from "@/lib/firebase";
+        import SharePostClient from "@/components/SharePostClient";
+
+        interface PageProps {
+          params: Promise<{ recordId: string }>;
+          searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
         }
-      } catch (e) {
-        console.error("Metadata fetch error:", e);
-      }
 
-      return {
-        title,
-        description,
-        openGraph: {
-          title,
-          description,
-          images: [imageUrl],
-        },
-        twitter: {
-          card: "summary_large_image",
-          images: [imageUrl],
-        },
-      };
-    }
+        interface Post {
+          imageUrl: string;
+          comment?: string;
+        }
 
-    export default async function SharePage({ params, searchParams }: PageProps) {
-      const { recordId } = await params;
-      const { v } = await searchParams;
+        export async function generateMetadata({ params, searchParams }: PageProps): Promise<Metadata> {
+          const { recordId } = await params;
+          const { v } = await searchParams;
+  
+          const title = "えがけん記録";
+          const description = "練習の記録をシェアしました。";
+          let imageUrl = "[https://egaken.vercel.app/ogp.png](https://egaken.vercel.app/ogp.png)";
 
-      // Page本体ではデータ取得失敗・ローディング等は Client Component 側に任せる
-      // Server側では最小限の props 渡しに徹する
-      return (
-        <SharePostClient recordId={recordId} v={v as string | undefined} />
-      );
-    }
+          try {
+            const docRef = doc(db, "posts", recordId);
+            const snap = await getDoc(docRef);
+            if (snap.exists()) {
+              const data = snap.data() as Post;
+              if (data.imageUrl) imageUrl = data.imageUrl;
+            }
+          } catch (e) {
+            console.error("Metadata fetch error:", e);
+          }
+
+          return {
+            title,
+            description,
+            openGraph: {
+              title,
+              description,
+              images: [imageUrl],
+            },
+            twitter: {
+              card: "summary_large_image",
+              images: [imageUrl],
+            },
+          };
+        }
+
+        export default async function SharePage({ params, searchParams }: PageProps) {
+          const { recordId } = await params;
+          const { v } = await searchParams;
+
+          return (
+            <SharePostClient recordId={recordId} v={v as string | undefined} />
+          );
+        }

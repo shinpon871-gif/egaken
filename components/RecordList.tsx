@@ -25,6 +25,7 @@ interface Record {
   minutes: number;
   aiComment?: string;
   createdAt: Timestamp | null;
+  characterType?: string; // 追加: キャラクタータイプ（optional）
 }
 
 interface RecordListProps {

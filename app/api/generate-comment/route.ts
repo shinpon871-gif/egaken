@@ -1,71 +1,132 @@
-import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import { NextRequest, NextResponse } from "next/server";
+import OpenAI from "openai";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-export async function POST(request: NextRequest) {
-  // APIキーの確認
-  if (!process.env.OPENAI_API_KEY) {
-    return NextResponse.json(
-      { error: 'OpenAI APIキーが設定されていません' },
-      { status: 500 }
-    );
-  }
-
-  try {
-    const body = await request.json();
-    const { comment, practiceMinutes } = body;
-
-    // プロンプトの作成
-    const prompt = `あなたはお絵描きを応援する優しいトレーナーです。
-以下の情報をもとに、評価や点数は使わず、励ましと継続を促す短い日本語コメント（1〜2文）を作成してください。
-
-情報：
-- ユーザーコメント: ${comment || 'なし'}
-- 練習時間: ${practiceMinutes ? practiceMinutes + '分' : '記録なし'}
-
-条件：
-- 上から目線にしない
+// --- CHARACTER_CONFIG: データのみ、処理コード混入禁止 ---
+const CHARACTER_CONFIG = {
+  strategist: {
+    prompt: `知的で優しい参謀タイプ。
+落ち着いた丁寧語で分析しながら褒める。
+成長を見守る姿勢。
 - 批判しない
 - 「昨日の自分より一歩前進」というニュアンス
 - 40〜80文字程度
+`,
+    fallback: "着実に積み重ねていますね。この調子で続けていきましょう。",
+  },
+  genki: {
+    prompt: `元気いっぱいのスポーツ少女。
+テンション高めで努力を全力で褒める。
+最後は「次も一緒にがんばろう！」で締める。
+- 批判しない
+- 「昨日の自分より一歩前進」というニュアンス
+- 40〜80文字程度
+`,
+    fallback: "すごいよ！今日もよく頑張ったね！次も一緒にがんばろう！",
+  },
+  cool: {
+    prompt: `クールで無口。
+短文。
+そっけないが核心を突く。
+- 批判しない
+- 「昨日の自分より一歩前進」というニュアンス
+- 40〜80文字程度
+`,
+    fallback: "……悪くない。",
+  },
+  oneesan: {
+    prompt: `包容力のあるお姉さん。
+やさしい語尾。
+「あなたのペースで大丈夫よ」を含める。
+- 批判しない
+- 「昨日の自分より一歩前進」というニュアンス
+- 40〜80文字程度
+`,
+    fallback: "大丈夫、あなたのペースでいいのよ。ちゃんと前に進んでるわ。",
+  },
+  chuunibyou: {
+    prompt: `中二病キャラクター。
+大げさな比喩表現。
+- 批判しない
+- 「昨日の自分より一歩前進」というニュアンス
+- 40〜80文字程度
+`,
+    fallback: "その筆致…覚醒の兆し…！",
+  },
+  mascot: {
+    prompt: `ゆるふわマスコット。
+赤ちゃん言葉。
+- 批判しない
+- 「昨日の自分より一歩前進」というニュアンス
+- 40〜80文字程度
+`,
+    fallback: "がんばったね〜えらいよ〜！",
+  },
+  sensei: {
+    prompt: `優しい美術講師。
+教育的で丁寧。
+改善点も軽く触れる。
+- 批判しない
+- 「昨日の自分より一歩前進」というニュアンス
+- 40〜80文字程度
+`,
+    fallback: "よく描けていますね。次は形のバランスも意識してみましょう。",
+  },
+};
 
-レスポンスは、コメントのみを返してください。それ以外の補足や説明は不要です。`;
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+});
 
-    // OpenAI APIを呼び出し（GPT-4oを使用）
-    const message = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      max_tokens: 200,
+export async function POST(request: NextRequest) {
+  // ---- bodyを安全に1回だけ取得 ----
+  let body: any = {};
+  try {
+    body = await request.json();
+  } catch {
+    body = {};
+  }
+
+
+  const imageUrl = body.imageUrl || "";
+  const practiceMinutes = body.practiceMinutes || 0;
+
+  type CharacterType = keyof typeof CHARACTER_CONFIG;
+  const rawType = body.characterType;
+  const characterType: CharacterType =
+    typeof rawType === "string" && rawType in CHARACTER_CONFIG
+      ? (rawType as CharacterType)
+      : "strategist";
+
+  const config = CHARACTER_CONFIG[characterType];
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.8,
       messages: [
         {
-          role: 'user',
-          content: prompt,
+          role: "system",
+          content: config.prompt,
+        },
+        {
+          role: "user",
+          content: `お絵描き練習をしました。
+練習時間: ${practiceMinutes}分
+
+努力を前向きに褒めてください。
+コメントは2〜4文程度。`,
         },
       ],
     });
 
-    // レスポンスからテキストを抽出
-    const aiComment =
-      message.choices[0].message.content || '';
+    const comment =
+      completion.choices[0]?.message?.content || config.fallback;
 
-    return NextResponse.json({ aiComment }, { status: 200 });
-  } catch (error: any) {
-    console.error('AIコメント生成エラー:', error);
-
-    // APIエラー（クォータ不足など）時は定型文を返して動作を継続させる
-    const fallbackComments = [
-      "継続は力なり！今日も素晴らしい記録です。",
-      "コツコツ積み重ねることが上達への近道です。ナイスファイト！",
-      "その調子です！昨日の自分より確実に前進しています。",
-      "描くことを楽しむのが一番の上達法です。お疲れ様でした！"
-    ];
-    const randomComment = fallbackComments[Math.floor(Math.random() * fallbackComments.length)];
-
-    return NextResponse.json(
-      { aiComment: randomComment },
-      { status: 200 }
-    );
+    return NextResponse.json({ comment });
+  } catch (error) {
+    console.error("AI生成エラー:", error);
+    return NextResponse.json({
+      comment: config.fallback,
+    });
   }
 }

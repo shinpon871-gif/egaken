@@ -40,21 +40,21 @@ export default function HomePage() {
           <>
             <button
               onClick={() => setShowForm(true)}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-8 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-orange-600 active:scale-95"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-8 py-4 text-base font-bold text-white shadow-lg transition hover:bg-orange-600 active:scale-95"
             >
               <span className="text-2xl">✏️</span>
               今日の記録
             </button>
             <button
               onClick={() => router.push('/history')}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-500 px-8 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-cyan-600 active:scale-95"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-500 px-8 py-4 text-base font-bold text-white shadow-lg transition hover:bg-cyan-600 active:scale-95"
             >
               <span className="text-2xl">🖼️</span>
               ヒストリーを見る
             </button>
             <button
               onClick={() => router.push('/growth')}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-purple-500 px-8 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-purple-600 active:scale-95"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-purple-500 px-8 py-4 text-base font-bold text-white shadow-lg transition hover:bg-purple-600 active:scale-95"
             >
               <span className="text-2xl">📊</span>
               成長を見る

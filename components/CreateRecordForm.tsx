@@ -17,6 +17,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const [preview, setPreview] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   const [practiceMinutes, setPracticeMinutes] = useState('');
+  const [characterType, setCharacterType] = useState('strategist'); // キャラ選択
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,6 +63,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         minutes: practiceMinutes ? parseInt(practiceMinutes, 10) : 0,
         comment: comment.trim() || '',
         createdAt: serverTimestamp(),
+        characterType: characterType || 'strategist',
       });
 
       // AI コメント生成を別途実行（記録の保存を待たずに非同期で実行）
@@ -75,6 +77,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
             body: JSON.stringify({
               comment: comment.trim() || null,
               practiceMinutes: practiceMinutes ? parseInt(practiceMinutes, 10) : null,
+              characterType: characterType || 'strategist',
             }),
           });
 
@@ -101,6 +104,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       setPreview(null);
       setComment('');
       setPracticeMinutes('');
+      setCharacterType('strategist');
 
       onSuccess?.();
     } catch (error) {
@@ -169,6 +173,28 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
           disabled={isLoading}
           className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 disabled:bg-gray-50"
         />
+      </div>
+
+      {/* キャラクタータイプ選択 */}
+      <div className="mb-6">
+        <label htmlFor="characterType" className="mb-2 block text-sm font-semibold text-gray-700">
+          コメントのキャラクタータイプ
+        </label>
+        <select
+          id="characterType"
+          value={characterType}
+          onChange={(e) => setCharacterType(e.target.value)}
+          disabled={isLoading}
+          className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 disabled:bg-gray-50"
+        >
+          <option value="strategist">知的で優しい参謀タイプ</option>
+          <option value="genki">元気スポーツ少女</option>
+          <option value="cool">クール無口</option>
+          <option value="oneesan">お姉さん系</option>
+          <option value="chuunibyou">中二病系</option>
+          <option value="mascot">赤ちゃん言葉</option>
+          <option value="sensei">先生タイプ</option>
+        </select>
       </div>
 
       {/* 送信ボタン */}

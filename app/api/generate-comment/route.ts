@@ -119,14 +119,14 @@ export async function POST(request: NextRequest) {
       ],
     });
 
-    const comment =
+    const aiComment =
       completion.choices[0]?.message?.content || config.fallback;
 
-    return NextResponse.json({ comment });
+    return NextResponse.json({ aiComment });
   } catch (error) {
     console.error("AI生成エラー:", error);
     return NextResponse.json({
-      comment: config.fallback,
+      aiComment: config.fallback,
     });
   }
 }

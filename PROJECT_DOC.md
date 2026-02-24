@@ -1,4 +1,3 @@
-
 # えがけん 開発・運用ドキュメント
 
 ## 目次
@@ -33,15 +32,13 @@
     - [Twitter(X)共有機能：注意点](#twitterx共有機能注意点)
   - [AIコメント機能ガイド](#aiコメント機能ガイド)
     - [AIコメント機能：実装例](#aiコメント機能実装例)
+      - [キャラクタータイプ例](#キャラクタータイプ例)
+      - [型定義例（Record型）](#型定義例record型)
+      - [Firestore構造例](#firestore構造例)
+      - [APIリクエスト例](#apiリクエスト例)
+      - [APIレスポンス例](#apiレスポンス例)
+      - [拡張・カスタマイズ方法](#拡張カスタマイズ方法)
     - [AIコメント機能：注意点](#aiコメント機能注意点)
-  - [OGP画像・SNSキャッシュ問題 解決レポート](#ogp画像snsキャッシュ問題-解決レポート)
-    - [問題概要](#問題概要)
-    - [原因分析](#原因分析)
-    - [解決策](#解決策)
-    - [実施した主な修正](#実施した主な修正)
-    - [結果](#結果)
-    - [Google Cloud ShellによるCORS設定](#google-cloud-shellによるcors設定)
-  - [データ構造](#データ構造)
   - [開発コマンド](#開発コマンド)
   - [セキュリティ](#セキュリティ)
   - [今後の拡張機能候補](#今後の拡張機能候補)
@@ -167,8 +164,6 @@ npm run dev
 
 ---
 
-...existing code...
-
 ## 概要
 
 お絵描きの記録を毎日続けるシンプルなWebアプリ「えがけん」の開発・運用ドキュメントです。
@@ -187,7 +182,7 @@ npm run dev
 ## 技術スタック
 
 | 概要 | 技術 |
-| ------ | ------ |
+| --- | --- |
 | フロント | Next.js 15+ (App Router) + React 19 + TypeScript |
 | スタイリング | Tailwind CSS 4 |
 | バックエンド | Firebase |
@@ -311,67 +306,85 @@ const xIntentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(x
 ### AIコメント機能：実装例
 
 - `/api/generate-comment/route.ts` でOpenAI API呼び出し
-- Firestoreの該当レコードにaiCommentを保存
+- Firestoreの該当レコードに `aiComment` と `characterType` を保存
+- `CreateRecordForm.tsx` でキャラクタータイプ選択UI・API呼び出し・保存を実装
+- `RecordList.tsx` で `aiComment` と `characterType` を表示
+
+#### キャラクタータイプ例
+
+| 値           | 表示名           |
+|--------------|------------------|
+| strategist   | 知的で優しい参謀 |
+| genki        | 元気スポーツ少女 |
+| cool         | クール無口       |
+| oneesan      | お姉さん系       |
+| chuunibyou   | 中二病系         |
+| mascot       | 赤ちゃん言葉     |
+
+#### 型定義例（Record型）
+
+```typescript
+interface Record {
+  id: string;
+  userId: string;
+  imageUrl: string;
+  comment: string;
+  minutes: number;
+  aiComment?: string; // AI生成コメント
+  createdAt: Timestamp | null;
+  characterType?: string; // キャラクタータイプ
+}
+```
+
+#### Firestore構造例
+
+```typescript
+{
+  id: string,
+  userId: string,
+  imageUrl: string,
+  comment: string,
+  practiceMinutes: number,
+  createdAt: Timestamp,
+  aiComment?: string,      // AI生成コメント
+  characterType?: string,  // キャラクタータイプ
+}
+```
+
+#### APIリクエスト例
+
+```json
+POST /api/generate-comment
+{
+  "imageUrl": "...",
+  "practiceMinutes": 30,
+  "characterType": "genki"
+}
+```
+
+#### APIレスポンス例
+
+```json
+{
+  "aiComment": "すごい！今日もたくさん練習したね！..."
+}
+```
+
+#### 拡張・カスタマイズ方法
+
+- キャラクター追加は `/api/generate-comment/route.ts` の `CHARACTER_CONFIG` に追記し、型（CharacterType）も拡張
+- UIのセレクトボックスに新キャラを追加
+- 定型文・プロンプトも `CHARACTER_CONFIG` で一元管理
 
 ### AIコメント機能：注意点
 
 - 画像URLはそのまま、ページURLにのみ?v=...を付与
 - contentType指定・unoptimized必須
 - CORS設定必須
-
-## OGP画像・SNSキャッシュ問題 解決レポート
-
-### 問題概要
-
-- SNS（X/Twitter等）でシェアした際、OGP画像が「白画像」や「表示されない」状態になる。
-- ページURLに `?v=...` を付与しても画像が更新されない、またはルーティングエラーになる。
-
-### 原因分析
-
-- Firebase Storage画像URLにキャッシュバスター（v）を付与すると、URL構文エラーで画像が表示されなくなる。
-- SNSクローラーによっては、URLの `&` 以降を切り捨てたり、トークンを壊す場合がある。
-
-### 解決策
-
-1. 画像URLは一切加工しない
-2. キャッシュバスター（v）はページURL（og:url, canonical）にのみ付与
-3. Firebase Storageアップロード時のcontentType指定
-4. Next.js Imageタグのunoptimized追加
-
-### 実施した主な修正
-
-- `page.tsx` の generateMetadata で画像URL加工を廃止、ページURLにのみvを付与。
-- `SharePostClient.tsx` のProps型定義にvを追加し、型エラーを解消。
-- `CreateRecordForm.tsx` のuploadBytesにcontentTypeを追加。
-- `SharePostClient.tsx` のImageタグにunoptimizedを追加。
-- app/share/[recordId]/SharePostClient.tsx の重複ファイルを削除し、components側に統一。
-
-### 結果
-
-- OGP画像がSNSで正しく表示されるようになった。
-- キャッシュバスターによる画像更新も正常に動作。
-- 型エラーやルーティングエラーも解消。
-
-### Google Cloud ShellによるCORS設定
-
-```sh
-echo '[{"origin": ["*"],"method": ["GET"],"maxAgeSeconds": 3600}]' > cors.json
-gcloud storage buckets update gs://egaken-b4a7e.firebasestorage.app --cors-file=cors.json
-```
-
-## データ構造
-
-Firestore Collection: `records`
-
+  
 ```typescript
-{
-  id: string,                  // ドキュメントID
-  userId: string,              // ログインユーザーのID
-  imageUrl: string,            // Cloud Storage URL
-  comment: string,             // ユーザーのコメント（任意）
   practiceMinutes: number,     // 練習時間（分、任意）
   createdAt: Timestamp,        // 作成日時
-}
 ```
 
 ## 開発コマンド

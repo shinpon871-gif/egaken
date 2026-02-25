@@ -35,29 +35,36 @@ export default function HomePage() {
       */}
 
       {/* CTA ボタン */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+      <div className="flex flex-col gap-3 sm:flex-row sm:justify-center sm:items-stretch w-full max-w-3xl mx-auto">
         {!showForm && (
           <>
             <button
               onClick={() => setShowForm(true)}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-8 py-4 text-base font-bold text-white shadow-lg transition hover:bg-orange-600 active:scale-95"
+              className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1 rounded-lg bg-orange-500 px-3 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-orange-600 active:scale-95 text-center"
             >
-              <span className="text-2xl">✏️</span>
+              <span className="text-lg">✏️</span>
               今日の記録
             </button>
             <button
               onClick={() => router.push('/history')}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-500 px-8 py-4 text-base font-bold text-white shadow-lg transition hover:bg-cyan-600 active:scale-95"
+              className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1 rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-cyan-600 active:scale-95 text-center"
             >
-              <span className="text-2xl">🖼️</span>
-              ヒストリーを見る
+              <span className="text-lg">🖼️</span>
+              ヒストリー
             </button>
             <button
               onClick={() => router.push('/growth')}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-purple-500 px-8 py-4 text-base font-bold text-white shadow-lg transition hover:bg-purple-600 active:scale-95"
+              className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1 rounded-lg bg-purple-500 px-3 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-purple-600 active:scale-95 text-center"
             >
-              <span className="text-2xl">📊</span>
+              <span className="text-lg">📊</span>
               成長を見る
+            </button>
+            <button
+              onClick={() => router.push('/profile')}
+              className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1 rounded-lg bg-gray-500 px-3 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-gray-600 active:scale-95 text-center"
+            >
+              <span className="text-lg">⚙️</span>
+              アカウント設定
             </button>
           </>
         )}

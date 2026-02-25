@@ -7,7 +7,7 @@ const EmailAuthForm = () => {
   const [isRegister, setIsRegister] = useState(false);
   const auth = getAuth();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     try {
       if (isRegister) {
@@ -15,8 +15,9 @@ const EmailAuthForm = () => {
       } else {
         await signInWithEmailAndPassword(auth, email, password);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      alert(err.message || "エラーが発生しました");
     }
   };
 
@@ -40,6 +41,7 @@ const EmailAuthForm = () => {
       />
       <button
         type="submit"
+        onClick={handleSubmit}
         className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-black"
       >
         {isRegister ? "新規登録" : "メールログイン"}

@@ -28,6 +28,7 @@ const EmailAuthForm = () => {
         value={email}
         onChange={e => setEmail(e.target.value)}
         required
+        className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-black"
       />
       <input
         type="password"
@@ -35,9 +36,20 @@ const EmailAuthForm = () => {
         value={password}
         onChange={e => setPassword(e.target.value)}
         required
+        className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-black"
       />
-      <button type="submit">{isRegister ? "新規登録" : "メールログイン"}</button>
-      <button type="button" onClick={() => setIsRegister(!isRegister)} style={{ marginTop: 8 }}>
+      <button
+        type="submit"
+        className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-black"
+      >
+        {isRegister ? "新規登録" : "メールログイン"}
+      </button>
+      <button
+        type="button"
+        onClick={() => setIsRegister(!isRegister)}
+        style={{ marginTop: 8 }}
+        className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-black"
+      >
         {isRegister ? "ログイン画面へ" : "新規登録へ"}
       </button>
     </form>

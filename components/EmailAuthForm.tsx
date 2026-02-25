@@ -5,10 +5,12 @@ const EmailAuthForm = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isRegister, setIsRegister] = useState(false);
+  const [errorMsg, setErrorMsg] = useState(""); // エラー表示用（修正理由：alert廃止・画面内表示）
   const auth = getAuth();
 
   const handleSubmit = async (e: React.SyntheticEvent) => {
     e.preventDefault();
+    setErrorMsg("");
     try {
       if (isRegister) {
         await createUserWithEmailAndPassword(auth, email, password);
@@ -17,7 +19,16 @@ const EmailAuthForm = () => {
       }
     } catch (err: any) {
       console.error(err);
-      alert(err.message || "エラーが発生しました");
+      // Firebaseエラーコードごとに日本語で分かりやすく表示（影響範囲：UIのみ）
+      if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found") {
+        setErrorMsg("メールアドレスまたはパスワードが正しくありません。");
+      } else if (err.code === "auth/wrong-password") {
+        setErrorMsg("パスワードが間違っています。");
+      } else if (err.code === "auth/invalid-email") {
+        setErrorMsg("メールアドレスの形式が正しくありません。");
+      } else {
+        setErrorMsg(err.message || "エラーが発生しました");
+      }
     }
   };
 
@@ -39,6 +50,12 @@ const EmailAuthForm = () => {
         required
         className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-black"
       />
+      {/* エラー表示（モバイルでも見やすいUI、修正理由：alert廃止） */}
+      {errorMsg && (
+        <div className="w-full rounded-md bg-red-100 text-red-700 px-3 py-2 text-sm mb-2 text-center">
+          {errorMsg}
+        </div>
+      )}
       <button
         type="submit"
         onClick={handleSubmit}

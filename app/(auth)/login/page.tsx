@@ -12,6 +12,7 @@ export default function LoginPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [googleErrorMsg, setGoogleErrorMsg] = useState(""); // Googleログイン用エラー（修正理由：alert廃止・画面内表示）
 
   // 既にログインしている場合はホーム画面へリダイレクト
   useEffect(() => {
@@ -31,6 +32,7 @@ export default function LoginPage() {
 
   const handleGoogleLogin = async () => {
     setIsSigningIn(true);
+    setGoogleErrorMsg("");
     try {
       const provider = new GoogleAuthProvider();
       if (!auth) {
@@ -52,7 +54,16 @@ export default function LoginPage() {
     } catch (error: any) {
       // SafariのポップアップブロックやITPによるエラーもここで捕捉
       console.error('ログインエラー:', error);
-      alert('ログインに失敗しました: ' + (error?.message || '')); 
+      // エラー内容を日本語で画面内表示（影響範囲：UIのみ）
+      if (error.code === "auth/popup-blocked") {
+        setGoogleErrorMsg("ポップアップがブロックされました。ブラウザの設定をご確認ください。");
+      } else if (error.code === "auth/network-request-failed") {
+        setGoogleErrorMsg("ネットワークエラーが発生しました。通信環境をご確認ください。");
+      } else if (error.code === "auth/cancelled-popup-request") {
+        setGoogleErrorMsg("ログイン処理がキャンセルされました。再度お試しください。");
+      } else {
+        setGoogleErrorMsg(error?.message || "ログインに失敗しました");
+      }
     } finally {
       setIsSigningIn(false);
     }
@@ -77,6 +88,12 @@ export default function LoginPage() {
           <h1 className="mb-2 text-3xl font-bold text-gray-800">えがけん</h1>
           <p className="mb-8 text-gray-600">お絵描きの記録を残そう</p>
         </div>
+        {/* Googleログインエラー表示（モバイルでも見やすいUI、修正理由：alert廃止） */}
+        {googleErrorMsg && (
+          <div className="w-full rounded-md bg-red-100 text-red-700 px-3 py-2 text-sm mb-2 text-center">
+            {googleErrorMsg}
+          </div>
+        )}
         <button
           onClick={handleGoogleLogin}
           onTouchStart={handleGoogleLogin} // スマホタップ対応（修正理由：モバイルで無反応回避）

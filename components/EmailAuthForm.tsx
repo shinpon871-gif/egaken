@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
+import { useRouter } from 'next/navigation'; // 画面遷移用（修正理由：認証後に遷移させるため）
 
 const EmailAuthForm = () => {
   const [email, setEmail] = useState("");
@@ -7,6 +8,7 @@ const EmailAuthForm = () => {
   const [isRegister, setIsRegister] = useState(false);
   const [errorMsg, setErrorMsg] = useState(""); // エラー表示用（修正理由：alert廃止・画面内表示）
   const auth = getAuth();
+  const router = useRouter(); // 画面遷移用（修正理由：認証後に遷移させるため）
 
   const handleSubmit = async (e: React.SyntheticEvent) => {
     e.preventDefault();
@@ -14,8 +16,12 @@ const EmailAuthForm = () => {
     try {
       if (isRegister) {
         await createUserWithEmailAndPassword(auth, email, password);
+        // 新規登録後も自動ログインされるため、/homeへ遷移（影響範囲：認証後の遷移のみ）
+        router.push('/home');
       } else {
         await signInWithEmailAndPassword(auth, email, password);
+        // ログイン成功時に/homeへ遷移（修正理由：認証後の画面遷移保証）
+        router.push('/home');
       }
     } catch (err: any) {
       console.error(err);

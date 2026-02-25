@@ -14,12 +14,13 @@ export default function LoginPage() {
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [googleErrorMsg, setGoogleErrorMsg] = useState(""); // Googleログイン用エラー（修正理由：alert廃止・画面内表示）
 
-  // 既にログインしている場合はホーム画面へリダイレクト
+  // 既にログインしている場合やGoogleリダイレクト後は必ずホーム画面へ遷移（修正理由：認証状態反映の保証、影響範囲：ログイン画面のみ）
   useEffect(() => {
     if (!loading && user) {
-      router.push('/home');
+      // 認証状態が変化したら必ず/homeへ遷移
+      router.replace('/home');
     }
-  }, [user, loading, router]);
+  }, [user, loading]); // router依存を外し、状態変化時のみ発火
 
   // Firebase AuthのauthDomainがカスタムドメインか確認してください。
   // デフォルトの[PROJECT_ID].firebaseapp.comのままだとSafariでITPの影響を受けやすくなります。

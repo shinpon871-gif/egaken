@@ -79,6 +79,7 @@ export default function LoginPage() {
         </div>
         <button
           onClick={handleGoogleLogin}
+          onTouchStart={handleGoogleLogin} // スマホタップ対応（修正理由：モバイルで無反応回避）
           disabled={isSigningIn}
           className="flex w-full items-center justify-center gap-3 rounded-lg bg-white px-6 py-3 font-semibold text-gray-800 transition-all hover:bg-gray-50 disabled:opacity-50 border border-gray-300 shadow-sm mb-6"
         >

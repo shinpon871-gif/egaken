@@ -42,6 +42,7 @@ const EmailAuthForm = () => {
       <button
         type="submit"
         onClick={handleSubmit}
+        onTouchStart={handleSubmit} // スマホタップ対応（修正理由：モバイルで無反応回避）
         className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-black"
       >
         {isRegister ? "新規登録" : "メールログイン"}

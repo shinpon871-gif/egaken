@@ -1,6 +1,6 @@
 'use client';
 
-import { GoogleAuthProvider, signInWithPopup, setPersistence, browserLocalPersistence } from 'firebase/auth';
+import { GoogleAuthProvider, signInWithPopup, signInWithRedirect, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
@@ -23,6 +23,11 @@ export default function LoginPage() {
   // Firebase AuthのauthDomainがカスタムドメインか確認してください。
   // デフォルトの[PROJECT_ID].firebaseapp.comのままだとSafariでITPの影響を受けやすくなります。
   // process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN をご確認ください。
+  //
+  // Firebase Console → Authentication → 設定
+  // Authorized domains に以下を含める：
+  // localhost
+  // egaken.vercel.app
 
   const handleGoogleLogin = async () => {
     setIsSigningIn(true);
@@ -33,10 +38,16 @@ export default function LoginPage() {
       }
       // 永続性を明示的に設定（ITP対策・セッション維持）
       await setPersistence(auth, browserLocalPersistence);
-      // Safari/iOSではsignInWithRedirectは避け、signInWithPopupを使う
-      const result = await signInWithPopup(auth, provider);
-      if (result.user) {
-        router.push('/home');
+
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+      if (isMobile) {
+        await signInWithRedirect(auth, provider);
+      } else {
+        const result = await signInWithPopup(auth, provider);
+        if (result.user) {
+          router.push('/home');
+        }
       }
     } catch (error: any) {
       // SafariのポップアップブロックやITPによるエラーもここで捕捉

@@ -22,6 +22,34 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [emailErrorMsg, setEmailErrorMsg] = useState('');
+    // --- パスワードリセット ---
+    const handlePasswordReset = async () => {
+      setEmailErrorMsg('');
+      // 前後の全角/半角スペース除去・不可視文字除去
+      const normalize = (str: string) => str.replace(/[\s\u3000]+/g, '');
+      const cleanedEmail = normalize(email);
+      if (!cleanedEmail) {
+        setEmailErrorMsg('まずメールアドレスを入力してください');
+        return;
+      }
+      try {
+        const { sendPasswordResetEmail } = await import('firebase/auth');
+        await sendPasswordResetEmail(auth, cleanedEmail);
+        setEmailErrorMsg('パスワードリセット用のメールを送信しました');
+      } catch (err: any) {
+        switch (err.code) {
+          case 'auth/user-not-found':
+            setEmailErrorMsg('登録されていないメールアドレスです');
+            break;
+          case 'auth/invalid-email':
+            setEmailErrorMsg('メールアドレスの形式が正しくありません');
+            break;
+          default:
+            setEmailErrorMsg('メール送信に失敗しました。再度お試しください');
+            break;
+        }
+      }
+    };
 
   // ログイン済みなら即遷移
   useEffect(() => {
@@ -216,6 +244,14 @@ export default function LoginPage() {
           >
             {isRegister ? "ログイン画面へ" : "新規登録へ"}
           </button>
+            <button
+              type="button"
+              onClick={handlePasswordReset}
+              style={{ marginTop: 8 }}
+              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-black"
+            >
+              パスワードを忘れた場合
+            </button>
         </form>
 
         <p className="mt-6 text-xs text-gray-500 text-center">

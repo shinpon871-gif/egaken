@@ -1,17 +1,14 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { auth } from '@/lib/firebase';
 import {
   GoogleAuthProvider,
-  signInWithRedirect,
   signInWithPopup,
-  getRedirectResult,
   setPersistence,
   browserLocalPersistence,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  onAuthStateChanged,
 } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
@@ -25,46 +22,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [emailErrorMsg, setEmailErrorMsg] = useState('');
-  const [isCheckingRedirect, setIsCheckingRedirect] = useState(true);
-  const didRedirect = useRef(false);
 
+  // ログイン済みなら即遷移
   useEffect(() => {
-    const init = async () => {
-      try {
-        // --- 1. リダイレクト結果があれば処理 ---
-        const result = await getRedirectResult(auth).catch(() => null);
-        if (result?.user && !didRedirect.current) {
-          didRedirect.current = true;
-          router.replace('/home');
-          return;
-        }
-
-        // --- 2. user が既にいれば即遷移 ---
-        if (user && !didRedirect.current) {
-          didRedirect.current = true;
-          router.replace('/home');
-          return;
-        }
-
-        // --- 3. onAuthStateChanged で補助監視 ---
-        const unsub = onAuthStateChanged(auth, (u) => {
-          if (u && !didRedirect.current) {
-            didRedirect.current = true;
-            router.replace('/home');
-          }
-        });
-
-        // --- 4. UIブロック解除 ---
-        setIsCheckingRedirect(false);
-
-        return () => unsub();
-      } catch {
-        setIsCheckingRedirect(false);
-      }
-    };
-
-    init();
-  }, [user, router]);
+    if (!loading && user) {
+      router.replace('/home');
+    }
+  }, [user, loading, router]);
 
   // --- Googleログイン ---
   const handleGoogleLogin = async () => {
@@ -73,20 +37,9 @@ export default function LoginPage() {
     try {
       const provider = new GoogleAuthProvider();
       await setPersistence(auth, browserLocalPersistence);
-
-      const isIOS = typeof window !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
-      const isSafari = typeof window !== 'undefined' && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-
-      if (isIOS || isSafari) {
-        // Safari/iOS は redirect
-        await signInWithRedirect(auth, provider);
-      } else {
-        // PC / Android は popup
-        const result = await signInWithPopup(auth, provider);
-        if (result.user && !didRedirect.current) {
-          didRedirect.current = true;
-          router.replace('/home');
-        }
+      const result = await signInWithPopup(auth, provider);
+      if (result.user) {
+        router.replace('/home');
       }
     } catch (error: any) {
       if (error.code === 'auth/popup-blocked') {
@@ -123,13 +76,13 @@ export default function LoginPage() {
       } else {
         await signInWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
       }
-
-      if (!didRedirect.current) {
-        didRedirect.current = true;
-        router.replace('/home');
-      }
+      router.replace('/home');
     } catch (err: any) {
-      if (['auth/user-not-found', 'auth/wrong-password', 'auth/invalid-credential'].includes(err.code)) {
+      if ([
+        'auth/user-not-found',
+        'auth/wrong-password',
+        'auth/invalid-credential',
+      ].includes(err.code)) {
         setEmailErrorMsg('メールアドレスまたはパスワードが正しくありません。');
       } else if (err.code === 'auth/invalid-email') {
         setEmailErrorMsg('メールアドレスの形式が正しくありません。');
@@ -141,7 +94,7 @@ export default function LoginPage() {
     }
   };
 
-  if (loading || isCheckingRedirect) {
+  if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#FFF9F0] to-[#FFE8D6]">
         <div className="text-center">

@@ -1,9 +1,10 @@
 'use client';
 
+
 import { useEffect, useState, useRef } from 'react';
-import { auth, db, storage } from '@/lib/firebase';
+import { auth } from '@/lib/firebase';
 import {
-  GoogleAuthProvider, 
+  GoogleAuthProvider,
   signInWithRedirect,
   getRedirectResult,
   setPersistence,
@@ -26,26 +27,21 @@ export default function LoginPage() {
   const [isRegister, setIsRegister] = useState(false);
   const [emailErrorMsg, setEmailErrorMsg] = useState('');
   const [isCheckingRedirect, setIsCheckingRedirect] = useState(true); // Googleリダイレクト・認証状態確定までUIブロック
-
-  // onAuthStateChanged + getRedirectResult でリダイレクト後の user を確定
-  // race condition・多重遷移防止
   const didRedirect = useRef(false);
+
   useEffect(() => {
     let unsub: (() => void) | undefined;
     let timeout: NodeJS.Timeout | undefined;
 
-    // すでにuserがいる場合は即遷移
-    if (user) {
-      if (!didRedirect.current) {
-        didRedirect.current = true;
-        setIsCheckingRedirect(false);
-        router.replace('/home');
-      }
+    // 1. userがいれば即遷移（SSR→Hydrate時もrace condition防止）
+    if (user && !didRedirect.current) {
+      didRedirect.current = true;
+      setIsCheckingRedirect(false);
+      router.replace('/home');
       return;
     }
 
-    setIsCheckingRedirect(true);
-    // 1. getRedirectResultで即userが取れたら即遷移
+    // 2. getRedirectResultでuserが取れたら即遷移
     getRedirectResult(auth)
       .then((result) => {
         if (result?.user && !didRedirect.current) {
@@ -58,7 +54,8 @@ export default function LoginPage() {
         setGoogleErrorMsg(err?.message || 'Googleログインに失敗しました');
         setIsCheckingRedirect(false);
       });
-    // 2. 取れなければonAuthStateChangedでuserを監視
+
+    // 3. onAuthStateChangedでuserを監視
     unsub = onAuthStateChanged(auth, (currentUser: User | null) => {
       if (currentUser && !didRedirect.current) {
         didRedirect.current = true;
@@ -66,10 +63,12 @@ export default function LoginPage() {
         router.replace('/home');
       }
     });
-    // 3. 5秒経ってもuserが取れなければUIブロック解除（無限ループ防止）
+
+    // 4. 5秒経ってもuserが取れなければUIブロック解除（無限ループ防止）
     timeout = setTimeout(() => {
       if (!didRedirect.current) setIsCheckingRedirect(false);
     }, 5000);
+
     return () => {
       if (unsub) unsub();
       if (timeout) clearTimeout(timeout);
@@ -77,6 +76,7 @@ export default function LoginPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, router]);
 
+  // Googleログイン（全ブラウザで signInWithRedirect に統一）
   // Googleログイン（全ブラウザで signInWithRedirect に統一）
   const handleGoogleLogin = async () => {
     setIsSigningIn(true);
@@ -101,11 +101,11 @@ export default function LoginPage() {
   };
 
   // メールログイン
+  // メールログイン
   const handleEmailSubmit = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     setEmailErrorMsg('');
     setIsSigningIn(true);
-    // 入力値をtrimし空文字やnullを防ぐ
     const trimmedEmail = email.trim();
     const trimmedPassword = password.trim();
     if (!trimmedEmail || !trimmedPassword) {

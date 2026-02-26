@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  GoogleAuthProvider,
+  GoogleAuthProvider, 
   signInWithRedirect,
   getRedirectResult,
   setPersistence,
@@ -10,6 +10,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  User,
 } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';

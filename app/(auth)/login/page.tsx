@@ -24,26 +24,33 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [emailErrorMsg, setEmailErrorMsg] = useState('');
-  const [isCheckingRedirect, setIsCheckingRedirect] = useState(true); // 新規追加
+  const [isCheckingRedirect, setIsCheckingRedirect] = useState(true); // Googleリダイレクト・認証状態確定までUIブロック
 
   // onAuthStateChanged + getRedirectResult でリダイレクト後の user を確定
   useEffect(() => {
+    let resolved = false;
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (currentUser) {
+      if (currentUser && !resolved) {
+        resolved = true;
+        setIsCheckingRedirect(false);
         router.replace('/home');
       }
-      setIsCheckingRedirect(false);
     });
-
     getRedirectResult(auth)
       .then((result) => {
-        if (result?.user) {
+        if (result?.user && !resolved) {
+          resolved = true;
+          setIsCheckingRedirect(false);
           router.replace('/home');
         }
       })
-      .catch((err) => console.error('Redirect result error:', err))
-      .finally(() => setIsCheckingRedirect(false));
-
+      .catch((err) => {
+        setGoogleErrorMsg(err?.message || 'Googleログインに失敗しました');
+        setIsCheckingRedirect(false);
+      })
+      .finally(() => {
+        if (!resolved) setIsCheckingRedirect(false);
+      });
     return () => unsubscribe();
   }, [router]);
 
@@ -75,16 +82,24 @@ export default function LoginPage() {
     e.preventDefault();
     setEmailErrorMsg('');
     setIsSigningIn(true);
+    // 入力値をtrimし空文字やnullを防ぐ
+    const trimmedEmail = email.trim();
+    const trimmedPassword = password.trim();
+    if (!trimmedEmail || !trimmedPassword) {
+      setEmailErrorMsg('メールアドレスとパスワードを入力してください。');
+      setIsSigningIn(false);
+      return;
+    }
     try {
       if (isRegister) {
-        await createUserWithEmailAndPassword(auth, email, password);
+        await createUserWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
         router.replace('/home');
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        await signInWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
         router.replace('/home');
       }
     } catch (err: any) {
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
         setEmailErrorMsg('メールアドレスまたはパスワードが正しくありません。');
       } else if (err.code === 'auth/invalid-email') {
         setEmailErrorMsg('メールアドレスの形式が正しくありません。');

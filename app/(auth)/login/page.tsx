@@ -25,11 +25,8 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [emailErrorMsg, setEmailErrorMsg] = useState('');
-  const [isCheckingRedirect, setIsCheckingRedirect] = useState(true);
-
+  const [isCheckingRedirect, setIsCheckingRedirect] = useState(false); // 初期化中UIブロック
   const didRedirect = useRef(false);
-
-  // --- 初期化: リダイレクト結果取得 + onAuthStateChanged ---
   useEffect(() => {
     const init = async () => {
       try {
@@ -78,18 +75,9 @@ export default function LoginPage() {
     try {
       const provider = new GoogleAuthProvider();
       await setPersistence(auth, browserLocalPersistence);
-
-      const isIOS = typeof window !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
-      const isSafari = typeof window !== 'undefined' && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-
-      if (isIOS || isSafari) {
-        await signInWithRedirect(auth, provider);
-      } else {
-        const result = await signInWithPopup(auth, provider);
-        if (result.user && !didRedirect.current) {
-          didRedirect.current = true;
-          router.replace('/home');
-        }
+      const result = await signInWithPopup(auth, provider);
+      if (result.user) {
+        router.replace('/home');
       }
     } catch (error: any) {
       if (error.code === 'auth/popup-blocked') {

@@ -30,20 +30,30 @@ export default function LoginPage() {
   const [isCheckingRedirect, setIsCheckingRedirect] = useState(true); // 初期化中UIブロック
   const didRedirect = useRef(false);
 
-    // 初期化: userがいれば即遷移、なければonAuthStateChangedで監視のみ
-    useEffect(() => {
-      if (user) {
-        router.replace('/home');
-        return;
-      }
-      const unsub = onAuthStateChanged(auth, (u) => {
-        if (u) {
+  // iOS/Safariリダイレクト後のgetRedirectResult＋onAuthStateChangedで一度だけ遷移
+  useEffect(() => {
+    const checkRedirect = async () => {
+      if (didRedirect.current) return;
+      try {
+        const result = await getRedirectResult(auth);
+        if (result?.user) {
+          didRedirect.current = true;
           router.replace('/home');
         }
-      });
-      setIsCheckingRedirect(false);
-      return () => unsub();
-    }, [user, router]);
+      } catch (err) {
+        console.error('Redirect login error:', err);
+      }
+    };
+    checkRedirect();
+    const unsub = onAuthStateChanged(auth, (u) => {
+      if (u && !didRedirect.current) {
+        didRedirect.current = true;
+        router.replace('/home');
+      }
+    });
+    setIsCheckingRedirect(false);
+    return () => unsub();
+  }, [router]);
 
   // Googleログイン（iOS/Safariはredirect, それ以外はpopup）
   const handleGoogleLogin = async () => {

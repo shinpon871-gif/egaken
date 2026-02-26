@@ -79,16 +79,23 @@ export default function LoginPage() {
       }
       router.replace('/home');
     } catch (err: any) {
-      if ([
-        'auth/user-not-found',
-        'auth/wrong-password',
-        'auth/invalid-credential',
-      ].includes(err.code)) {
-        setEmailErrorMsg('メールアドレスまたはパスワードが正しくありません。');
-      } else if (err.code === 'auth/invalid-email') {
-        setEmailErrorMsg('メールアドレスの形式が正しくありません。');
-      } else {
-        setEmailErrorMsg(err.message || 'エラーが発生しました');
+      switch (err.code) {
+        case 'auth/user-not-found':
+        case 'auth/wrong-password':
+          setEmailErrorMsg('メールアドレスまたはパスワードが正しくありません。');
+          break;
+        case 'auth/invalid-email':
+          setEmailErrorMsg('メールアドレスの形式が正しくありません。');
+          break;
+        case 'auth/email-already-in-use':
+          setEmailErrorMsg('このメールアドレスは既に登録されています。ログインしてください。');
+          break;
+        case 'auth/too-many-requests':
+          setEmailErrorMsg('ログイン試行が多すぎます。しばらく待ってから再度お試しください。');
+          break;
+        default:
+          setEmailErrorMsg(err.message || 'エラーが発生しました');
+          break;
       }
     } finally {
       setIsSigningIn(false);

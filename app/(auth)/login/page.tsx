@@ -29,8 +29,8 @@ export default function LoginPage() {
 
   // onAuthStateChanged + getRedirectResult でリダイレクト後の user を確定
   // race condition・多重遷移防止
+  const didRedirect = useRef(false);
   useEffect(() => {
-    const didRedirect = useRef(false);
     let unsub: (() => void) | undefined;
     let timeout: NodeJS.Timeout | undefined;
 

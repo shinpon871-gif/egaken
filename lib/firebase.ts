@@ -17,5 +17,6 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 // 各サービスをエクスポート（サーバーサイドでも利用可能）
 export const auth = getAuth(app);
+console.log('[firebase] auth.app.name:', auth.app.name); // デバッグ用: インスタンス名で単一性を確認（修正理由：多重初期化防止、影響範囲：開発時ログのみ）
 export const db = getFirestore(app);
 export const storage = getStorage(app);

@@ -13,6 +13,8 @@ const EmailAuthForm = () => {
   const handleSubmit = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     setErrorMsg("");
+    // authインスタンスの単一性を検証（修正理由：多重初期化・不具合防止、影響範囲：開発時ログのみ）
+    console.log('[EmailAuthForm] auth.app.name:', auth.app.name);
     try {
       if (isRegister) {
         await createUserWithEmailAndPassword(auth, email, password);
@@ -23,7 +25,7 @@ const EmailAuthForm = () => {
       }
     } catch (err: any) {
       console.error(err);
-      // メールログイン用のエラー判定に修正
+      // メールログイン用のエラー判定を限定（修正理由：ユーザー向け明確化、影響範囲：UIのみ）
       if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
         setErrorMsg("メールアドレスまたはパスワードが正しくありません。");
       } else if (err.code === "auth/invalid-email") {

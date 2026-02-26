@@ -35,26 +35,34 @@ export default function LoginPage() {
     setIsSigningIn(true);
     setGoogleErrorMsg('');
     const provider = new GoogleAuthProvider();
-    // ユーザー操作直後にpopupを開く
-    const popupPromise = signInWithPopup(auth, provider);
-    // 永続性は並行して非同期実行
-    setPersistence(auth, browserLocalPersistence).catch(() => {});
-    popupPromise
-      .then(result => {
-        if (result.user) router.replace('/home');
-      })
-      .catch(err => {
-        if (err.code === 'auth/popup-blocked') {
+    try {
+      await setPersistence(auth, browserLocalPersistence);
+      const result = await signInWithPopup(auth, provider);
+      if (result.user) router.replace('/home');
+    } catch (err: any) {
+      switch (err.code) {
+        case 'auth/popup-blocked':
           setGoogleErrorMsg('ポップアップがブロックされました。ブラウザの設定をご確認ください。');
-        } else if (err.code === 'auth/network-request-failed') {
-          setGoogleErrorMsg('ネットワークエラーが発生しました。通信環境をご確認ください。');
-        } else if (err.code === 'auth/cancelled-popup-request') {
+          break;
+        case 'auth/popup-closed-by-user':
+          setGoogleErrorMsg('ポップアップが閉じられました。再度お試しください。');
+          break;
+        case 'auth/cancelled-popup-request':
           setGoogleErrorMsg('ログイン処理がキャンセルされました。再度お試しください。');
-        } else {
+          break;
+        case 'auth/network-request-failed':
+          setGoogleErrorMsg('ネットワークエラーが発生しました。通信環境をご確認ください。');
+          break;
+        case 'auth/credential-already-in-use':
+          setGoogleErrorMsg('このGoogleアカウントは既に他の認証方法で使用されています。');
+          break;
+        default:
           setGoogleErrorMsg(err.message || 'Googleログインに失敗しました');
-        }
-      })
-      .finally(() => setIsSigningIn(false));
+          break;
+      }
+    } finally {
+      setIsSigningIn(false);
+    }
   };
 
   // --- メールログイン ---
@@ -80,18 +88,26 @@ export default function LoginPage() {
       router.replace('/home');
     } catch (err: any) {
       switch (err.code) {
-        case 'auth/user-not-found':
-        case 'auth/wrong-password':
-          setEmailErrorMsg('メールアドレスまたはパスワードが正しくありません。');
-          break;
         case 'auth/invalid-email':
           setEmailErrorMsg('メールアドレスの形式が正しくありません。');
+          break;
+        case 'auth/user-not-found':
+          setEmailErrorMsg('メールアドレスが見つかりません。新規登録してください。');
+          break;
+        case 'auth/wrong-password':
+          setEmailErrorMsg('パスワードが正しくありません。');
           break;
         case 'auth/email-already-in-use':
           setEmailErrorMsg('このメールアドレスは既に登録されています。ログインしてください。');
           break;
         case 'auth/too-many-requests':
           setEmailErrorMsg('ログイン試行が多すぎます。しばらく待ってから再度お試しください。');
+          break;
+        case 'auth/operation-not-allowed':
+          setEmailErrorMsg('この認証方法は現在利用できません。管理者にお問い合わせください。');
+          break;
+        case 'auth/internal-error':
+          setEmailErrorMsg('サーバーエラーが発生しました。時間をおいて再度お試しください。');
           break;
         default:
           setEmailErrorMsg(err.message || 'エラーが発生しました');

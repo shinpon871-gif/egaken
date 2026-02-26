@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { storage } from '@/lib/firebase';
 
 /**
  * Firebase Storage の画像をプロキシして返す API

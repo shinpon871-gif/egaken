@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { db } from '@/lib/firebase';
 import OpenAI from "openai";
 
 // --- CHARACTER_CONFIG: データのみ、処理コード混入禁止 ---

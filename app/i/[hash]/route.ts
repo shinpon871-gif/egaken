@@ -1,4 +1,5 @@
 // 短縮URLリダイレクトAPI (メモリ上のMapで管理)
+import { storage } from '@/lib/firebase';
 import { NextRequest, NextResponse } from 'next/server';
 
 

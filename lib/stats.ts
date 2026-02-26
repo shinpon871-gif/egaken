@@ -1,4 +1,5 @@
 import { Timestamp } from 'firebase/firestore';
+import { db } from './firebase';
 
 /**
  * 投稿データの型

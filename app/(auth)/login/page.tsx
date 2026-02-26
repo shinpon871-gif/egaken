@@ -71,19 +71,31 @@ export default function LoginPage() {
     setEmailErrorMsg('');
     setIsSigningIn(true);
 
-    const trimmedEmail = email.trim();
-    const trimmedPassword = password.trim();
-    if (!trimmedEmail || !trimmedPassword) {
+    // 前後の全角/半角スペース除去・不可視文字除去
+    const normalize = (str: string) => str.replace(/[\s\u3000]+/g, '');
+    const cleanedEmail = normalize(email);
+    const cleanedPassword = normalize(password);
+
+    // メール形式チェック
+    const emailRegex = /^[\w!#$%&'*+/=?`{|}~^.-]+@[\w.-]+\.[a-zA-Z]{2,}$/;
+    if (!cleanedEmail || !cleanedPassword) {
       setEmailErrorMsg('メールアドレスとパスワードを入力してください。');
+      setIsSigningIn(false);
+      return;
+    }
+    if (!emailRegex.test(cleanedEmail)) {
+      setEmailErrorMsg('メールアドレスの形式が正しくありません。');
       setIsSigningIn(false);
       return;
     }
 
     try {
+      // Firebase内部状態リセット
+      await import('firebase/auth').then(m => m.signOut(auth));
       if (isRegister) {
-        await createUserWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
+        await createUserWithEmailAndPassword(auth, cleanedEmail, cleanedPassword);
       } else {
-        await signInWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
+        await signInWithEmailAndPassword(auth, cleanedEmail, cleanedPassword);
       }
       router.replace('/home');
     } catch (err: any) {
@@ -108,6 +120,9 @@ export default function LoginPage() {
           break;
         case 'auth/internal-error':
           setEmailErrorMsg('サーバーエラーが発生しました。時間をおいて再度お試しください。');
+          break;
+        case 'auth/invalid-credential':
+          setEmailErrorMsg('ログインできません。再度お試しください。');
           break;
         default:
           setEmailErrorMsg(err.message || 'エラーが発生しました');

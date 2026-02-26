@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { auth, db, storage } from '@/lib/firebase';
 import {
   GoogleAuthProvider, 
@@ -28,19 +28,28 @@ export default function LoginPage() {
   const [isCheckingRedirect, setIsCheckingRedirect] = useState(true); // Googleリダイレクト・認証状態確定までUIブロック
 
   // onAuthStateChanged + getRedirectResult でリダイレクト後の user を確定
+  // race condition・多重遷移防止
   useEffect(() => {
-    let resolved = false;
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (currentUser && !resolved) {
-        resolved = true;
+    const didRedirect = useRef(false);
+    let unsub: (() => void) | undefined;
+    let timeout: NodeJS.Timeout | undefined;
+
+    // すでにuserがいる場合は即遷移
+    if (user) {
+      if (!didRedirect.current) {
+        didRedirect.current = true;
         setIsCheckingRedirect(false);
         router.replace('/home');
       }
-    });
+      return;
+    }
+
+    setIsCheckingRedirect(true);
+    // 1. getRedirectResultで即userが取れたら即遷移
     getRedirectResult(auth)
       .then((result) => {
-        if (result?.user && !resolved) {
-          resolved = true;
+        if (result?.user && !didRedirect.current) {
+          didRedirect.current = true;
           setIsCheckingRedirect(false);
           router.replace('/home');
         }
@@ -48,12 +57,25 @@ export default function LoginPage() {
       .catch((err) => {
         setGoogleErrorMsg(err?.message || 'Googleログインに失敗しました');
         setIsCheckingRedirect(false);
-      })
-      .finally(() => {
-        if (!resolved) setIsCheckingRedirect(false);
       });
-    return () => unsubscribe();
-  }, [router]);
+    // 2. 取れなければonAuthStateChangedでuserを監視
+    unsub = onAuthStateChanged(auth, (currentUser: User | null) => {
+      if (currentUser && !didRedirect.current) {
+        didRedirect.current = true;
+        setIsCheckingRedirect(false);
+        router.replace('/home');
+      }
+    });
+    // 3. 5秒経ってもuserが取れなければUIブロック解除（無限ループ防止）
+    timeout = setTimeout(() => {
+      if (!didRedirect.current) setIsCheckingRedirect(false);
+    }, 5000);
+    return () => {
+      if (unsub) unsub();
+      if (timeout) clearTimeout(timeout);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, router]);
 
   // Googleログイン（全ブラウザで signInWithRedirect に統一）
   const handleGoogleLogin = async () => {

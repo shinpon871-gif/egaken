@@ -1,7 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { GoogleAuthProvider, signInWithRedirect, getRedirectResult, setPersistence, browserLocalPersistence, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, User } from 'firebase/auth';
+import {
+  GoogleAuthProvider,
+  signInWithRedirect,
+  getRedirectResult,
+  setPersistence,
+  browserLocalPersistence,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+} from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
@@ -15,38 +24,30 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [emailErrorMsg, setEmailErrorMsg] = useState('');
+  const [isCheckingRedirect, setIsCheckingRedirect] = useState(true); // 新規追加
 
-  // 既にログイン済みなら/homeへ
+  // onAuthStateChanged + getRedirectResult でリダイレクト後の user を確定
   useEffect(() => {
-    if (!loading && user) {
-      router.replace('/home');
-    }
-  }, [user, loading]);
-
-  // Googleリダイレクト後の認証状態を必ず確認し、onAuthStateChangedでuserを監視
-  useEffect(() => {
-    let unsub: (() => void) | undefined;
-    const checkRedirect = async () => {
-      try {
-        const result = await getRedirectResult(auth);
-        if (result?.user) {
-          // ここでonAuthStateChangedでuserがセットされるまで待つ
-          unsub = onAuthStateChanged(auth, (firebaseUser: User | null) => {
-            if (firebaseUser) {
-              router.replace('/home');
-              if (unsub) unsub();
-            }
-          });
-        }
-      } catch (err: any) {
-        setGoogleErrorMsg(err?.message || 'Googleログインに失敗しました');
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser) {
+        router.replace('/home');
       }
-    };
-    checkRedirect();
-    return () => { if (unsub) unsub(); };
-  }, []);
+      setIsCheckingRedirect(false);
+    });
 
-  // Googleログイン（全ブラウザでリダイレクト方式に統一）
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result?.user) {
+          router.replace('/home');
+        }
+      })
+      .catch((err) => console.error('Redirect result error:', err))
+      .finally(() => setIsCheckingRedirect(false));
+
+    return () => unsubscribe();
+  }, [router]);
+
+  // Googleログイン（全ブラウザで signInWithRedirect に統一）
   const handleGoogleLogin = async () => {
     setIsSigningIn(true);
     setGoogleErrorMsg('');
@@ -55,7 +56,16 @@ export default function LoginPage() {
       await setPersistence(auth, browserLocalPersistence);
       await signInWithRedirect(auth, provider);
     } catch (error: any) {
-      setGoogleErrorMsg(error?.message || 'Googleログインに失敗しました');
+      if (error.code === 'auth/popup-blocked') {
+        setGoogleErrorMsg('ポップアップがブロックされました。ブラウザの設定をご確認ください。');
+      } else if (error.code === 'auth/network-request-failed') {
+        setGoogleErrorMsg('ネットワークエラーが発生しました。通信環境をご確認ください。');
+      } else if (error.code === 'auth/cancelled-popup-request') {
+        setGoogleErrorMsg('ログイン処理がキャンセルされました。再度お試しください。');
+      } else {
+        setGoogleErrorMsg(error?.message || 'Googleログインに失敗しました');
+      }
+    } finally {
       setIsSigningIn(false);
     }
   };
@@ -86,7 +96,8 @@ export default function LoginPage() {
     }
   };
 
-  if (loading) {
+  // 読み込み中またはリダイレクト処理中は「読み込み中…」のみ表示
+  if (loading || isCheckingRedirect) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#FFF9F0] to-[#FFE8D6]">
         <div className="text-center">
@@ -97,6 +108,7 @@ export default function LoginPage() {
     );
   }
 
+  // UI（Googleログイン + メールログインフォーム）
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#FFF9F0] to-[#FFE8D6] px-4">
       <div className="w-full max-w-md rounded-lg bg-white p-8 shadow-lg">
@@ -106,7 +118,6 @@ export default function LoginPage() {
           <p className="mb-8 text-gray-600">お絵描きの記録を残そう</p>
         </div>
 
-        {/* Googleログインエラー */}
         {googleErrorMsg && (
           <div className="w-full rounded-md bg-red-100 text-red-700 px-3 py-2 text-sm mb-2 text-center">
             {googleErrorMsg}
@@ -118,7 +129,6 @@ export default function LoginPage() {
           disabled={isSigningIn}
           className="flex w-full items-center justify-center gap-3 rounded-lg bg-white px-6 py-3 font-semibold text-gray-800 transition-all hover:bg-gray-50 disabled:opacity-50 border border-gray-300 shadow-sm mb-6"
         >
-          {/* 公式Googleアイコン */}
           <svg className="h-5 w-5" viewBox="0 0 48 48">
             <g>
               <path fill="#4285F4" d="M43.6 20.5H42V20H24v8h11.3c-1.1 3-4.1 5-7.3 5-4.4 0-8-3.6-8-8s3.6-8 8-8c1.7 0 3.2.5 4.5 1.4l6.1-6.1C36.2 9.5 32.4 8 28 8c-8.8 0-16 7.2-16 16s7.2 16 16 16c7.7 0 15-5.6 15-16 0-1.1-.1-2.1-.4-3.5z"/>
@@ -132,7 +142,6 @@ export default function LoginPage() {
 
         <div className="my-6 border-t border-gray-200" />
 
-        {/* メールログインフォーム */}
         <form onSubmit={handleEmailSubmit} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <input
             type="email"

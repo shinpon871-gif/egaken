@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
-import { auth } from '@/lib/firebase'; // authインスタンスを統一（修正理由：認証不具合防止、影響範囲：認証処理のみ）
+import { auth } from '@/lib/firebase'; // authインスタンスはlib/firebase.tsで単一化（修正理由：認証不具合防止、影響範囲：認証処理のみ）
 import { useRouter } from 'next/navigation';
 
 const EmailAuthForm = () => {
@@ -10,18 +10,18 @@ const EmailAuthForm = () => {
   const [errorMsg, setErrorMsg] = useState("");
   const router = useRouter();
 
+  const [isSigningIn, setIsSigningIn] = useState(false); // ログイン中フラグ（重複送信防止）
   const handleSubmit = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     setErrorMsg("");
-    // authインスタンスの単一性を検証（修正理由：多重初期化・不具合防止、影響範囲：開発時ログのみ）
-    console.log('[EmailAuthForm] auth.app.name:', auth.app.name);
+    setIsSigningIn(true);
     try {
       if (isRegister) {
         await createUserWithEmailAndPassword(auth, email, password);
-        router.push('/home');
+        router.replace('/home');
       } else {
         await signInWithEmailAndPassword(auth, email, password);
-        router.push('/home');
+        router.replace('/home');
       }
     } catch (err: any) {
       console.error(err);
@@ -33,6 +33,8 @@ const EmailAuthForm = () => {
       } else {
         setErrorMsg(err.message || "エラーが発生しました");
       }
+    } finally {
+      setIsSigningIn(false);
     }
   };
 
@@ -61,9 +63,10 @@ const EmailAuthForm = () => {
       )}
       <button
         type="submit"
+        disabled={isSigningIn}
         className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-black"
       >
-        {isRegister ? "新規登録" : "メールログイン"}
+        {isRegister ? "新規登録" : isSigningIn ? "ログイン中..." : "メールログイン"}
       </button>
       <button
         type="button"

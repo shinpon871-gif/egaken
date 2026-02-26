@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, setPersistence, browserLocalPersistence, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { GoogleAuthProvider, signInWithRedirect, getRedirectResult, setPersistence, browserLocalPersistence, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
@@ -23,53 +23,39 @@ export default function LoginPage() {
     }
   }, [user, loading]);
 
-  // Googleリダイレクト後の認証状態を必ず確認
+  // Googleリダイレクト後の認証状態を必ず確認し、onAuthStateChangedでuserを監視
   useEffect(() => {
+    let unsub: (() => void) | undefined;
     const checkRedirect = async () => {
       try {
         const result = await getRedirectResult(auth);
         if (result?.user) {
-          router.replace('/home');
+          // ここでonAuthStateChangedでuserがセットされるまで待つ
+          unsub = onAuthStateChanged(auth, (firebaseUser: User | null) => {
+            if (firebaseUser) {
+              router.replace('/home');
+              if (unsub) unsub();
+            }
+          });
         }
       } catch (err: any) {
         setGoogleErrorMsg(err?.message || 'Googleログインに失敗しました');
       }
     };
     checkRedirect();
+    return () => { if (unsub) unsub(); };
   }, []);
 
-  // Googleログイン
+  // Googleログイン（全ブラウザでリダイレクト方式に統一）
   const handleGoogleLogin = async () => {
     setIsSigningIn(true);
     setGoogleErrorMsg('');
     try {
       const provider = new GoogleAuthProvider();
       await setPersistence(auth, browserLocalPersistence);
-
-      // iOS/Safari判定
-      const ua = navigator.userAgent;
-      const isIOS = /iP(ad|hone|od)/.test(ua);
-      const isSafari = /^((?!chrome|android).)*safari/i.test(ua);
-
-      if (isIOS || isSafari) {
-        await signInWithRedirect(auth, provider);
-      } else {
-        const result = await signInWithPopup(auth, provider);
-        if (result.user) {
-          router.replace('/home');
-        }
-      }
+      await signInWithRedirect(auth, provider);
     } catch (error: any) {
-      if (error.code === 'auth/popup-blocked') {
-        setGoogleErrorMsg('ポップアップがブロックされました。ブラウザの設定をご確認ください。');
-      } else if (error.code === 'auth/network-request-failed') {
-        setGoogleErrorMsg('ネットワークエラーが発生しました。通信環境をご確認ください。');
-      } else if (error.code === 'auth/cancelled-popup-request') {
-        setGoogleErrorMsg('ログイン処理がキャンセルされました。再度お試しください。');
-      } else {
-        setGoogleErrorMsg(error?.message || 'Googleログインに失敗しました');
-      }
-    } finally {
+      setGoogleErrorMsg(error?.message || 'Googleログインに失敗しました');
       setIsSigningIn(false);
     }
   };

@@ -1,6 +1,6 @@
 'use client';
 
-import { GoogleAuthProvider, signInWithPopup, signInWithRedirect, setPersistence, browserLocalPersistence } from 'firebase/auth';
+import { GoogleAuthProvider, signInWithPopup, signInWithRedirect, setPersistence, browserLocalPersistence, getRedirectResult } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
@@ -8,42 +8,44 @@ import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 
 const EmailAuthForm = dynamic(() => import('@/components/EmailAuthForm'), { ssr: false });
+
 export default function LoginPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
   const [isSigningIn, setIsSigningIn] = useState(false);
-  const [googleErrorMsg, setGoogleErrorMsg] = useState(""); // Googleログイン用エラー（修正理由：alert廃止・画面内表示）
+  const [googleErrorMsg, setGoogleErrorMsg] = useState("");
 
-  // 既にログインしている場合やGoogleリダイレクト後は必ずホーム画面へ遷移（修正理由：認証状態反映の保証、影響範囲：ログイン画面のみ）
+  // ログイン済みの場合は/homeへ遷移
   useEffect(() => {
     if (!loading && user) {
-      // 認証状態が変化したら必ず/homeへ遷移
       router.replace('/home');
     }
-  }, [user, loading]); // router依存を外し、状態変化時のみ発火
+  }, [user, loading]);
 
-  // Firebase AuthのauthDomainがカスタムドメインか確認してください。
-  // デフォルトの[PROJECT_ID].firebaseapp.comのままだとSafariでITPの影響を受けやすくなります。
-  // process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN をご確認ください。
-  //
-  // Firebase Console → Authentication → 設定
-  // Authorized domains に以下を含める：
-  // localhost
-  // egaken.vercel.app
+  // Googleログインのリダイレクト結果を取得
+  useEffect(() => {
+    const checkRedirect = async () => {
+      try {
+        const result = await getRedirectResult(auth);
+        if (result?.user) {
+          router.replace('/home');
+        }
+      } catch (err: any) {
+        console.error(err);
+        setGoogleErrorMsg(err?.message || "Googleログインに失敗しました");
+      }
+    };
+    checkRedirect();
+  }, []);
 
   const handleGoogleLogin = async () => {
     setIsSigningIn(true);
     setGoogleErrorMsg("");
     try {
       const provider = new GoogleAuthProvider();
-      if (!auth) {
-        throw new Error('Firebase Auth instance is not initialized.');
-      }
-      // 永続性を明示的に設定（ITP対策・セッション維持）
       await setPersistence(auth, browserLocalPersistence);
 
       const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
       if (isMobile) {
         await signInWithRedirect(auth, provider);
       } else {
@@ -53,9 +55,7 @@ export default function LoginPage() {
         }
       }
     } catch (error: any) {
-      // SafariのポップアップブロックやITPによるエラーもここで捕捉
       console.error('ログインエラー:', error);
-      // エラー内容を日本語で画面内表示（影響範囲：UIのみ）
       if (error.code === "auth/popup-blocked") {
         setGoogleErrorMsg("ポップアップがブロックされました。ブラウザの設定をご確認ください。");
       } else if (error.code === "auth/network-request-failed") {
@@ -89,15 +89,15 @@ export default function LoginPage() {
           <h1 className="mb-2 text-3xl font-bold text-gray-800">えがけん</h1>
           <p className="mb-8 text-gray-600">お絵描きの記録を残そう</p>
         </div>
-        {/* Googleログインエラー表示（モバイルでも見やすいUI、修正理由：alert廃止） */}
+
         {googleErrorMsg && (
           <div className="w-full rounded-md bg-red-100 text-red-700 px-3 py-2 text-sm mb-2 text-center">
             {googleErrorMsg}
           </div>
         )}
+
         <button
           onClick={handleGoogleLogin}
-          onTouchStart={handleGoogleLogin} // スマホタップ対応（修正理由：モバイルで無反応回避）
           disabled={isSigningIn}
           className="flex w-full items-center justify-center gap-3 rounded-lg bg-white px-6 py-3 font-semibold text-gray-800 transition-all hover:bg-gray-50 disabled:opacity-50 border border-gray-300 shadow-sm mb-6"
         >
@@ -109,8 +109,11 @@ export default function LoginPage() {
           </svg>
           {isSigningIn ? 'ログイン中...' : 'Googleでログイン'}
         </button>
+
         <div className="my-6 border-t border-gray-200" />
+
         <EmailAuthForm />
+
         <p className="mt-6 text-xs text-gray-500 text-center">
           Googleまたはメールアドレスでログインして、<br />
           毎日のお絵描きを記録しましょう

@@ -25,12 +25,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [emailErrorMsg, setEmailErrorMsg] = useState('');
-  const [isCheckingRedirect, setIsCheckingRedirect] = useState(false); // 初期化中UIブロック
+  const [isCheckingRedirect, setIsCheckingRedirect] = useState(true);
   const didRedirect = useRef(false);
+
   useEffect(() => {
     const init = async () => {
       try {
-        // 1. リダイレクト結果があれば取得して遷移
+        // --- 1. リダイレクト結果があれば処理 ---
         const result = await getRedirectResult(auth).catch(() => null);
         if (result?.user && !didRedirect.current) {
           didRedirect.current = true;
@@ -38,14 +39,14 @@ export default function LoginPage() {
           return;
         }
 
-        // 2. user が既にいれば即遷移
+        // --- 2. user が既にいれば即遷移 ---
         if (user && !didRedirect.current) {
           didRedirect.current = true;
           router.replace('/home');
           return;
         }
 
-        // 3. onAuthStateChanged で監視（補助）
+        // --- 3. onAuthStateChanged で補助監視 ---
         const unsub = onAuthStateChanged(auth, (u) => {
           if (u && !didRedirect.current) {
             didRedirect.current = true;
@@ -53,13 +54,10 @@ export default function LoginPage() {
           }
         });
 
-        // 4. 一定時間後にUIブロック解除
-        const timer = setTimeout(() => setIsCheckingRedirect(false), 5000);
+        // --- 4. UIブロック解除 ---
+        setIsCheckingRedirect(false);
 
-        return () => {
-          unsub();
-          clearTimeout(timer);
-        };
+        return () => unsub();
       } catch {
         setIsCheckingRedirect(false);
       }
@@ -75,9 +73,20 @@ export default function LoginPage() {
     try {
       const provider = new GoogleAuthProvider();
       await setPersistence(auth, browserLocalPersistence);
-      const result = await signInWithPopup(auth, provider);
-      if (result.user) {
-        router.replace('/home');
+
+      const isIOS = typeof window !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
+      const isSafari = typeof window !== 'undefined' && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+      if (isIOS || isSafari) {
+        // Safari/iOS は redirect
+        await signInWithRedirect(auth, provider);
+      } else {
+        // PC / Android は popup
+        const result = await signInWithPopup(auth, provider);
+        if (result.user && !didRedirect.current) {
+          didRedirect.current = true;
+          router.replace('/home');
+        }
       }
     } catch (error: any) {
       if (error.code === 'auth/popup-blocked') {
@@ -99,6 +108,7 @@ export default function LoginPage() {
     e.preventDefault();
     setEmailErrorMsg('');
     setIsSigningIn(true);
+
     const trimmedEmail = email.trim();
     const trimmedPassword = password.trim();
     if (!trimmedEmail || !trimmedPassword) {
@@ -106,18 +116,20 @@ export default function LoginPage() {
       setIsSigningIn(false);
       return;
     }
+
     try {
       if (isRegister) {
         await createUserWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
       } else {
         await signInWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
       }
+
       if (!didRedirect.current) {
         didRedirect.current = true;
         router.replace('/home');
       }
     } catch (err: any) {
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+      if (['auth/user-not-found', 'auth/wrong-password', 'auth/invalid-credential'].includes(err.code)) {
         setEmailErrorMsg('メールアドレスまたはパスワードが正しくありません。');
       } else if (err.code === 'auth/invalid-email') {
         setEmailErrorMsg('メールアドレスの形式が正しくありません。');
@@ -129,7 +141,6 @@ export default function LoginPage() {
     }
   };
 
-  // --- 読み込み中またはリダイレクト処理中はブロック ---
   if (loading || isCheckingRedirect) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#FFF9F0] to-[#FFE8D6]">
@@ -141,7 +152,6 @@ export default function LoginPage() {
     );
   }
 
-  // --- UI ---
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#FFF9F0] to-[#FFE8D6] px-4">
       <div className="w-full max-w-md rounded-lg bg-white p-8 shadow-lg">

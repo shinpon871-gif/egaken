@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
+import { auth } from '@/lib/firebase'; // authインスタンスを統一（修正理由：認証不具合防止、影響範囲：認証処理のみ）
 import { useRouter } from 'next/navigation';
 
 const EmailAuthForm = () => {
@@ -7,7 +8,6 @@ const EmailAuthForm = () => {
   const [password, setPassword] = useState("");
   const [isRegister, setIsRegister] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
-  const auth = getAuth();
   const router = useRouter();
 
   const handleSubmit = async (e: React.SyntheticEvent) => {

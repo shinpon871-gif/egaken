@@ -170,46 +170,103 @@ npm run dev
 
 ## 主な機能
 
-- Googleログイン認証
-- 画像＋コメント＋練習時間の記録投稿
-- 記録の一覧表示（新しい順）
-- 記録削除
-- 投稿直後のリアルタイム反映
+- Googleログイン認証（Firebase Authentication）
+- メールアドレス＋パスワードでのログイン・新規登録（/login）
+- パスワードリセット（メール送信による再設定）
+- 画像＋コメント＋練習時間の記録投稿（CreateRecordForm）
+- 記録の一覧表示・削除・リアルタイム反映（RecordList, Firestore）
+- 投稿詳細・シェアページ（/share/[recordId]）
 - OGP画像・SNSシェア完全対応（画像URLはそのまま、ページURLに?v=...付与）
 - 画像アップロード時はcontentType指定、Imageタグはunoptimized
+- AIコメント自動生成（OpenAI API, /api/generate-comment）
+- メールアドレス追加（Google連携ユーザー向け、LinkEmailForm）
+- ユーザー名変更（UserProfileForm, /profile）
+- プロフィール編集（UserProfileForm, /profile）
+- 統計・成長グラフ表示（StatsDisplay, Growth, /dashboard/growth）
+- デバッグ用ストレージ診断（/dashboard/debug-storage）
 - CORS設定済み
 
 ## 技術スタック
 
 | 概要 | 技術 |
 | --- | --- |
-| フロント | Next.js 15+ (App Router) + React 19 + TypeScript |
+| フロント | Next.js 15+ (App Router), React 19, TypeScript |
 | スタイリング | Tailwind CSS 4 |
-| バックエンド | Firebase |
+| バックエンド | Firebase (Firestore, Storage, Auth) |
 | 認証 | Firebase Authentication (Google) |
 | データベース | Firestore |
 | ストレージ | Cloud Storage |
+| API | Next.js API Routes (/api/generate-comment, /api/image-proxy) |
+| AI | OpenAI API (AIコメント生成) |
 | UIフック | react-firebase-hooks |
+| その他 | ESLint, PostCSS, OGP対応, CORS, etc. |
 
 ## ディレクトリ構成
 
 ```Bash
 egaken/
 ├── app/
-│   ├── (auth)/login/
-│   ├── (dashboard)/home/
-│   ├── share/[recordId]/page.tsx
-│   ├── ...
-│   └── layout.tsx
+│   ├── globals.css
+│   ├── layout.tsx
+│   ├── not-found.tsx
+│   ├── page.tsx
+│   ├── (auth)/
+│   │   └── login/
+│   │       └── page.tsx
+│   ├── (dashboard)/
+│   │   ├── layout.tsx
+│   │   ├── debug-storage/
+│   │   │   └── page.tsx
+│   │   ├── growth/
+│   │   │   └── page.tsx
+│   │   ├── history/
+│   │   │   └── page.tsx
+│   │   ├── home/
+│   │   │   └── page.tsx
+│   │   ├── post/
+│   │   │   └── [id]/
+│   │   │       └── page.tsx
+│   │   └── ...
+│   ├── api/
+│   │   ├── generate-comment/
+│   │   │   └── route.ts
+│   │   └── image-proxy/
+│   │       └── route.ts
+│   ├── auth/
+│   │   └── login/
+│   │       └── page.tsx
+│   ├── i/
+│   │   └── [hash]/
+│   │       └── route.ts
+│   ├── profile/
+│   │   └── page.tsx
+│   ├── record/
+│   │   └── [recordId]/
+│   │       └── page.tsx
+│   ├── share/
+│   │   └── [recordId]/
+│   │       ├── metadata.ts
+│   │       └── page.tsx
+│   └── ...
 ├── components/
 │   ├── CreateRecordForm.tsx
-│   ├── SharePostClient.tsx
+│   ├── FirebaseSecurityDiagnostic.tsx
+│   ├── HistoryGrid.tsx
+│   ├── ImageUploadArea.tsx
+│   ├── LinkEmailForm.tsx
+│   ├── RecordList.tsx
 │   ├── ShareButton.tsx
-│   └── ...
+│   ├── SharePostClient.tsx
+│   ├── StatsDisplay.tsx
+│   └── UserProfileForm.tsx
 ├── contexts/
 │   └── AuthContext.tsx
 ├── lib/
 │   ├── firebase.ts
+│   ├── getPost.ts
+│   ├── growth.ts
+│   ├── stats.ts
+│   ├── twitter.ts
 │   └── utils.ts
 ├── public/
 │   └── ogp.png
@@ -219,11 +276,13 @@ egaken/
 ## セットアップガイド
 
 1. リポジトリをクローン
-2. `.env.local` にFirebase設定を記入
+2. Firebase Consoleから各種キーを取得し、`.env.local` に設定（NEXT_PUBLIC_FIREBASE_... で始まる環境変数）
 3. `npm install` で依存パッケージを導入
 4. `npm run dev` で開発サーバー起動
+5. ブラウザで http://localhost:3000 にアクセス
+6. Google認証・記録投稿・プロフィール編集・AIコメント・シェア等を動作確認
 
-詳細はQUICKSTART.md参照。
+※詳細なトラブルシューティングやTipsはQUICKSTART.mdも参照。
 
 ## Firebaseセットアップ
 

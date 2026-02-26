@@ -6,6 +6,7 @@ import { auth } from '@/lib/firebase';
 import {
   GoogleAuthProvider,
   signInWithRedirect,
+  signInWithPopup,
   getRedirectResult,
   setPersistence,
   browserLocalPersistence,
@@ -26,48 +27,41 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [emailErrorMsg, setEmailErrorMsg] = useState('');
-  const [isCheckingRedirect, setIsCheckingRedirect] = useState(true); // Googleリダイレクト・認証状態確定までUIブロック
+  const [isCheckingRedirect, setIsCheckingRedirect] = useState(true); // 初期化中UIブロック
   const didRedirect = useRef(false);
 
+    // 初期化: userがいれば即遷移、なければonAuthStateChangedで監視のみ
     useEffect(() => {
-      if (didRedirect.current) return;
-
-      // 1. user がいれば即遷移
       if (user) {
-        didRedirect.current = true;
-        setIsCheckingRedirect(false);
         router.replace('/home');
         return;
       }
-
-      // 2. onAuthStateChanged で監視
       const unsub = onAuthStateChanged(auth, (u) => {
-        if (u && !didRedirect.current) {
-          didRedirect.current = true;
-          setIsCheckingRedirect(false);
+        if (u) {
           router.replace('/home');
         }
       });
-
-      // 3. 一定時間経過で UI を解除
-      const timer = setTimeout(() => {
-        if (!didRedirect.current) setIsCheckingRedirect(false);
-      }, 7000);
-
-      return () => {
-        unsub();
-        clearTimeout(timer);
-      };
+      setIsCheckingRedirect(false);
+      return () => unsub();
     }, [user, router]);
 
-  // Googleログイン（全ブラウザで signInWithRedirect に統一）
+  // Googleログイン（iOS/Safariはredirect, それ以外はpopup）
   const handleGoogleLogin = async () => {
     setIsSigningIn(true);
     setGoogleErrorMsg('');
     try {
       const provider = new GoogleAuthProvider();
       await setPersistence(auth, browserLocalPersistence);
-      await signInWithRedirect(auth, provider);
+      const isIOS = typeof window !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
+      const isSafari = typeof window !== 'undefined' && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+      if (isIOS || isSafari) {
+        await signInWithRedirect(auth, provider);
+      } else {
+        const result = await signInWithPopup(auth, provider);
+        if (result.user) {
+          router.replace('/home');
+        }
+      }
     } catch (error: any) {
       if (error.code === 'auth/popup-blocked') {
         setGoogleErrorMsg('ポップアップがブロックされました。ブラウザの設定をご確認ください。');
@@ -83,7 +77,6 @@ export default function LoginPage() {
     }
   };
 
-  // メールログイン
   // メールログイン
   const handleEmailSubmit = async (e: React.SyntheticEvent) => {
     e.preventDefault();

@@ -1,6 +1,5 @@
 'use client';
 
-
 import { useEffect, useState, useRef } from 'react';
 import { auth } from '@/lib/firebase';
 import {
@@ -13,7 +12,6 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
-  User,
 } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
@@ -27,48 +25,69 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [emailErrorMsg, setEmailErrorMsg] = useState('');
-  const [isCheckingRedirect, setIsCheckingRedirect] = useState(true); // 初期化中UIブロック
+  const [isCheckingRedirect, setIsCheckingRedirect] = useState(true);
+
   const didRedirect = useRef(false);
 
-  // iOS/Safariリダイレクト後のgetRedirectResult＋onAuthStateChangedで一度だけ遷移
+  // --- 初期化: リダイレクト結果取得 + onAuthStateChanged ---
   useEffect(() => {
-    const checkRedirect = async () => {
-      if (didRedirect.current) return;
+    const init = async () => {
       try {
-        const result = await getRedirectResult(auth);
-        if (result?.user) {
+        // 1. リダイレクト結果があれば取得して遷移
+        const result = await getRedirectResult(auth).catch(() => null);
+        if (result?.user && !didRedirect.current) {
           didRedirect.current = true;
           router.replace('/home');
+          return;
         }
-      } catch (err) {
-        console.error('Redirect login error:', err);
+
+        // 2. user が既にいれば即遷移
+        if (user && !didRedirect.current) {
+          didRedirect.current = true;
+          router.replace('/home');
+          return;
+        }
+
+        // 3. onAuthStateChanged で監視（補助）
+        const unsub = onAuthStateChanged(auth, (u) => {
+          if (u && !didRedirect.current) {
+            didRedirect.current = true;
+            router.replace('/home');
+          }
+        });
+
+        // 4. 一定時間後にUIブロック解除
+        const timer = setTimeout(() => setIsCheckingRedirect(false), 5000);
+
+        return () => {
+          unsub();
+          clearTimeout(timer);
+        };
+      } catch {
+        setIsCheckingRedirect(false);
       }
     };
-    checkRedirect();
-    const unsub = onAuthStateChanged(auth, (u) => {
-      if (u && !didRedirect.current) {
-        didRedirect.current = true;
-        router.replace('/home');
-      }
-    });
-    setIsCheckingRedirect(false);
-    return () => unsub();
-  }, [router]);
 
-  // Googleログイン（iOS/Safariはredirect, それ以外はpopup）
+    init();
+  }, [user, router]);
+
+  // --- Googleログイン ---
   const handleGoogleLogin = async () => {
     setIsSigningIn(true);
     setGoogleErrorMsg('');
     try {
       const provider = new GoogleAuthProvider();
       await setPersistence(auth, browserLocalPersistence);
+
       const isIOS = typeof window !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
       const isSafari = typeof window !== 'undefined' && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
       if (isIOS || isSafari) {
         await signInWithRedirect(auth, provider);
       } else {
         const result = await signInWithPopup(auth, provider);
-        if (result.user) {
+        if (result.user && !didRedirect.current) {
+          didRedirect.current = true;
           router.replace('/home');
         }
       }
@@ -87,7 +106,7 @@ export default function LoginPage() {
     }
   };
 
-  // メールログイン
+  // --- メールログイン ---
   const handleEmailSubmit = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     setEmailErrorMsg('');
@@ -102,9 +121,11 @@ export default function LoginPage() {
     try {
       if (isRegister) {
         await createUserWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
-        router.replace('/home');
       } else {
         await signInWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
+      }
+      if (!didRedirect.current) {
+        didRedirect.current = true;
         router.replace('/home');
       }
     } catch (err: any) {
@@ -120,7 +141,7 @@ export default function LoginPage() {
     }
   };
 
-  // 読み込み中またはリダイレクト処理中は「読み込み中…」のみ表示
+  // --- 読み込み中またはリダイレクト処理中はブロック ---
   if (loading || isCheckingRedirect) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#FFF9F0] to-[#FFE8D6]">
@@ -132,7 +153,7 @@ export default function LoginPage() {
     );
   }
 
-  // UI（Googleログイン + メールログインフォーム）
+  // --- UI ---
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#FFF9F0] to-[#FFE8D6] px-4">
       <div className="w-full max-w-md rounded-lg bg-white p-8 shadow-lg">

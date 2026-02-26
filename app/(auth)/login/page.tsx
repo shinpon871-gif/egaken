@@ -34,26 +34,27 @@ export default function LoginPage() {
   const handleGoogleLogin = async () => {
     setIsSigningIn(true);
     setGoogleErrorMsg('');
-    try {
-      const provider = new GoogleAuthProvider();
-      await setPersistence(auth, browserLocalPersistence);
-      const result = await signInWithPopup(auth, provider);
-      if (result.user) {
-        router.replace('/home');
-      }
-    } catch (error: any) {
-      if (error.code === 'auth/popup-blocked') {
-        setGoogleErrorMsg('ポップアップがブロックされました。ブラウザの設定をご確認ください。');
-      } else if (error.code === 'auth/network-request-failed') {
-        setGoogleErrorMsg('ネットワークエラーが発生しました。通信環境をご確認ください。');
-      } else if (error.code === 'auth/cancelled-popup-request') {
-        setGoogleErrorMsg('ログイン処理がキャンセルされました。再度お試しください。');
-      } else {
-        setGoogleErrorMsg(error?.message || 'Googleログインに失敗しました');
-      }
-    } finally {
-      setIsSigningIn(false);
-    }
+    const provider = new GoogleAuthProvider();
+    setPersistence(auth, browserLocalPersistence)
+      .catch(() => {})
+      .finally(() => {
+        signInWithPopup(auth, provider)
+          .then(result => {
+            if (result.user) router.replace('/home');
+          })
+          .catch(err => {
+            if (err.code === 'auth/popup-blocked') {
+              setGoogleErrorMsg('ポップアップがブロックされました。ブラウザの設定をご確認ください。');
+            } else if (err.code === 'auth/network-request-failed') {
+              setGoogleErrorMsg('ネットワークエラーが発生しました。通信環境をご確認ください。');
+            } else if (err.code === 'auth/cancelled-popup-request') {
+              setGoogleErrorMsg('ログイン処理がキャンセルされました。再度お試しください。');
+            } else {
+              setGoogleErrorMsg(err.message || 'Googleログインに失敗しました');
+            }
+          })
+          .finally(() => setIsSigningIn(false));
+      });
   };
 
   // --- メールログイン ---

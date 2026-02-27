@@ -31,6 +31,12 @@ try {
     }
   }
 
+  // FIREBASE_SERVICE_ACCOUNT_KEYが存在しない場合はエラー返却
+  if (!serviceAccount) {
+    console.error('[OGP_API] サービスアカウント情報が取得できません');
+    throw new Error('Service account not found');
+  }
+
   // Admin SDK 初期化
   if (!admin.apps.length && serviceAccount) {
     const storageBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
@@ -44,6 +50,8 @@ try {
     console.log('[OGP_API] Firebase Admin SDK 初期化完了');
   }
   db = admin.firestore();
+  // gRPCエラー回避: REST経由でFirestoreを動かす
+  db.settings({ experimentalForceLongPolling: true });
   storage = admin.storage();
 } catch (err) {
   console.error('[OGP_API] Firebase Admin SDK 初期化エラー:', err);

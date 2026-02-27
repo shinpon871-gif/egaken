@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { db, storage } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
+import { getCurrentWeeklyTheme } from '@/lib/getCurrentWeeklyTheme';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { ImageUploadArea } from './ImageUploadArea';
 
@@ -39,9 +40,10 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
     setPreview(null);
   };
 
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!selectedFile || !user) {
       setError('画像を選択してください');
       return;
@@ -57,6 +59,9 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       const uploadResult = await uploadBytes(storageRef, selectedFile, { contentType: selectedFile.type });
       const imageUrl = await getDownloadURL(uploadResult.ref);
 
+      // お題情報を取得
+      const theme = await getCurrentWeeklyTheme();
+
       // Firestoreにレコードを投稿として保存
       const recordRef = await addDoc(collection(db, 'posts'), {
         userId: user.uid,
@@ -65,6 +70,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         comment: comment.trim() || '',
         createdAt: serverTimestamp(),
         characterType: characterType || 'strategist',
+        weeklyThemeId: theme?.id ?? null,
       });
 
       // AI コメント生成を別途実行（記録の保存を待たずに非同期で実行）
@@ -225,8 +231,12 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         disabled={isLoading || !selectedFile}
         className="w-full rounded-lg bg-orange-500 px-6 py-3 font-semibold text-white transition hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        {isLoading ? '保存中...' : '記録を保存'}
+        {isLoading ? '保存中...' : '記録する'}
       </button>
+      <p className="text-xs text-gray-500 mt-2">
+        ※作品画像自体にバッジ等の加工は施されません。
+        SNSシェア時のプレビュー画像にのみ、お題参加バッジが重なって表示されます。
+      </p>
     </form>
   );
 }

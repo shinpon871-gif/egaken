@@ -12,6 +12,7 @@ type PostData = {
   minutes: number;
   aiComment?: string;
   createdAt: any; // Timestamp
+  weeklyThemeId?: string | null;
 };
 
 type Props = {
@@ -87,7 +88,20 @@ export default async function RecordPage(props: Props) {
     imageUrl: postData.imageUrl,
     createdAt: postData.createdAt?.toDate?.().toISOString() || new Date().toISOString(),
     title: 'お絵描きの記録',
+    weeklyThemeId: postData.weeklyThemeId ?? null,
   };
 
-  return <SharePostClient recordId={recordId} initialData={initialData} v={v} />;
+  return (
+    <div>
+      <div className="flex items-center">
+        <span className="text-xl font-bold">{initialData.title}</span>
+        {initialData.weeklyThemeId && (
+          <span className="text-xs text-blue-600 ml-2">
+            Weekly Theme Joined
+          </span>
+        )}
+      </div>
+      <SharePostClient recordId={recordId} initialData={initialData} v={v} />
+    </div>
+  );
 }

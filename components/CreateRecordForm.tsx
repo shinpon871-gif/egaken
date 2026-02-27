@@ -19,7 +19,6 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const [comment, setComment] = useState('');
   const [practiceMinutes, setPracticeMinutes] = useState('');
   const [characterType, setCharacterType] = useState('strategist'); // キャラ選択
-  const [improvement, setImprovement] = useState(''); // 工夫した点
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentTheme, setCurrentTheme] = useState<any>(null);
@@ -96,7 +95,6 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
               comment: comment.trim() || null,
               practiceMinutes: practiceMinutes ? parseInt(practiceMinutes, 10) : null,
               characterType: characterType || 'strategist',
-              improvement: improvement.trim() || '',
             }),
           });
 
@@ -124,7 +122,6 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       setComment('');
       setPracticeMinutes('');
       setCharacterType('strategist');
-      setImprovement('');
 
       onSuccess?.();
     } catch (error) {
@@ -159,16 +156,16 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         />
       </div>
 
-      {/* コメント */}
+      {/* コメント・工夫した点（統合） */}
       <div className="mb-6">
         <label htmlFor="comment" className="mb-2 block text-sm font-semibold text-gray-700">
-          コメント（任意）
+          コメント・今日の工夫した点（任意）
         </label>
         <textarea
           id="comment"
           value={comment}
           onChange={(e) => setComment(e.target.value)}
-          placeholder="何を描きましたか？今日の工夫した点は？"
+          placeholder="何を描きましたか？工夫した点や挑戦したことも自由に書いてください。"
           maxLength={500}
           disabled={isLoading}
           className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 disabled:bg-gray-50"
@@ -196,23 +193,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         />
       </div>
 
-      {/* 工夫した点 */}
-      <div className="mb-6">
-        <label htmlFor="improvement" className="mb-2 block text-sm font-semibold text-gray-700">
-          今日の工夫した点（任意）
-        </label>
-        <textarea
-          id="improvement"
-          value={improvement}
-          onChange={(e) => setImprovement(e.target.value)}
-          placeholder="今日の工夫した点（例：逆光に挑戦、手のポーズを研究した など）"
-          rows={3}
-          maxLength={300}
-          disabled={isLoading}
-          className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 disabled:bg-gray-50"
-        />
-        <p className="mt-1 text-xs text-gray-500">{improvement.length}/300</p>
-      </div>
+
 
       {/* キャラクタータイプ選択 */}
       <div className="mb-6">

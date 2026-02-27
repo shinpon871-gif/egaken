@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
 
   const imageUrl = body.imageUrl || "";
   const practiceMinutes = body.practiceMinutes || 0;
-  const improvement = body.improvement || "";
+  const comment = body.comment || "";
 
   type CharacterType = keyof typeof CHARACTER_CONFIG;
   const rawType = body.characterType;
@@ -115,13 +115,8 @@ export async function POST(request: NextRequest) {
   const config = CHARACTER_CONFIG[characterType];
 
   try {
-    // improvementが空欄の場合はプロンプトを切り替え
-    let userMessage = "";
-    if (!improvement.trim()) {
-      userMessage = `\nユーザーはお絵描き練習をしました。\n\n練習時間: ${practiceMinutes}分\n工夫した点:（特に記載なし）\n\n【絶対条件】\n・「工夫した点」が空欄の場合は、練習時間・継続・挑戦姿勢を中心に具体的に褒める\n・抽象的な褒めは禁止\n・努力と挑戦を認める\n・上から目線禁止\n・2〜4文\n`;
-    } else {
-      userMessage = `\nユーザーはお絵描き練習をしました。\n\n練習時間: ${practiceMinutes}分\n工夫した点:\n${improvement || "（特に記載なし）"}\n\n【絶対条件】\n・「工夫した点」に必ず具体的に触れる\n・可能なら一部を引用する\n・抽象的な褒めは禁止\n・努力と挑戦を認める\n・上から目線禁止\n・2〜4文\n`;
-    }
+    // コメント内容を必ず参照するプロンプトに統一
+    let userMessage = `\nユーザーはお絵描き練習をしました。\n\n練習時間: ${practiceMinutes}分\nコメント・工夫した点:\n${comment || "（特に記載なし）"}\n\n【絶対条件】\n・「コメント・工夫した点」の内容に必ず具体的に触れる\n・可能なら一部を引用する\n・抽象的な褒めは禁止\n・努力と挑戦を認める\n・上から目線禁止\n・2〜4文\n`;
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.8,

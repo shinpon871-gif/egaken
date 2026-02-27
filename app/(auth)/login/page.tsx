@@ -13,6 +13,13 @@ import {
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 
+// --- アプリ内ブラウザ検出ユーティリティ ---
+function isInAppBrowser() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  return /Twitter|Line|FBAN|FBAV|Instagram/.test(ua);
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
@@ -51,15 +58,20 @@ export default function LoginPage() {
       }
     };
 
-  // ログイン済みなら即遷移
+  // ログイン済みなら即遷移（未ログイン時は自動OAuth禁止）
   useEffect(() => {
     if (!loading && user) {
       router.replace('/home');
     }
+    // 未ログイン時は自動でOAuthを発火しない
   }, [user, loading, router]);
 
   // --- Googleログイン ---
   const handleGoogleLogin = async () => {
+    if (isInAppBrowser()) {
+      setGoogleErrorMsg('このページはSafariなどのブラウザで開いてください。');
+      return;
+    }
     setIsSigningIn(true);
     setGoogleErrorMsg('');
     const provider = new GoogleAuthProvider();
@@ -202,6 +214,20 @@ export default function LoginPage() {
           </svg>
           {isSigningIn ? 'ログイン中...' : 'Googleでログイン'}
         </button>
+        {/* アプリ内ブラウザの場合はSafariで開く案内を表示 */}
+        {isInAppBrowser() && (
+          <div className="w-full rounded-md bg-yellow-100 text-yellow-800 px-3 py-2 text-sm mb-2 text-center">
+            このページはアプリ内ブラウザではご利用いただけません。<br />
+            <button
+              className="underline text-blue-700 mt-2"
+              onClick={() => {
+                window.open(window.location.href, '_blank');
+              }}
+            >
+              Safariで開く
+            </button>
+          </div>
+        )}
 
         <div className="my-6 border-t border-gray-200" />
 

@@ -279,7 +279,7 @@ egaken/
 2. Firebase Consoleから各種キーを取得し、`.env.local` に設定（NEXT_PUBLIC_FIREBASE_... で始まる環境変数）
 3. `npm install` で依存パッケージを導入
 4. `npm run dev` で開発サーバー起動
-5. ブラウザで http://localhost:3000 にアクセス
+5. ブラウザで <http://localhost:3000> にアクセス
 6. Google認証・記録投稿・プロフィール編集・AIコメント・シェア等を動作確認
 
 ※詳細なトラブルシューティングやTipsはQUICKSTART.mdも参照。

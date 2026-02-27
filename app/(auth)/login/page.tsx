@@ -5,8 +5,6 @@ import { auth } from '@/lib/firebase';
 import {
   GoogleAuthProvider,
   signInWithPopup,
-  setPersistence,
-  browserLocalPersistence,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   User,
@@ -114,8 +112,9 @@ export default function LoginPage() {
     setGoogleErrorMsg('');
 
     try {
-      await setPersistence(auth, browserLocalPersistence);
+      // Safari対応: popupは必ずボタン直後に同期で呼ぶ
       await signInWithPopup(auth, provider);
+      // setPersistenceはlib/firebase.tsで一度だけ実行
     } catch (err: any) {
       setGoogleErrorMsg(err.message || 'Googleログインに失敗しました');
     } finally {

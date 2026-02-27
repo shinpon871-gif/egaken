@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { getAuth, setPersistence, browserLocalPersistence } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
@@ -17,6 +17,10 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 // 各サービスをエクスポート（サーバーサイドでも利用可能）
 export const auth = getAuth(app);
+// Google認証のSafari対応: persistenceは初期化時に一度だけ設定
+if (typeof window !== 'undefined') {
+  setPersistence(auth, browserLocalPersistence).catch(() => {});
+}
 console.log('[firebase] auth.app.name:', auth.app.name); // デバッグ用: インスタンス名で単一性を確認（修正理由：多重初期化防止、影響範囲：開発時ログのみ）
 export const db = getFirestore(app);
 export const storage = getStorage(app);

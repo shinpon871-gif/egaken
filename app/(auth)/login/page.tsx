@@ -32,6 +32,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [emailErrorMsg, setEmailErrorMsg] = useState('');
+  const [showExternalMessage, setShowExternalMessage] = useState(false);
   // external=1フラグ
   const [isForcedExternal, setIsForcedExternal] = useState(false);
 
@@ -86,17 +87,20 @@ export default function LoginPage() {
   }, [user, loading, router]);
 
   // --- Googleログイン ---
+  function isInAppBrowser() {
+    if (typeof navigator === "undefined") return false;
+    return /Twitter|Line|FBAN|FBAV|Instagram/.test(navigator.userAgent);
+  }
   const handleGoogleLogin = async () => {
     const provider = new GoogleAuthProvider();
     if (isInAppBrowser()) {
-      alert('Googleログインは外部ブラウザで行ってください。');
+      setShowExternalMessage(true);
       return;
     }
     setIsSigningIn(true);
     setGoogleErrorMsg('');
     try {
       await setPersistence(auth, browserLocalPersistence);
-      // signInWithRedirectで明示的にOAuth開始
       await import('firebase/auth').then(m => m.signOut(auth));
       await import('firebase/auth').then(m => m.signInWithRedirect(auth, provider));
     } catch (err: any) {
@@ -215,6 +219,12 @@ export default function LoginPage() {
           </svg>
           {isSigningIn ? 'ログイン中...' : 'Googleでログイン'}
         </button>
+        {showExternalMessage && (
+          <div className="w-full rounded-md bg-yellow-100 text-yellow-800 px-3 py-2 text-sm mb-2 text-center">
+            Googleログインはアプリ内ブラウザではご利用いただけません。<br />
+            SafariやChromeなど外部ブラウザで再度お試しください。
+          </div>
+        )}
         {/* Safariで開くボタン・外部ブラウザ遷移UIは完全削除 */}
 
         <div className="my-6 border-t border-gray-200" />

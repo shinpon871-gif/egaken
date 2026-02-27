@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { db, storage } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
@@ -22,6 +22,15 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const [improvement, setImprovement] = useState(''); // 工夫した点
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentTheme, setCurrentTheme] = useState<any>(null);
+  const [participateInTheme, setParticipateInTheme] = useState(true); // お題参加チェックボックス
+
+  useEffect(() => {
+    (async () => {
+      const theme = await getCurrentWeeklyTheme();
+      setCurrentTheme(theme);
+    })();
+  }, []);
 
   const handleFileSelect = (file: File) => {
     setSelectedFile(file);
@@ -70,7 +79,9 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         comment: comment.trim() || '',
         createdAt: serverTimestamp(),
         characterType: characterType || 'strategist',
-        weeklyThemeId: theme?.id ?? null,
+        weeklyThemeId: currentTheme && participateInTheme
+          ? currentTheme.id
+          : null,
       });
 
       // AI コメント生成を別途実行（記録の保存を待たずに非同期で実行）
@@ -225,6 +236,29 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         </select>
       </div>
 
+      {/* 今週のお題表示 */}
+      {currentTheme && (
+        <>
+          <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4">
+            <p className="text-sm text-blue-800 font-semibold">
+              🔥 今週のお題：{currentTheme.title}
+            </p>
+          </div>
+          <label className="flex items-center space-x-2 mt-2">
+            <input
+              type="checkbox"
+              checked={participateInTheme}
+              onChange={(e) => setParticipateInTheme(e.target.checked)}
+            />
+            <span className="text-sm text-gray-700">
+              今週のお題に参加する
+            </span>
+          </label>
+          <p className="text-xs text-gray-500">
+            参加するとSNSシェア時に企画バッジが表示されます
+          </p>
+        </>
+      )}
       {/* 送信ボタン */}
       <button
         type="submit"

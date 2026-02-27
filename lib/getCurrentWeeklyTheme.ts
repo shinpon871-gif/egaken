@@ -3,16 +3,22 @@ import { db } from "./firebase";
 
 export async function getCurrentWeeklyTheme() {
   try {
-    const now = Timestamp.now();
-    const q = query(
-      collection(db, "weeklyThemes"),
-      where("startAt", "<=", now),
-      where("endAt", ">=", now)
-    );
-    const snap = await getDocs(q);
+    const snap = await getDocs(collection(db, "weeklyThemes"));
     if (snap.empty) return null;
-    const doc = snap.docs[0];
-    return { id: doc.id, ...doc.data() };
+
+    const now = new Date();
+
+    for (const doc of snap.docs) {
+      const data = doc.data();
+      const start = data.startAt?.toDate();
+      const end = data.endAt?.toDate();
+
+      if (start && end && start <= now && now <= end) {
+        return { id: doc.id, ...data };
+      }
+    }
+
+    return null;
   } catch (e) {
     return null;
   }

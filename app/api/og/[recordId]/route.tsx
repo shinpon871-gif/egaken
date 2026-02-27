@@ -13,7 +13,10 @@ try {
   try {
     const key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
     if (!key) throw new Error('FIREBASE_SERVICE_ACCOUNT_KEY が未設定');
-    serviceAccount = JSON.parse(key.replace(/\\n/g, '\n'));
+    serviceAccount = JSON.parse(key);
+    if (serviceAccount.private_key) {
+      serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+    }
     console.log('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み成功');
   } catch (e) {
     keyError = e;
@@ -39,7 +42,11 @@ try {
       : `${serviceAccount.project_id}.appspot.com`;
 
     admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
+      credential: admin.credential.cert({
+        projectId: serviceAccount.project_id,
+        clientEmail: serviceAccount.client_email,
+        privateKey: serviceAccount.private_key,
+      }),
       storageBucket,
     });
     console.log('[OGP_API] Firebase Admin SDK 初期化完了');

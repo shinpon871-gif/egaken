@@ -48,7 +48,7 @@ try {
   }
   db = admin.firestore();
   // gRPCエラー回避: REST経由でFirestoreを動かす
-  db.settings({ experimentalForceLongPolling: true });
+  db.settings({ experimentalForceLongPolling: true, useFetchStreams: true });
   storage = admin.storage();
 } catch (err) {
   console.error('[OGP_API] Firebase Admin SDK 初期化エラー:', err);
@@ -61,6 +61,7 @@ export async function GET(
   context: { params: { recordId: string } } | { params: Promise<{ recordId: string }> }
 ): Promise<Response> {
   try {
+    console.log('[OGP_API] function start', new Date().toISOString());
     if (!db) {
       console.log('[OGP_API] Firestore 未初期化');
       return new Response('Firestore not initialized', { status: 500 });
@@ -79,6 +80,9 @@ export async function GET(
       recordId = (context.params as { recordId: string }).recordId;
     }
     console.log('[OGP_API] recordId:', recordId);
+
+    // Firestore呼び出し直前ログ
+    console.log('[OGP_API] before Firestore fetch', new Date().toISOString());
 
     // 2. Firestore から投稿データ取得（ドキュメントIDで取得）
     // デバッグ: 本番/ローカルの環境変数主要値を出力

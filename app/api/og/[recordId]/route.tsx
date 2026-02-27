@@ -44,6 +44,7 @@ try {
     });
     console.log('[OGP_API] Firebase Admin SDK 初期化完了');
     console.log('[OGP_API] admin.app().options:', admin.app().options);
+    console.log('[OGP_API] process.version:', process.version);
   }
   db = admin.firestore();
   // gRPCエラー回避: REST経由でFirestoreを動かす

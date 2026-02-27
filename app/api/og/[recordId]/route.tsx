@@ -36,7 +36,7 @@ try {
     keyError = e;
     // ローカルのみ JSON ファイルから読み込む（存在すれば）
     try {
-      serviceAccount = require('../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.json');
+      serviceAccount = require('../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-dacdaab784.json');
       console.log('[OGP_API] ローカルJSON読み込み成功');
     } catch (e2) {
       console.error('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み失敗', keyError);

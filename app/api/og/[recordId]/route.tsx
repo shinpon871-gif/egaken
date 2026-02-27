@@ -1,23 +1,19 @@
-import { getFirestore, doc, getDoc } from 'firebase/firestore';
-import { initializeApp, getApps } from 'firebase/app';
+import admin from 'firebase-admin';
 // @ts-expect-error: 型定義がないため
 import { ImageResponse } from '@vercel/og';
 import type { NextRequest } from 'next/server';
 
-if (!getApps().length) {
-  initializeApp({
-    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-    authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-    storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-    messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-    appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+export const runtime = 'nodejs';
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(
+      JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY || '{}')
+    ),
   });
 }
 
-const db = getFirestore();
-
-export const runtime = 'nodejs';
+const db = admin.firestore();
 
 export async function GET(
   _req: NextRequest,
@@ -34,20 +30,20 @@ export async function GET(
     }
     console.log('[OGP_API] recordId:', recordId);
 
-    // 2. Firestore からデータ取得
-    const snap = await getDoc(doc(db, 'posts', recordId));
+    // 2. Firestore Admin SDK からデータ取得
+    const snap = await db.collection('posts').doc(recordId).get();
 
-    if (!snap.exists()) {
+    if (!snap.exists) {
       console.error('[OGP_API] Record not found');
       return new Response('Not found', { status: 404 });
     }
 
     const record = snap.data();
     console.log('[OGP_API] record:', record);
-    console.log('[OGP_API] weeklyThemeId:', record.weeklyThemeId);
+    console.log('[OGP_API] weeklyThemeId:', record?.weeklyThemeId);
 
     // 3. バッジ描画条件確認
-    const hasWeeklyTheme = !!record.weeklyThemeId;
+    const hasWeeklyTheme = !!record?.weeklyThemeId;
     if (!hasWeeklyTheme) {
       console.warn('[OGP_API] weeklyThemeId is missing, badge will not be rendered');
     }
@@ -67,9 +63,9 @@ export async function GET(
           }}
         >
           {/* 投稿画像 */}
-          {record.imageUrl && (
+          {record?.imageUrl && (
             <img
-              src={record.imageUrl}
+              src={record?.imageUrl}
               width={540}
               height={540}
               style={{

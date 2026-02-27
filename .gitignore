@@ -40,3 +40,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .env*.local
+egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.json
+egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.txt

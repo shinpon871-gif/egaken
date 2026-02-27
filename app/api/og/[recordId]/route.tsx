@@ -48,6 +48,7 @@ try {
       storageBucket,
     });
     console.log('[OGP_API] Firebase Admin SDK 初期化完了');
+    console.log('[OGP_API] admin.app().options:', admin.app().options);
   }
   db = admin.firestore();
   // gRPCエラー回避: REST経由でFirestoreを動かす
@@ -84,6 +85,10 @@ export async function GET(
     console.log('[OGP_API] recordId:', recordId);
 
     // 2. Firestore から投稿データ取得（ドキュメントIDで取得）
+    // デバッグ: 本番/ローカルの環境変数主要値を出力
+    console.log('[OGP_API] process.env.NODE_ENV:', process.env.NODE_ENV);
+    console.log('[OGP_API] process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET:', process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET);
+    console.log('[OGP_API] process.env.FIREBASE_SERVICE_ACCOUNT_KEY exists:', !!process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
     let snap: admin.firestore.DocumentSnapshot;
     try {
       snap = await db.collection('posts').doc(recordId).get();

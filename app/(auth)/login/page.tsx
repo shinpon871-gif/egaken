@@ -87,39 +87,20 @@ export default function LoginPage() {
 
   // --- Googleログイン ---
   const handleGoogleLogin = async () => {
-    // InAppBrowserかつexternal=1でない場合は禁止
-    if (isInAppBrowser() && !isForcedExternal) {
-      setGoogleErrorMsg('このページはSafariなどのブラウザで開いてください。');
+    const provider = new GoogleAuthProvider();
+    if (isInAppBrowser()) {
+      alert('Googleログインは外部ブラウザで行ってください。');
       return;
     }
     setIsSigningIn(true);
     setGoogleErrorMsg('');
-    const provider = new GoogleAuthProvider();
     try {
       await setPersistence(auth, browserLocalPersistence);
-      const result = await signInWithPopup(auth, provider);
-      if (result.user) router.replace('/home');
+      // signInWithRedirectで明示的にOAuth開始
+      await import('firebase/auth').then(m => m.signOut(auth));
+      await import('firebase/auth').then(m => m.signInWithRedirect(auth, provider));
     } catch (err: any) {
-      switch (err.code) {
-        case 'auth/popup-blocked':
-          setGoogleErrorMsg('ポップアップがブロックされました。ブラウザの設定をご確認ください。');
-          break;
-        case 'auth/popup-closed-by-user':
-          setGoogleErrorMsg('ポップアップが閉じられました。再度お試しください。');
-          break;
-        case 'auth/cancelled-popup-request':
-          setGoogleErrorMsg('ログイン処理がキャンセルされました。再度お試しください。');
-          break;
-        case 'auth/network-request-failed':
-          setGoogleErrorMsg('ネットワークエラーが発生しました。通信環境をご確認ください。');
-          break;
-        case 'auth/credential-already-in-use':
-          setGoogleErrorMsg('このGoogleアカウントは既に他の認証方法で使用されています。');
-          break;
-        default:
-          setGoogleErrorMsg(err.message || 'Googleログインに失敗しました');
-          break;
-      }
+      setGoogleErrorMsg(err.message || 'Googleログインに失敗しました');
     } finally {
       setIsSigningIn(false);
     }
@@ -234,23 +215,7 @@ export default function LoginPage() {
           </svg>
           {isSigningIn ? 'ログイン中...' : 'Googleでログイン'}
         </button>
-        {/* アプリ内ブラウザの場合はSafariで開く案内を表示（external=1時は非表示） */}
-        {isInAppBrowser() && !isForcedExternal && (
-          <div className="w-full rounded-md bg-yellow-100 text-yellow-800 px-3 py-2 text-sm mb-2 text-center">
-            このページはアプリ内ブラウザではご利用いただけません。<br />
-            <button
-              className="underline text-blue-700 mt-2"
-              onClick={() => {
-                // location.href書き換えで外部ブラウザへ遷移を促す（external=1付与）
-                if (typeof window !== 'undefined') {
-                  window.location.href = window.location.origin + window.location.pathname + window.location.search.replace(/([?&])external=1(&|$)/, '$1').replace(/([?&])$/, '') + (window.location.search ? '&' : '?') + 'external=1';
-                }
-              }}
-            >
-              Safariで開く
-            </button>
-          </div>
-        )}
+        {/* Safariで開くボタン・外部ブラウザ遷移UIは完全削除 */}
 
         <div className="my-6 border-t border-gray-200" />
 

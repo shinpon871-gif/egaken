@@ -1,6 +1,7 @@
 // /app/api/og/[recordId]/route.tsx
 import sharp from 'sharp';
 import path from 'path';
+import fs from 'fs';
 import admin from 'firebase-admin';
 import type { NextRequest } from 'next/server';
 
@@ -9,8 +10,6 @@ export const runtime = 'nodejs';
 let db: admin.firestore.Firestore | null = null;
 let storage: admin.storage.Storage | null = null;
 
-// フォントファイルのパスを指定
-const FONT_PATH = path.join(process.cwd(), 'public/fonts/Montserrat-VariableFont_wght.ttf');
 try {
   let serviceAccount: any = null;
   let keyError: any = null;
@@ -170,59 +169,47 @@ export async function GET(
       return new Response('Failed to get image', { status: 500 });
     }
 
-    // 4. 投稿画像を 1200x630 にスマートリサイズ（重要領域優先）
-    let ogp = sharp(imageBuffer)
-      .resize({
-        width: 1200,
-        height: 630,
-        fit: 'cover',
-        position: sharp.strategy.entropy
-      });
-
-    // OGPキャンバスサイズ (1200x630)
+    // --- 4. 土台のリサイズを一度確定させる（サイズエラー回避のため） ---
     const OGP_WIDTH = 1200;
     const OGP_HEIGHT = 630;
-    const BADGE_SIZE = 60;
-    const PADDING_X = 200;
-    const PADDING_Y = 40;
 
-    // 5. weeklyThemeId がある場合のみバッジ合成
-    if (record.weeklyThemeId) {
-      const badgeSvg = `
-<svg width="${BADGE_SIZE}" height="${BADGE_SIZE}" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <style>
-      @font-face {
-        font-family: 'CustomFont';
-        src: url('file://${FONT_PATH}');
-      }
-      text {
-        font-family: 'CustomFont', sans-serif;
-        font-weight: bold;
-        fill: #fff;
-        text-anchor: middle;
-      }
-    </style>
-  </defs>
-  <circle cx="${BADGE_SIZE / 2}" cy="${BADGE_SIZE / 2}" r="${BADGE_SIZE / 2 - 2}" fill="#3B82F6" stroke="#fff" stroke-width="3"/>
-  <text x="50%" y="35%" font-size="9">WEEKLY</text>
-  <text x="50%" y="55%" font-size="9">THEME</text>
-  <text x="50%" y="75%" font-size="7">JOINED</text>
-</svg>`;
-
-      const badgeBuffer = await sharp(Buffer.from(badgeSvg), {
-        density: 300 // 解像度を上げて文字を鮮明にする
+    // 一度リサイズを実行し、バッファに書き出してサイズを「1200x630」に完全に固定する
+    const resizedBaseBuffer = await sharp(imageBuffer)
+      .resize({
+        width: OGP_WIDTH,
+        height: OGP_HEIGHT,
+        fit: 'cover',
+        position: sharp.strategy.entropy
       })
-        .png()
-        .toBuffer();
+      .jpeg() // 一度jpeg等で確定（バッファにするため）
+      .toBuffer();
 
-      ogp = ogp.composite([
-        {
-          input: badgeBuffer,
-          top: PADDING_Y,
-          left: OGP_WIDTH - BADGE_SIZE - PADDING_X,
-        }
-      ]);
+    let ogp = sharp(resizedBaseBuffer); 
+
+    // --- 5. 透過済みのバッジ画像を重ねる ---
+    if (record.weeklyThemeId) {
+      try {
+        const badgePath = path.join(process.cwd(), 'assets/badge_ogp.png');
+        // 画像を読み込む
+        const badgeRawBuffer = fs.readFileSync(badgePath);
+
+        // バッジ画像も土台と同じ 1200x630 にリサイズ（保険：端数によるサイズエラーを防ぐため）
+        const resizedBadgeBuffer = await sharp(badgeRawBuffer)
+          .resize(OGP_WIDTH, OGP_HEIGHT) // 1ピクセルの狂いもなく土台に合わせる
+          .toBuffer();
+
+        // 単に重ねる（Composite）だけで、右上にきれいなバッジが表示されます。
+        ogp = ogp.composite([
+          {
+            input: resizedBadgeBuffer, // 1200x630 の透過画像をそのまま渡す
+            // top, left は指定しない（デフォルトで 0, 0）
+            // blend はデフォルト（'over'）なので、透過PNGが正しく重なります
+          }
+        ]);
+        console.log('[OGP_API] バッジ画像（透過PNG）の合成成功');
+      } catch (e) {
+        console.error('[OGP_API] バッジ画像の処理に失敗しました:', e);
+      }
     }
 
     // 6. JPEG バッファ取得

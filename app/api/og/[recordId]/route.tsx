@@ -9,21 +9,34 @@ let db: admin.firestore.Firestore | null = null;
 let storage: admin.storage.Storage | null = null;
 try {
   let serviceAccount: any = null;
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    // PEM改行も考慮
-    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT.replace(/\\n/g, '\n'));
-  } else {
+
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
     try {
-      serviceAccount = require('../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.json');
-    } catch (err) {
-      console.error('[OGP_API] JSONファイルが見つかりません', err);
-      serviceAccount = null;
+      serviceAccount = JSON.parse(
+        process.env.FIREBASE_SERVICE_ACCOUNT_KEY.replace(/\\n/g, '\n')
+      );
+      console.log('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み成功');
+    } catch (e) {
+      console.error('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY パースエラー', e);
     }
   }
+
+  // ローカルのみ JSON ファイルから読み込む（存在すれば）
+  if (!serviceAccount) {
+    try {
+      serviceAccount = require('../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.json');
+      console.log('[OGP_API] ローカルJSON読み込み成功');
+    } catch (e) {
+      console.error('[OGP_API] JSONファイルが見つかりません', e);
+    }
+  }
+
+  // Admin SDK 初期化
   if (!admin.apps.length && serviceAccount) {
     const storageBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
       ? process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
-      : (serviceAccount.project_id ? `${serviceAccount.project_id}.appspot.com` : undefined);
+      : `${serviceAccount.project_id}.appspot.com`;
+
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
       storageBucket,

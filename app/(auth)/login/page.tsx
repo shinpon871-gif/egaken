@@ -23,7 +23,7 @@ function isInAppBrowser() {
 
 export default function LoginPage() {
   const router = useRouter();
-  // 独自でauth初期化・状態管理
+  // Hooksは必ずコンポーネントの最上部で宣言
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [isSigningIn, setIsSigningIn] = useState(false);
@@ -36,8 +36,8 @@ export default function LoginPage() {
   // external=1フラグ
   const [isForcedExternal, setIsForcedExternal] = useState(false);
 
+  // --- auth初期化 ---
   useEffect(() => {
-    // auth初期化待ち
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setLoading(false);
@@ -49,6 +49,24 @@ export default function LoginPage() {
     }
     return () => unsub();
   }, []);
+
+  // --- ログイン済みなら /home へ遷移 ---
+  useEffect(() => {
+    if (!loading && user) {
+      router.replace('/home');
+    }
+  }, [user, loading, router]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#FFF9F0] to-[#FFE8D6]">
+        <div className="text-center">
+          <div className="mb-4 text-4xl">🎨</div>
+          <p className="text-gray-600">読み込み中...</p>
+        </div>
+      </div>
+    );
+  }
     // --- パスワードリセット ---
     const handlePasswordReset = async () => {
       setEmailErrorMsg('');
@@ -78,31 +96,26 @@ export default function LoginPage() {
       }
     };
 
-  // ログイン済みなら即遷移（未ログイン時は自動OAuth禁止・自動リダイレクト禁止）
-  useEffect(() => {
-    if (!loading && user) {
-      router.replace('/home');
-    }
-    // 未ログイン時は何もしない
-  }, [user, loading, router]);
+  // ❌ 真ん中の useEffect 完全削除
 
   // --- Googleログイン ---
-  function isInAppBrowser() {
-    if (typeof navigator === "undefined") return false;
-    return /Twitter|Line|FBAN|FBAV|Instagram/.test(navigator.userAgent);
-  }
+  // isInAppBrowserの再定義は削除
   const handleGoogleLogin = async () => {
+    if (!auth) return;
+
     const provider = new GoogleAuthProvider();
+
     if (isInAppBrowser()) {
       setShowExternalMessage(true);
       return;
     }
+
     setIsSigningIn(true);
     setGoogleErrorMsg('');
+
     try {
       await setPersistence(auth, browserLocalPersistence);
-      await import('firebase/auth').then(m => m.signOut(auth));
-      await import('firebase/auth').then(m => m.signInWithRedirect(auth, provider));
+      await signInWithPopup(auth, provider);
     } catch (err: any) {
       setGoogleErrorMsg(err.message || 'Googleログインに失敗しました');
     } finally {
@@ -135,8 +148,6 @@ export default function LoginPage() {
     }
 
     try {
-      // Firebase内部状態リセット
-      await import('firebase/auth').then(m => m.signOut(auth));
       if (isRegister) {
         await createUserWithEmailAndPassword(auth, cleanedEmail, cleanedPassword);
       } else {
@@ -178,26 +189,13 @@ export default function LoginPage() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#FFF9F0] to-[#FFE8D6]">
-        <div className="text-center">
-          <div className="mb-4 text-4xl">🎨</div>
-          <p className="text-gray-600">読み込み中...</p>
-        </div>
-      </div>
-    );
-  }
+  // ❌ 下側の if(loading) return 完全削除
+
+  // ❌ 一番下の useEffect 完全削除
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#FFF9F0] to-[#FFE8D6] px-4">
       <div className="w-full max-w-md rounded-lg bg-white p-8 shadow-lg">
-        <div className="text-center">
-          <div className="mb-4 text-6xl">🎨</div>
-          <h1 className="mb-2 text-3xl font-bold text-gray-800">えがけん</h1>
-          <p className="mb-8 text-gray-600">お絵描きの記録を残そう</p>
-        </div>
-
         {googleErrorMsg && (
           <div className="w-full rounded-md bg-red-100 text-red-700 px-3 py-2 text-sm mb-2 text-center">
             {googleErrorMsg}

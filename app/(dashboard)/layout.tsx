@@ -15,9 +15,9 @@ export default function DashboardLayout({
   const router = useRouter();
 
   useEffect(() => {
-    // ログインしていない場合はログインページへリダイレクト
-    if (!loading && !user) {
-      router.push('/login');
+    if (loading) return; // loading中は何もしない
+    if (!user) {
+      router.replace('/login');
     }
   }, [user, loading, router]);
 

@@ -25,6 +25,8 @@ export async function GET(
 	}
 	const record = snap.data();
 
+	console.log('OGP record:', record);
+
 	return new ImageResponse(
 		(
 			<div style={{ position: 'relative', width: 1200, height: 630, background: '#fff' }}>

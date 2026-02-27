@@ -1,29 +1,50 @@
+// /app/api/og/[recordId]/route.tsx
 import admin from 'firebase-admin';
 import sharp from 'sharp';
 import type { NextRequest } from 'next/server';
 
-// Node.js Runtime指定
+// Node.js Runtime指定（サーバー専用）
 export const runtime = 'nodejs';
 
-// Admin SDK初期化
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert(
-      JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY || '{}')
-    ),
-    storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  });
+// ------------------------------
+// Firebase Admin SDK 初期化（安全版）
+// ------------------------------
+let db: admin.firestore.Firestore;
+let bucket: any;
+
+try {
+  if (!admin.apps.length) {
+    if (!process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+      throw new Error('FIREBASE_SERVICE_ACCOUNT_KEY が未設定です');
+    }
+    admin.initializeApp({
+      credential: admin.credential.cert(
+        JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY)
+      ),
+      storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+    });
+    console.log('[OGP_API] Firebase Admin SDK 初期化完了');
+  }
+  db = admin.firestore();
+  bucket = admin.storage().bucket();
+} catch (err) {
+  console.error('[OGP_API] Firebase Admin SDK 初期化エラー:', err);
+  db = null as any;
+  bucket = null as any;
 }
 
-// Firestore/Storageインスタンス取得
-const db = admin.firestore();
-const bucket = admin.storage().bucket();
-
+// ------------------------------
+// GET メソッド処理
+// ------------------------------
 export async function GET(
   _req: NextRequest,
   context: { params: { recordId: string } } | { params: Promise<{ recordId: string }> }
 ) {
   try {
+    if (!db || !bucket) {
+      throw new Error('Firestore/Storage が初期化されていません');
+    }
+
     // 1. recordId取得
     let recordId: string;
     if ('then' in context.params && typeof context.params.then === 'function') {
@@ -32,31 +53,33 @@ export async function GET(
     } else {
       recordId = (context.params as { recordId: string }).recordId;
     }
-
     console.log('[OGP_API] recordId:', recordId);
 
-    // 2. Firestoreから投稿データ取得
+    // 2. Firestore から投稿データ取得
     const snap = await db.collection('posts').doc(recordId).get();
     if (!snap.exists) return new Response('Not found', { status: 404 });
     const record = snap.data() as { imagePath: string; weeklyThemeId?: string };
 
     if (!record.imagePath) return new Response('No imagePath', { status: 404 });
 
-    // 3. Storageから投稿画像バッファ取得
+    // 3. Storage から投稿画像バッファ取得
     const file = bucket.file(record.imagePath);
     const [imageBuffer] = await file.download();
 
-    // 4. 投稿画像をリサイズ
+    // 4. 投稿画像を 1200x630 にリサイズ
     let ogp = sharp(imageBuffer).resize(1200, 630);
 
-    // 5. weeklyThemeIdがある場合のみバッジ合成
+    // 5. weeklyThemeId がある場合のみバッジ合成
     if (record.weeklyThemeId) {
-      // SVGを1行化して作成
-      const badgeSvg = `<svg width="150" height="150" xmlns="http://www.w3.org/2000/svg"><circle cx="75" cy="75" r="70" fill="#3B82F6" stroke="#fff" stroke-width="6"/><text x="50%" y="40%" text-anchor="middle" fill="#fff" font-size="22" font-family="Arial, sans-serif" font-weight="bold">WEEKLY</text><text x="50%" y="60%" text-anchor="middle" fill="#fff" font-size="22" font-family="Arial, sans-serif" font-weight="bold">THEME</text><text x="50%" y="80%" text-anchor="middle" fill="#fff" font-size="16" font-family="Arial, sans-serif">JOINED</text></svg>`;
+      const badgeSvg = `<svg width="150" height="150" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="75" cy="75" r="70" fill="#3B82F6" stroke="#fff" stroke-width="6"/>
+        <text x="50%" y="40%" text-anchor="middle" fill="#fff" font-size="22" font-family="Arial, sans-serif" font-weight="bold">WEEKLY</text>
+        <text x="50%" y="60%" text-anchor="middle" fill="#fff" font-size="22" font-family="Arial, sans-serif" font-weight="bold">THEME</text>
+        <text x="50%" y="80%" text-anchor="middle" fill="#fff" font-size="16" font-family="Arial, sans-serif">JOINED</text>
+      </svg>`;
 
       let badgeBuffer: Buffer;
       try {
-        // density: 300 で文字をくっきり描画
         badgeBuffer = await sharp(Buffer.from(badgeSvg), { density: 300 })
           .png()
           .toBuffer();
@@ -66,14 +89,13 @@ export async function GET(
         throw err;
       }
 
-      // 投稿画像に右下マージン30pxでバッジ合成
       ogp = ogp.composite([
         { input: badgeBuffer, top: 630 - 150 - 30, left: 1200 - 150 - 30 },
       ]);
       console.log('[OGP_API] バッジ合成完了');
     }
 
-    // 6. JPEGバッファ取得
+    // 6. JPEG バッファ取得
     const outputBuffer = await ogp.jpeg().toBuffer();
 
     // 7. レスポンス返却

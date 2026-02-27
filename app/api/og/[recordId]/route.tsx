@@ -1,9 +1,5 @@
 // /app/api/og/[recordId]/route.tsx
 import sharp from 'sharp';
-console.log('[OGP_API] Node.js version:', process.version);
-console.log('[OGP_API] OpenSSL version:', process.versions.openssl);
-console.log('[OGP_API] sharp version:', sharp.versions);
-console.log('[OGP_API] sharp libvips version:', sharp.versions.vips);
 import admin from 'firebase-admin';
 import type { NextRequest } from 'next/server';
 
@@ -13,29 +9,24 @@ let db: admin.firestore.Firestore | null = null;
 let storage: admin.storage.Storage | null = null;
 try {
   let serviceAccount: any = null;
-
-  if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
-    try {
-      serviceAccount = JSON.parse(
-        process.env.FIREBASE_SERVICE_ACCOUNT_KEY.replace(/\\n/g, '\n')
-      );
-      console.log('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み成功');
-    } catch (e) {
-      console.error('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY パースエラー', e);
-    }
-  }
-
-  // ローカルのみ JSON ファイルから読み込む（存在すれば）
-  if (!serviceAccount) {
+  let keyError: any = null;
+  try {
+    const key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+    if (!key) throw new Error('FIREBASE_SERVICE_ACCOUNT_KEY が未設定');
+    serviceAccount = JSON.parse(key.replace(/\\n/g, '\n'));
+    console.log('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み成功');
+  } catch (e) {
+    keyError = e;
+    // ローカルのみ JSON ファイルから読み込む（存在すれば）
     try {
       serviceAccount = require('../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.json');
       console.log('[OGP_API] ローカルJSON読み込み成功');
-    } catch (e) {
-      console.error('[OGP_API] JSONファイルが見つかりません', e);
+    } catch (e2) {
+      console.error('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み失敗', keyError);
+      console.error('[OGP_API] JSONファイルが見つかりません', e2);
     }
   }
 
-  // FIREBASE_SERVICE_ACCOUNT_KEYが存在しない場合はエラー返却
   if (!serviceAccount) {
     console.error('[OGP_API] サービスアカウント情報が取得できません');
     throw new Error('Service account not found');

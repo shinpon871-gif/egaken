@@ -12,12 +12,24 @@ try {
   let keyError: any = null;
   try {
     const key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-    if (!key) throw new Error('FIREBASE_SERVICE_ACCOUNT_KEY が未設定');
-    serviceAccount = JSON.parse(key);
-    if (serviceAccount.private_key) {
-      serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+    if (!key) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[OGP_API] 本番環境で FIREBASE_SERVICE_ACCOUNT_KEY が未設定です。必ず環境変数を設定してください。');
+      }
+      throw new Error('FIREBASE_SERVICE_ACCOUNT_KEY が未設定');
     }
-    console.log('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み成功');
+    try {
+      serviceAccount = JSON.parse(key);
+      if (serviceAccount.private_key) {
+        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+      }
+      console.log('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み成功');
+    } catch (parseErr) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[OGP_API] 本番環境で FIREBASE_SERVICE_ACCOUNT_KEY 読み込み失敗', parseErr);
+      }
+      throw parseErr;
+    }
   } catch (e) {
     keyError = e;
     // ローカルのみ JSON ファイルから読み込む（存在すれば）

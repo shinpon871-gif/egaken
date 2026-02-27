@@ -4,6 +4,8 @@ import { doc, getDoc } from 'firebase/firestore';
 import { ImageResponse } from '@vercel/og';
 import type { NextRequest } from 'next/server';
 
+export const runtime = 'nodejs';
+
 export async function GET(
 	_req: NextRequest,
 	context: { params: { recordId: string } } | { params: Promise<{ recordId: string }> }

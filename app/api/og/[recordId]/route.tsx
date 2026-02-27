@@ -8,12 +8,19 @@ export const runtime = 'nodejs';
 let db: admin.firestore.Firestore | null = null;
 let storage: admin.storage.Storage | null = null;
 try {
-  if (!admin.apps.length) {
-    // サービスアカウント情報は環境変数 or ローカルJSON
-    const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT
-      ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
-      : require('../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.json');
-    // バケット名は環境変数優先、なければserviceAccount.project_idから生成
+  let serviceAccount: any = null;
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    // PEM改行も考慮
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT.replace(/\\n/g, '\n'));
+  } else {
+    try {
+      serviceAccount = require('../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.json');
+    } catch (err) {
+      console.error('[OGP_API] JSONファイルが見つかりません', err);
+      serviceAccount = null;
+    }
+  }
+  if (!admin.apps.length && serviceAccount) {
     const storageBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
       ? process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
       : (serviceAccount.project_id ? `${serviceAccount.project_id}.appspot.com` : undefined);

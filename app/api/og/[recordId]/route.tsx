@@ -1,26 +1,32 @@
 // /app/api/og/[recordId]/route.tsx
 import sharp from 'sharp';
-// @ts-expect-error: 型定義がないため
-import fetch from 'node-fetch';
 import admin from 'firebase-admin';
 import type { NextRequest } from 'next/server';
 
 export const runtime = 'nodejs';
 
 let db: admin.firestore.Firestore;
-
+let storage: admin.storage.Storage;
 try {
   if (!admin.apps.length) {
-    const serviceAccount = require('../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.json');
+    // Vercel本番環境対応: サービスアカウント情報を環境変数からJSON.parse
+    const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT
+      ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+      : require('../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.json');
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
+      storageBucket: serviceAccount.project_id
+        ? `${serviceAccount.project_id}.appspot.com`
+        : undefined,
     });
     console.log('[OGP_API] Firebase Admin SDK 初期化完了');
   }
   db = admin.firestore();
+  storage = admin.storage();
 } catch (err) {
   console.error('[OGP_API] Firebase Admin SDK 初期化エラー:', err);
   db = null as any;
+  storage = null as any;
 }
 
 export async function GET(
@@ -29,6 +35,7 @@ export async function GET(
 ) {
   try {
     if (!db) throw new Error('Firestore が初期化されていません');
+    if (!storage) throw new Error('Storage が初期化されていません');
 
     // 1. recordId取得
     let recordId: string;
@@ -50,10 +57,31 @@ export async function GET(
 
     if (!record.imageUrl) return new Response('No imageUrl', { status: 404 });
 
-    // 3. HTTP から画像バッファ取得
-    const imageResp = await fetch(record.imageUrl);
-    if (!imageResp.ok) return new Response('Failed to fetch image', { status: 500 });
-    const imageBuffer = Buffer.from(await imageResp.arrayBuffer());
+    // 3. Storage から画像バッファ取得（非公開バケット対応）
+    let imageBuffer: Buffer;
+    if (record.imageUrl.startsWith('https://')) {
+      // 公開URLの場合は fetch で取得
+	  // @ts-expect-error: node-fetch型定義なし
+      const fetch = (await import('node-fetch')).default;
+      const imageResp = await fetch(record.imageUrl);
+      if (!imageResp.ok) return new Response('Failed to fetch image', { status: 500 });
+      imageBuffer = Buffer.from(await imageResp.arrayBuffer());
+    } else {
+      // gs:// 形式やパスの場合は Storage から取得
+      // 例: gs://<bucket>/<path>
+      let bucketName = admin.app().options.storageBucket as string;
+      let filePath = record.imageUrl;
+      if (filePath.startsWith('gs://')) {
+        const m = filePath.match(/^gs:\/\/(.+?)\/(.+)$/);
+        if (m) {
+          bucketName = m[1];
+          filePath = m[2];
+        }
+      }
+      const file = storage.bucket(bucketName).file(filePath);
+      const [data] = await file.download();
+      imageBuffer = data;
+    }
 
     // 4. 投稿画像を 1200x630 にスマートリサイズ（重要領域優先）
     let ogp = sharp(imageBuffer)

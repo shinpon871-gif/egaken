@@ -15,6 +15,7 @@ type Post = {
   aiComment?: string;
   imageUrl?: string;
   createdAt?: any;
+  weeklyThemeTitle?: string;
 };
 
 type Props = {
@@ -123,6 +124,7 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
           practiceMinutes={post.minutes || 0}
           aiComment={post.aiComment || ""}
           imageUrl={post.imageUrl || ""}
+          themeTitle={post.weeklyThemeTitle}
         />
       </div>
 

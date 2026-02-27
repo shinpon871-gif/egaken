@@ -81,6 +81,9 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         weeklyThemeId: currentTheme && participateInTheme
           ? currentTheme.id
           : null,
+        weeklyThemeTitle: currentTheme && participateInTheme
+          ? currentTheme.title
+          : null,
       });
 
       // AI コメント生成を別途実行（記録の保存を待たずに非同期で実行）

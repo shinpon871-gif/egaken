@@ -9,7 +9,7 @@
     "lint": "eslint"
   },
   "engines": {
-    "node": "18.x"
+    "node": "24.x"
   },
   "dependencies": {
     "firebase": "^12.9.0",

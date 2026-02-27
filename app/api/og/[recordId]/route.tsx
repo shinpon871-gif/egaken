@@ -3,7 +3,6 @@ import { doc, getDoc } from 'firebase/firestore';
 // @ts-expect-error: 型定義がないため
 import { ImageResponse } from '@vercel/og';
 import type { NextRequest } from 'next/server';
-export const runtime = 'edge';
 
 export async function GET(
 	_req: NextRequest,
@@ -25,34 +24,57 @@ export async function GET(
 	}
 	const record = snap.data();
 
-	console.log('OGP record:', record);
-
 	return new ImageResponse(
 		(
-			<div style={{ position: 'relative', width: 1200, height: 630, background: '#fff' }}>
-				{/* ...既存の画像やテキストの描画ロジック... */}
+			<div
+				style={{
+					display: 'flex',
+					alignItems: 'center',
+					justifyContent: 'center',
+					position: 'relative',
+					width: 1200,
+					height: 630,
+					background: '#fff',
+				}}
+			>
+				{/* 投稿画像を中央に表示 */}
+				{record.imageUrl && (
+					<img
+						src={record.imageUrl}
+						width={540}
+						height={540}
+						style={{
+							objectFit: 'cover',
+							borderRadius: 24,
+							boxShadow: '0 4px 24px rgba(0,0,0,0.12)',
+							background: '#eee',
+						}}
+						alt="投稿画像"
+					/>
+				)}
+				{/* Weekly Themeバッジ */}
 				{record.weeklyThemeId && (
 					<div
 						style={{
-							position: "absolute",
+							position: 'absolute',
 							top: 30,
 							right: 30,
 							width: 150,
 							height: 150,
-							borderRadius: "50%",
-							background: "rgba(255,255,255,0.9)",
-							border: "6px solid #3B82F6",
-							display: "flex",
-							flexDirection: "column",
-							justifyContent: "center",
-							alignItems: "center",
-							textAlign: "center",
-							color: "#1E3A8A",
-							fontFamily: "sans-serif",
+							borderRadius: '50%',
+							background: 'rgba(255,255,255,0.9)',
+							border: '6px solid #3B82F6',
+							display: 'flex',
+							flexDirection: 'column',
+							justifyContent: 'center',
+							alignItems: 'center',
+							textAlign: 'center',
+							color: '#1E3A8A',
+							fontFamily: 'sans-serif',
 						}}
 					>
 						<div style={{ fontSize: 12 }}>WEEKLY</div>
-						<div style={{ fontSize: 28, fontWeight: "bold" }}>THEME</div>
+						<div style={{ fontSize: 28, fontWeight: 'bold' }}>THEME</div>
 						<div style={{ fontSize: 12 }}>JOINED</div>
 					</div>
 				)}

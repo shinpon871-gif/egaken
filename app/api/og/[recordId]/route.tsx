@@ -1,5 +1,9 @@
 // /app/api/og/[recordId]/route.tsx
 import sharp from 'sharp';
+console.log('[OGP_API] Node.js version:', process.version);
+console.log('[OGP_API] OpenSSL version:', process.versions.openssl);
+console.log('[OGP_API] sharp version:', sharp.versions);
+console.log('[OGP_API] sharp libvips version:', sharp.versions.vips);
 import admin from 'firebase-admin';
 import type { NextRequest } from 'next/server';
 

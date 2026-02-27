@@ -9,26 +9,45 @@ import {
   browserLocalPersistence,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  User,
 } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { onAuthStateChanged } from 'firebase/auth';
 
 // --- アプリ内ブラウザ検出ユーティリティ ---
 function isInAppBrowser() {
   if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent;
-  return /Twitter|Line|FBAN|FBAV|Instagram/.test(ua);
+  return /Twitter|Line|FBAN|FBAV|Instagram/.test(navigator.userAgent);
 }
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, loading } = useAuth();
+  // 独自でauth初期化・状態管理
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [googleErrorMsg, setGoogleErrorMsg] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [emailErrorMsg, setEmailErrorMsg] = useState('');
+  // external=1フラグ
+  const [isForcedExternal, setIsForcedExternal] = useState(false);
+
+  useEffect(() => {
+    // auth初期化待ち
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setLoading(false);
+    });
+    // external=1クエリ判定
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      setIsForcedExternal(params.get('external') === '1');
+    }
+    return () => unsub();
+  }, []);
     // --- パスワードリセット ---
     const handlePasswordReset = async () => {
       setEmailErrorMsg('');
@@ -58,17 +77,18 @@ export default function LoginPage() {
       }
     };
 
-  // ログイン済みなら即遷移（未ログイン時は自動OAuth禁止）
+  // ログイン済みなら即遷移（未ログイン時は自動OAuth禁止・自動リダイレクト禁止）
   useEffect(() => {
     if (!loading && user) {
       router.replace('/home');
     }
-    // 未ログイン時は自動でOAuthを発火しない
+    // 未ログイン時は何もしない
   }, [user, loading, router]);
 
   // --- Googleログイン ---
   const handleGoogleLogin = async () => {
-    if (isInAppBrowser()) {
+    // InAppBrowserかつexternal=1でない場合は禁止
+    if (isInAppBrowser() && !isForcedExternal) {
       setGoogleErrorMsg('このページはSafariなどのブラウザで開いてください。');
       return;
     }
@@ -214,15 +234,17 @@ export default function LoginPage() {
           </svg>
           {isSigningIn ? 'ログイン中...' : 'Googleでログイン'}
         </button>
-        {/* アプリ内ブラウザの場合はSafariで開く案内を表示 */}
-        {isInAppBrowser() && (
+        {/* アプリ内ブラウザの場合はSafariで開く案内を表示（external=1時は非表示） */}
+        {isInAppBrowser() && !isForcedExternal && (
           <div className="w-full rounded-md bg-yellow-100 text-yellow-800 px-3 py-2 text-sm mb-2 text-center">
             このページはアプリ内ブラウザではご利用いただけません。<br />
             <button
               className="underline text-blue-700 mt-2"
               onClick={() => {
-                // location.href書き換えで外部ブラウザへ遷移を促す
-                window.location.href = window.location.href;
+                // location.href書き換えで外部ブラウザへ遷移を促す（external=1付与）
+                if (typeof window !== 'undefined') {
+                  window.location.href = window.location.origin + window.location.pathname + window.location.search.replace(/([?&])external=1(&|$)/, '$1').replace(/([?&])$/, '') + (window.location.search ? '&' : '?') + 'external=1';
+                }
               }}
             >
               Safariで開く

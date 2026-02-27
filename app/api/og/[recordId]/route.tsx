@@ -5,19 +5,21 @@ import type { NextRequest } from 'next/server';
 
 export const runtime = 'nodejs';
 
-let db: admin.firestore.Firestore;
-let storage: admin.storage.Storage;
+let db: admin.firestore.Firestore | null = null;
+let storage: admin.storage.Storage | null = null;
 try {
   if (!admin.apps.length) {
-    // Vercel本番環境対応: サービスアカウント情報を環境変数からJSON.parse
+    // サービスアカウント情報は環境変数 or ローカルJSON
     const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT
       ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
       : require('../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.json');
+    // バケット名は環境変数優先、なければserviceAccount.project_idから生成
+    const storageBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+      ? process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+      : (serviceAccount.project_id ? `${serviceAccount.project_id}.appspot.com` : undefined);
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
-      storageBucket: serviceAccount.project_id
-        ? `${serviceAccount.project_id}.appspot.com`
-        : undefined,
+      storageBucket,
     });
     console.log('[OGP_API] Firebase Admin SDK 初期化完了');
   }
@@ -25,17 +27,23 @@ try {
   storage = admin.storage();
 } catch (err) {
   console.error('[OGP_API] Firebase Admin SDK 初期化エラー:', err);
-  db = null as any;
-  storage = null as any;
+  db = null;
+  storage = null;
 }
 
 export async function GET(
   _req: NextRequest,
   context: { params: { recordId: string } } | { params: Promise<{ recordId: string }> }
-) {
+): Promise<Response> {
   try {
-    if (!db) throw new Error('Firestore が初期化されていません');
-    if (!storage) throw new Error('Storage が初期化されていません');
+    if (!db) {
+      console.log('[OGP_API] Firestore 未初期化');
+      return new Response('Firestore not initialized', { status: 500 });
+    }
+    if (!storage) {
+      console.log('[OGP_API] Storage 未初期化');
+      return new Response('Storage not initialized', { status: 500 });
+    }
 
     // 1. recordId取得
     let recordId: string;
@@ -48,39 +56,60 @@ export async function GET(
     console.log('[OGP_API] recordId:', recordId);
 
     // 2. Firestore から投稿データ取得（ドキュメントIDで取得）
-    const snap = await db.collection('posts').doc(recordId).get();
-    if (!snap.exists) return new Response('Not found', { status: 404 });
+    let snap: admin.firestore.DocumentSnapshot;
+    try {
+      snap = await db.collection('posts').doc(recordId).get();
+    } catch (e) {
+      console.log('[OGP_API] Firestore 取得エラー:', e);
+      return new Response('Firestore fetch error', { status: 500 });
+    }
+    if (!snap.exists) {
+      console.log('[OGP_API] Firestore: ドキュメントが存在しません', recordId);
+      return new Response('Not found', { status: 404 });
+    }
     const record = snap.data() as { imageUrl: string; weeklyThemeId?: string };
 
     console.log('[OGP_API] weeklyThemeId:', record.weeklyThemeId);
     console.log('[OGP_API] record.imageUrl:', record.imageUrl);
 
-    if (!record.imageUrl) return new Response('No imageUrl', { status: 404 });
+    if (!record.imageUrl) {
+      console.log('[OGP_API] imageUrlがありません');
+      return new Response('No imageUrl', { status: 404 });
+    }
 
     // 3. Storage から画像バッファ取得（非公開バケット対応）
     let imageBuffer: Buffer;
-    if (record.imageUrl.startsWith('https://')) {
-      // 公開URLの場合は fetch で取得
-	  // @ts-expect-error: node-fetch型定義なし
-      const fetch = (await import('node-fetch')).default;
-      const imageResp = await fetch(record.imageUrl);
-      if (!imageResp.ok) return new Response('Failed to fetch image', { status: 500 });
-      imageBuffer = Buffer.from(await imageResp.arrayBuffer());
-    } else {
-      // gs:// 形式やパスの場合は Storage から取得
-      // 例: gs://<bucket>/<path>
-      let bucketName = admin.app().options.storageBucket as string;
-      let filePath = record.imageUrl;
-      if (filePath.startsWith('gs://')) {
-        const m = filePath.match(/^gs:\/\/(.+?)\/(.+)$/);
-        if (m) {
-          bucketName = m[1];
-          filePath = m[2];
+    try {
+      if (record.imageUrl.startsWith('https://')) {
+        // 公開URLの場合は fetch で取得
+        // @ts-expect-error: node-fetch型定義なし
+        const fetch = (await import('node-fetch')).default;
+        const imageResp = await fetch(record.imageUrl);
+        if (!imageResp.ok) {
+          console.log('[OGP_API] fetch失敗', record.imageUrl);
+          return new Response('Failed to fetch image', { status: 500 });
         }
+        imageBuffer = Buffer.from(await imageResp.arrayBuffer());
+      } else {
+        // gs:// 形式やパスの場合は Storage から取得
+        let bucketName = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+          ? process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+          : (admin.app().options.storageBucket as string);
+        let filePath = record.imageUrl;
+        if (filePath.startsWith('gs://')) {
+          const m = filePath.match(/^gs:\/\/(.+?)\/(.+)$/);
+          if (m) {
+            bucketName = m[1];
+            filePath = m[2];
+          }
+        }
+        const file = storage.bucket(bucketName).file(filePath);
+        const [data] = await file.download();
+        imageBuffer = data;
       }
-      const file = storage.bucket(bucketName).file(filePath);
-      const [data] = await file.download();
-      imageBuffer = data;
+    } catch (e) {
+      console.log('[OGP_API] 画像取得エラー:', e);
+      return new Response('Failed to get image', { status: 500 });
     }
 
     // 4. 投稿画像を 1200x630 にスマートリサイズ（重要領域優先）
@@ -135,7 +164,7 @@ export async function GET(
       },
     });
   } catch (error) {
-    console.error('[OGP_API] Error:', error);
+    console.log('[OGP_API] 予期せぬエラー:', error);
     return new Response('Internal Server Error', { status: 500 });
   }
 }

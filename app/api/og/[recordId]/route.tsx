@@ -51,36 +51,38 @@ export async function GET(
 
     // sharpでOGP画像生成
     // 1. 投稿画像を1200x630にリサイズ
-    let ogp = sharp(imageBuffer).resize(1200, 630).jpeg();
+    let ogp = sharp(imageBuffer).resize(1200, 630);
 
     // 2. バッジ合成（weeklyThemeIdがある場合のみ）
     if (record.weeklyThemeId) {
-      // バッジ画像生成（150x150px, 青背景, 白文字）
+      // SVGバッジ作成（文字入り）
       const badgeSvg = `
         <svg width="150" height="150" xmlns="http://www.w3.org/2000/svg">
           <circle cx="75" cy="75" r="70" fill="#3B82F6" stroke="#fff" stroke-width="6"/>
-          <text x="50%" y="40%" text-anchor="middle" fill="#fff" font-size="22" font-family="sans-serif" font-weight="bold">WEEKLY</text>
-          <text x="50%" y="60%" text-anchor="middle" fill="#fff" font-size="22" font-family="sans-serif" font-weight="bold">THEME</text>
-          <text x="50%" y="80%" text-anchor="middle" fill="#fff" font-size="16" font-family="sans-serif">JOINED</text>
+          <text x="50%" y="40%" text-anchor="middle" fill="#fff" font-size="22" font-family="Arial, sans-serif" font-weight="bold">WEEKLY</text>
+          <text x="50%" y="60%" text-anchor="middle" fill="#fff" font-size="22" font-family="Arial, sans-serif" font-weight="bold">THEME</text>
+          <text x="50%" y="80%" text-anchor="middle" fill="#fff" font-size="16" font-family="Arial, sans-serif">JOINED</text>
         </svg>
       `;
-      // SVGはBuffer.from(svg)でバッファ化し、sharpでPNG化
-      const badgePng = await sharp(Buffer.from(badgeSvg)).png().toBuffer();
-      // バッジを右下に合成
+
+      // sharpでSVGをバッファ化（density指定で文字をくっきり描画）
+      const badgeBuffer = await sharp(Buffer.from(badgeSvg), { density: 300 })
+        .png()
+        .toBuffer();
+      console.log('[OGP_API] SVGバッジを高品質PNG化完了');
+
+      // 投稿画像に右下マージン30pxでバッジ合成
       ogp = ogp.composite([
-        {
-          input: badgePng,
-          top: 630 - 150 - 30, // 30px margin
-          left: 1200 - 150 - 30, // 30px margin
-        },
+        { input: badgeBuffer, top: 630 - 150 - 30, left: 1200 - 150 - 30 },
       ]);
+      console.log('[OGP_API] バッジを投稿画像右下に合成完了');
     }
 
     // 3. JPEGバッファ取得
-    const outputBuffer = await ogp.toBuffer();
+    const outputBuffer = await ogp.jpeg().toBuffer();
 
     // 4. レスポンス返却（Content-Type: image/jpeg）
-    return new Response(new Uint8Array(outputBuffer).buffer, {
+    return new Response(new Uint8Array(outputBuffer), {
       headers: {
         'Content-Type': 'image/jpeg',
         'Cache-Control': 'public, max-age=3600',

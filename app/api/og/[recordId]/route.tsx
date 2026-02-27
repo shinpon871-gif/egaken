@@ -1,5 +1,6 @@
 // /app/api/og/[recordId]/route.tsx
 import sharp from 'sharp';
+import path from 'path';
 import admin from 'firebase-admin';
 import type { NextRequest } from 'next/server';
 
@@ -7,6 +8,9 @@ export const runtime = 'nodejs';
 
 let db: admin.firestore.Firestore | null = null;
 let storage: admin.storage.Storage | null = null;
+
+// フォントファイルのパスを指定
+const FONT_PATH = path.join(process.cwd(), 'public/fonts/Montserrat-VariableFont_wght.ttf');
 try {
   let serviceAccount: any = null;
   let keyError: any = null;
@@ -186,17 +190,32 @@ export async function GET(
     if (record.weeklyThemeId) {
       const badgeSvg = `
 <svg width="${BADGE_SIZE}" height="${BADGE_SIZE}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      @font-face {
+        font-family: 'CustomFont';
+        src: url('file://${FONT_PATH}');
+      }
+      text {
+        font-family: 'CustomFont', sans-serif;
+        font-weight: bold;
+        fill: #fff;
+        text-anchor: middle;
+      }
+    </style>
+  </defs>
   <circle cx="${BADGE_SIZE / 2}" cy="${BADGE_SIZE / 2}" r="${BADGE_SIZE / 2 - 2}" fill="#3B82F6" stroke="#fff" stroke-width="3"/>
-  <text x="50%" y="35%" text-anchor="middle" fill="#fff" font-size="10" font-family="Arial, sans-serif" font-weight="bold">WEEKLY</text>
-  <text x="50%" y="55%" text-anchor="middle" fill="#fff" font-size="10" font-family="Arial, sans-serif" font-weight="bold">THEME</text>
-  <text x="50%" y="75%" text-anchor="middle" fill="#fff" font-size="8" font-family="Arial, sans-serif" font-weight="bold">JOINED</text>
+  <text x="50%" y="35%" font-size="9">WEEKLY</text>
+  <text x="50%" y="55%" font-size="9">THEME</text>
+  <text x="50%" y="75%" font-size="7">JOINED</text>
 </svg>`;
 
-      const badgeBuffer = await sharp(Buffer.from(badgeSvg), { density: 300 })
+      const badgeBuffer = await sharp(Buffer.from(badgeSvg), {
+        density: 300 // 解像度を上げて文字を鮮明にする
+      })
         .png()
         .toBuffer();
 
-      // compositeで右上に配置（topを小さくして上部に寄せる）
       ogp = ogp.composite([
         {
           input: badgeBuffer,
@@ -204,7 +223,6 @@ export async function GET(
           left: OGP_WIDTH - BADGE_SIZE - PADDING_X,
         }
       ]);
-      console.log('[OGP_API] バッジ合成：サイズ縮小・右上配置（Y方向余白調整）完了');
     }
 
     // 6. JPEG バッファ取得

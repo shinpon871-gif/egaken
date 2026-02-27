@@ -20,9 +20,11 @@ try {
     }
     try {
       serviceAccount = JSON.parse(key);
-      if (serviceAccount.private_key) {
-        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
-      }
+		if (serviceAccount.private_key) {
+		serviceAccount.private_key = serviceAccount.private_key
+			.replace(/^["']|["']$/g, '') // 前後の引用符を削除
+			.replace(/\\n/g, '\n');      // 改行コードを置換
+		}
       console.log('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み成功');
     } catch (parseErr) {
       if (process.env.NODE_ENV === 'production') {

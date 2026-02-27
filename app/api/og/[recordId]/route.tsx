@@ -5,7 +5,7 @@ import type { NextRequest } from 'next/server';
 // Node.js Runtime指定
 export const runtime = 'nodejs';
 
-// Admin SDK初期化（サービスアカウントキーを環境変数から取得）
+// Admin SDK初期化
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert(
@@ -19,13 +19,12 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 const bucket = admin.storage().bucket();
 
-// Next.js API Route
 export async function GET(
   _req: NextRequest,
   context: { params: { recordId: string } } | { params: Promise<{ recordId: string }> }
 ) {
   try {
-    // recordId取得
+    // 1. recordId取得
     let recordId: string;
     if ('then' in context.params && typeof context.params.then === 'function') {
       const resolved = await context.params;
@@ -34,54 +33,50 @@ export async function GET(
       recordId = (context.params as { recordId: string }).recordId;
     }
 
-    // Firestoreから投稿データ取得
+    console.log('[OGP_API] recordId:', recordId);
+
+    // 2. Firestoreから投稿データ取得
     const snap = await db.collection('posts').doc(recordId).get();
-    if (!snap.exists) {
-      // 投稿が存在しない場合は404
-      return new Response('Not found', { status: 404 });
-    }
+    if (!snap.exists) return new Response('Not found', { status: 404 });
     const record = snap.data() as { imagePath: string; weeklyThemeId?: string };
 
-    // Storageから画像バッファ取得
-    if (!record.imagePath) {
-      return new Response('No imagePath', { status: 404 });
-    }
+    if (!record.imagePath) return new Response('No imagePath', { status: 404 });
+
+    // 3. Storageから投稿画像バッファ取得
     const file = bucket.file(record.imagePath);
     const [imageBuffer] = await file.download();
 
-    // sharpでOGP画像生成
-    // 1. 投稿画像を1200x630にリサイズ
+    // 4. 投稿画像をリサイズ
     let ogp = sharp(imageBuffer).resize(1200, 630);
 
-    // 2. バッジ合成（weeklyThemeIdがある場合のみ）
+    // 5. weeklyThemeIdがある場合のみバッジ合成
     if (record.weeklyThemeId) {
-      // SVGバッジ作成（文字入り）
-      const badgeSvg = `
-        <svg width="150" height="150" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="75" cy="75" r="70" fill="#3B82F6" stroke="#fff" stroke-width="6"/>
-          <text x="50%" y="40%" text-anchor="middle" fill="#fff" font-size="22" font-family="Arial, sans-serif" font-weight="bold">WEEKLY</text>
-          <text x="50%" y="60%" text-anchor="middle" fill="#fff" font-size="22" font-family="Arial, sans-serif" font-weight="bold">THEME</text>
-          <text x="50%" y="80%" text-anchor="middle" fill="#fff" font-size="16" font-family="Arial, sans-serif">JOINED</text>
-        </svg>
-      `;
+      // SVGを1行化して作成
+      const badgeSvg = `<svg width="150" height="150" xmlns="http://www.w3.org/2000/svg"><circle cx="75" cy="75" r="70" fill="#3B82F6" stroke="#fff" stroke-width="6"/><text x="50%" y="40%" text-anchor="middle" fill="#fff" font-size="22" font-family="Arial, sans-serif" font-weight="bold">WEEKLY</text><text x="50%" y="60%" text-anchor="middle" fill="#fff" font-size="22" font-family="Arial, sans-serif" font-weight="bold">THEME</text><text x="50%" y="80%" text-anchor="middle" fill="#fff" font-size="16" font-family="Arial, sans-serif">JOINED</text></svg>`;
 
-      // sharpでSVGをバッファ化（density指定で文字をくっきり描画）
-      const badgeBuffer = await sharp(Buffer.from(badgeSvg), { density: 300 })
-        .png()
-        .toBuffer();
-      console.log('[OGP_API] SVGバッジを高品質PNG化完了');
+      let badgeBuffer: Buffer;
+      try {
+        // density: 300 で文字をくっきり描画
+        badgeBuffer = await sharp(Buffer.from(badgeSvg), { density: 300 })
+          .png()
+          .toBuffer();
+        console.log('[OGP_API] SVGバッジ PNG化完了');
+      } catch (err) {
+        console.error('[OGP_API] SVG変換エラー:', err);
+        throw err;
+      }
 
       // 投稿画像に右下マージン30pxでバッジ合成
       ogp = ogp.composite([
         { input: badgeBuffer, top: 630 - 150 - 30, left: 1200 - 150 - 30 },
       ]);
-      console.log('[OGP_API] バッジを投稿画像右下に合成完了');
+      console.log('[OGP_API] バッジ合成完了');
     }
 
-    // 3. JPEGバッファ取得
+    // 6. JPEGバッファ取得
     const outputBuffer = await ogp.jpeg().toBuffer();
 
-    // 4. レスポンス返却（Content-Type: image/jpeg）
+    // 7. レスポンス返却
     return new Response(new Uint8Array(outputBuffer), {
       headers: {
         'Content-Type': 'image/jpeg',
@@ -89,7 +84,6 @@ export async function GET(
       },
     });
   } catch (error) {
-    // エラー時は500
     console.error('[OGP_API] Error:', error);
     return new Response('Internal Server Error', { status: 500 });
   }

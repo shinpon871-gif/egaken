@@ -221,7 +221,8 @@ export default function LoginPage() {
             <button
               className="underline text-blue-700 mt-2"
               onClick={() => {
-                window.open(window.location.href, '_blank');
+                // location.href書き換えで外部ブラウザへ遷移を促す
+                window.location.href = window.location.href;
               }}
             >
               Safariで開く

@@ -195,6 +195,13 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#FFF9F0] to-[#FFE8D6] px-4">
       <div className="w-full max-w-md rounded-lg bg-white p-8 shadow-lg">
+        {/* タイトル・サブコピー */}
+        <h1 className="text-2xl font-bold text-center mb-2">
+          {isRegister ? 'はじめまして。' : 'おかえりなさい。'}
+        </h1>
+        <p className="text-sm text-gray-500 text-center mb-6">
+          {isRegister ? 'あなたの毎日を、記録しよう。' : '今日も描きましょう。'}
+        </p>
         {googleErrorMsg && (
           <div className="w-full rounded-md bg-red-100 text-red-700 px-3 py-2 text-sm mb-2 text-center">
             {googleErrorMsg}
@@ -253,9 +260,13 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={isSigningIn}
-            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-black"
+            className={`w-full rounded-md px-3 py-2 font-semibold ${isRegister ? 'bg-purple-500 text-white' : 'bg-blue-500 text-white'}`}
           >
-            {isRegister ? "新規登録" : isSigningIn ? "ログイン中..." : "メールログイン"}
+            {isRegister
+              ? "えがけんを始める"
+              : isSigningIn
+                ? "ログイン中..."
+                : "ログインして続ける"}
           </button>
           <button
             type="button"

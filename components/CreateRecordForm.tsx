@@ -18,6 +18,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const [comment, setComment] = useState('');
   const [practiceMinutes, setPracticeMinutes] = useState('');
   const [characterType, setCharacterType] = useState('strategist'); // キャラ選択
+  const [improvement, setImprovement] = useState(''); // 工夫した点
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -78,6 +79,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
               comment: comment.trim() || null,
               practiceMinutes: practiceMinutes ? parseInt(practiceMinutes, 10) : null,
               characterType: characterType || 'strategist',
+              improvement: improvement.trim() || '',
             }),
           });
 
@@ -105,6 +107,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       setComment('');
       setPracticeMinutes('');
       setCharacterType('strategist');
+      setImprovement('');
 
       onSuccess?.();
     } catch (error) {
@@ -157,6 +160,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         <p className="mt-1 text-xs text-gray-500">{comment.length}/500</p>
       </div>
 
+
       {/* 練習時間 */}
       <div className="mb-6">
         <label htmlFor="minutes" className="mb-2 block text-sm font-semibold text-gray-700">
@@ -173,6 +177,24 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
           disabled={isLoading}
           className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 disabled:bg-gray-50"
         />
+      </div>
+
+      {/* 工夫した点 */}
+      <div className="mb-6">
+        <label htmlFor="improvement" className="mb-2 block text-sm font-semibold text-gray-700">
+          今日の工夫した点（任意）
+        </label>
+        <textarea
+          id="improvement"
+          value={improvement}
+          onChange={(e) => setImprovement(e.target.value)}
+          placeholder="今日の工夫した点（例：逆光に挑戦、手のポーズを研究した など）"
+          rows={3}
+          maxLength={300}
+          disabled={isLoading}
+          className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 disabled:bg-gray-50"
+        />
+        <p className="mt-1 text-xs text-gray-500">{improvement.length}/300</p>
       </div>
 
       {/* キャラクタータイプ選択 */}

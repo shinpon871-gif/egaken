@@ -10,6 +10,7 @@ interface ShareButtonProps {
   aiComment?: string;
   imageUrl: string;
   v?: string; // ← ここに v を追加することで page.tsx からの型エラーを解消
+  themeId?: string;
   themeTitle?: string;
 }
 
@@ -28,13 +29,16 @@ export function ShareButton({
   aiComment, 
   imageUrl,
   v, // Propsとして受け取る
+  themeId,
   themeTitle,
 }: ShareButtonProps) {
   const [isSharing, setIsSharing] = useState(false);
 
-  const effectiveComment = themeTitle 
-    ? `今週のお題：${themeTitle}\n${comment}`
-    : comment;
+  const effectiveComment = useMemo(() => {
+    return (themeId && themeTitle)
+      ? `今週のお題：${themeTitle}\n${comment}`
+      : comment;
+  }, [themeId, themeTitle, comment]);
 
   // シェア用URLの生成ロジック
   const getShareUrl = () => {

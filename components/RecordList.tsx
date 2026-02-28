@@ -26,6 +26,7 @@ interface Record {
   aiComment?: string;
   createdAt: Timestamp | null;
   characterType?: string; // 追加: キャラクタータイプ（optional）
+  weeklyThemeId?: string;
   weeklyThemeTitle?: string;
 }
 
@@ -277,6 +278,7 @@ export function RecordList({ refresh }: RecordListProps) {
                   practiceMinutes={record.minutes}
                   aiComment={record.aiComment}
                   imageUrl={record.imageUrl}
+                  themeId={record.weeklyThemeId}
                   themeTitle={record.weeklyThemeTitle}
                 />
                 {editingId !== record.id && (

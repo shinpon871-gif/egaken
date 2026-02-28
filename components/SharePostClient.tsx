@@ -15,6 +15,7 @@ type Post = {
   aiComment?: string;
   imageUrl?: string;
   createdAt?: any;
+  weeklyThemeId?: string;
   weeklyThemeTitle?: string;
 };
 
@@ -36,30 +37,54 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
       setIsLoading(false);
       return;
     }
-    if (initialData) return; // サーバーから初期データが来ていれば再取得しない
 
     const fetchPost = async () => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        const docRef = doc(db, "posts", recordId);
-        const snap = await getDoc(docRef);
-        if (snap.exists()) {
-          const data = snap.data() as Post;
-          setPost({ ...data, id: recordId });
-        } else {
-          setPost(null);
-          setError("投稿が存在しません");
+      let currentPost = post;
+
+      // 投稿データがない、またはIDが一致しない場合は取得
+      if (!currentPost || currentPost.id !== recordId) {
+        setIsLoading(true);
+        setError(null);
+        try {
+          const docRef = doc(db, "posts", recordId);
+          const snap = await getDoc(docRef);
+          if (snap.exists()) {
+            const data = snap.data() as Post;
+            currentPost = { ...data, id: recordId };
+          } else {
+            setError("投稿が存在しません");
+            setIsLoading(false);
+            return;
+          }
+        } catch (e) {
+          setError("データ取得中にエラーが発生しました");
+          setIsLoading(false);
+          return;
         }
-      } catch (e) {
-        setError("データ取得中にエラーが発生しました");
-        setPost(null);
-      } finally {
-        setIsLoading(false);
       }
+
+      // 2. お題タイトルが欠けている場合のフォールバック取得
+      if (currentPost && currentPost.weeklyThemeId && !currentPost.weeklyThemeTitle) {
+        try {
+          const themeSnap = await getDoc(doc(db, "weeklyThemes", currentPost.weeklyThemeId));
+          if (themeSnap.exists()) {
+            const themeData = themeSnap.data();
+            currentPost = {
+              ...currentPost,
+              weeklyThemeTitle: themeData.title || "今週のお題",
+            };
+          }
+        } catch (e) {
+          console.error("お題情報の取得に失敗しました:", e);
+        }
+      }
+
+      setPost(currentPost);
+      setIsLoading(false);
     };
     fetchPost();
-  }, [recordId, initialData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordId]);
 
   if (isLoading) {
     return <p className="text-gray-600">読み込み中…</p>;
@@ -124,6 +149,7 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
           practiceMinutes={post.minutes || 0}
           aiComment={post.aiComment || ""}
           imageUrl={post.imageUrl || ""}
+          themeId={post.weeklyThemeId}
           themeTitle={post.weeklyThemeTitle}
         />
       </div>

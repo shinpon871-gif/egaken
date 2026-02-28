@@ -88,7 +88,7 @@ export default async function RecordPage(props: Props) {
     imageUrl: postData.imageUrl,
     createdAt: postData.createdAt?.toDate?.().toISOString() || new Date().toISOString(),
     title: 'お絵描きの記録',
-    weeklyThemeId: postData.weeklyThemeId ?? null,
+    weeklyThemeId: postData.weeklyThemeId ?? undefined,
   };
 
   return (

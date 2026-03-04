@@ -173,17 +173,18 @@ npm run dev
 - Googleログイン認証（Firebase Authentication）
 - メールアドレス＋パスワードでのログイン・新規登録（/login）
 - パスワードリセット（メール送信による再設定）
-- 画像＋コメント＋練習時間の記録投稿（CreateRecordForm）
-- 記録の一覧表示・削除・リアルタイム反映（RecordList, Firestore）
+- 投稿（画像＋コメント＋練習時間）の作成・保存・削除（CreateRecordForm, RecordList, Firestore）
+- 投稿の一覧表示・リアルタイム反映（RecordList, Firestore）
 - 投稿詳細・シェアページ（/share/[recordId]）
-- OGP画像・SNSシェア完全対応（画像URLはそのまま、ページURLに?v=...付与）
-- 画像アップロード時はcontentType指定、Imageタグはunoptimized
-- AIコメント自動生成（OpenAI API, /api/generate-comment）
+- OGP画像自動生成（/api/og/[recordId]、SVGバッジ合成・透過PNG対応）
+- SNSシェア（X(Twitter) intent連携、OGP/SNS画像・URL最適化）
+- 画像アップロード時のcontentType指定・Next.js Imageタグunoptimized対応
+- AIコメント自動生成（OpenAI API, /api/generate-comment、キャラクタータイプ選択・保存・表示）
 - メールアドレス追加（Google連携ユーザー向け、LinkEmailForm）
-- ユーザー名変更（UserProfileForm, /profile）
-- プロフィール編集（UserProfileForm, /profile）
-- 統計・成長グラフ表示（StatsDisplay, Growth, /dashboard/growth）
-- デバッグ用ストレージ診断（/dashboard/debug-storage）
+- ユーザー名変更・プロフィール編集（UserProfileForm, /profile）
+- 統計・成長グラフ表示（StatsDisplay, Growth, /dashboard/growth、初回投稿と最新投稿の比較）
+- デバッグ用ストレージ診断（/dashboard/debug-storage、Storage画像URLの動作・CORS・セキュリティルール確認）
+- Firebase Storageセキュリティ診断（FirebaseSecurityDiagnostic）
 - CORS設定済み
 
 ## 技術スタック

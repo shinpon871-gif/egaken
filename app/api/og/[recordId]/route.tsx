@@ -173,16 +173,16 @@ export async function GET(
     const OGP_WIDTH = 1200;
     const OGP_HEIGHT = 630;
 
-    // 一度リサイズを実行し、バッファに書き出してサイズを「1200x630」に完全に固定する
-    const resizedBaseBuffer = await sharp(imageBuffer)
-      .resize({
-        width: OGP_WIDTH,
-        height: OGP_HEIGHT,
-        fit: 'cover',
-        position: sharp.strategy.entropy
-      })
-      .jpeg() // 一度jpeg等で確定（バッファにするため）
-      .toBuffer();
+      // 一度リサイズを実行し、バッファに書き出してサイズを「1200x630」に完全に固定する
+      const resizedBaseBuffer = await sharp(imageBuffer)
+        .resize({
+          width: OGP_WIDTH,
+          height: OGP_HEIGHT,
+          fit: 'cover',
+          position: sharp.strategy.attention
+        })
+        .jpeg() // 一度jpeg等で確定（バッファにするため）
+        .toBuffer();
 
     let ogp = sharp(resizedBaseBuffer); 
 
@@ -194,9 +194,9 @@ export async function GET(
         const badgeRawBuffer = fs.readFileSync(badgePath);
 
         // バッジ画像も土台と同じ 1200x630 にリサイズ（保険：端数によるサイズエラーを防ぐため）
-        const resizedBadgeBuffer = await sharp(badgeRawBuffer)
-          .resize(OGP_WIDTH, OGP_HEIGHT) // 1ピクセルの狂いもなく土台に合わせる
-          .toBuffer();
+          const resizedBadgeBuffer = await sharp(badgeRawBuffer)
+            .resize(OGP_WIDTH, OGP_HEIGHT) // 1ピクセルの狂いもなく土台に合わせる
+            .toBuffer();
 
         // 単に重ねる（Composite）だけで、右上にきれいなバッジが表示されます。
         ogp = ogp.composite([

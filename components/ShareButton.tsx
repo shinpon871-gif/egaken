@@ -10,6 +10,8 @@ interface ShareButtonProps {
   aiComment?: string;
   imageUrl: string;
   v?: string; // ← ここに v を追加することで page.tsx からの型エラーを解消
+  themeId?: string;
+  themeTitle?: string;
 }
 
 /**
@@ -26,9 +28,17 @@ export function ShareButton({
   practiceMinutes, 
   aiComment, 
   imageUrl,
-  v // Propsとして受け取る
+  v, // Propsとして受け取る
+  themeId,
+  themeTitle,
 }: ShareButtonProps) {
   const [isSharing, setIsSharing] = useState(false);
+
+  const effectiveComment = useMemo(() => {
+    return (themeId && themeTitle)
+      ? `今週のお題：${themeTitle}\n${comment}`
+      : comment;
+  }, [themeId, themeTitle, comment]);
 
   // シェア用URLの生成ロジック
   const getShareUrl = () => {
@@ -42,8 +52,8 @@ export function ShareButton({
 
   const tweetResult = useMemo(() => {
     // プレビュー表示用。URLを含めない状態のテキストを生成
-    return generateTweetText(practiceMinutes, comment, '');
-  }, [practiceMinutes, comment]);
+    return generateTweetText(practiceMinutes, effectiveComment, '');
+  }, [practiceMinutes, effectiveComment]);
 
   const handleShare = async () => {
     if (!recordId) {
@@ -58,7 +68,7 @@ export function ShareButton({
 
     const shareUrl = getShareUrl();
     // 実際のツイート本文。末尾にパラメータ付きURLを1つだけ挿入
-    const shareText = generateTweetText(practiceMinutes, comment, shareUrl).text;
+    const shareText = generateTweetText(practiceMinutes, effectiveComment, shareUrl).text;
     
     const iosDevice = isIOS();
     const intentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`;

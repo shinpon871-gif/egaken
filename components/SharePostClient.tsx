@@ -114,7 +114,7 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
 
   return (
     <div className="min-h-screen bg-gray-50 px-4 py-8 max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-4">{post.title || 'お絵描きの記録'}</h1>
+      <h1 className="text-2xl font-bold mb-4 text-gray-800">{post.title || 'お絵描きの記録'}</h1>
 
       {post.imageUrl && (
         <div className="mb-4 w-full aspect-square relative rounded-lg overflow-hidden border bg-gray-100">
@@ -130,8 +130,8 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
       )}
 
       {post.minutes && post.minutes > 0 && (
-        <div className="mb-4 p-3 bg-orange-50 rounded-lg">
-          <span>⏱ 練習時間: {post.minutes}分</span>
+        <div className="mb-4 p-3 bg-orange-50 rounded-lg text-gray-800">
+          <span>⏱️ 練習時間: {post.minutes}分</span>
         </div>
       )}
 

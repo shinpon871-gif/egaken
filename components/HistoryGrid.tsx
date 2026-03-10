@@ -12,8 +12,7 @@ import {
   onSnapshot,
   Timestamp,
 } from 'firebase/firestore';
-import Link from 'next/link';
-import Image from 'next/image';
+import { useRouter } from 'next/navigation';
 
 interface HistoryPost {
   id: string;
@@ -27,9 +26,14 @@ interface HistoryPost {
 
 export function HistoryGrid() {
   const { user } = useAuth();
+  const router = useRouter();
+
   const [posts, setPosts] = useState<HistoryPost[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [imageErrors, setImageErrors] = useState<Set<string>>(new Set());
+
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (!user) return;
@@ -47,11 +51,6 @@ export function HistoryGrid() {
         const postsData: HistoryPost[] = [];
         snapshot.forEach((doc) => {
           const data = doc.data() as Omit<HistoryPost, 'id'>;
-          console.log(`[HistoryGrid] 投稿 ${doc.id}:`, {
-            imageUrl: data.imageUrl,
-            hasImageUrl: !!data.imageUrl,
-            createdAt: data.createdAt,
-          });
           postsData.push({
             id: doc.id,
             ...data,
@@ -80,13 +79,32 @@ export function HistoryGrid() {
   };
 
   const getProxyImageUrl = (imageUrl: string) => {
-    // URL をクエリパラメータとしてエンコード
     return `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
   };
 
-  const handleImageError = (postId: string, imageUrl: string) => {
-    console.error(`[HistoryGrid] 画像読み込み失敗 ${postId}:`, imageUrl);
+  const handleImageError = (postId: string) => {
     setImageErrors((prev) => new Set([...prev, postId]));
+  };
+
+  const toggleSelect = (id: string) => {
+    if (selectedIds.includes(id)) {
+      setSelectedIds(selectedIds.filter((v) => v !== id));
+    } else {
+      if (selectedIds.length < 9) {
+        setSelectedIds([...selectedIds, id]);
+      }
+    }
+  };
+
+  const createNine = () => {
+    if (selectedIds.length !== 9) {
+      alert('9枚選択してください');
+      return;
+    }
+
+    const ids = selectedIds.join(',');
+
+    router.push(`/nine?ids=${ids}`);
   };
 
   if (isLoading) {
@@ -102,74 +120,106 @@ export function HistoryGrid() {
       <div className="flex flex-col justify-center items-center py-12 text-center">
         <div className="text-5xl mb-4">📝</div>
         <p className="text-gray-500 text-lg">まだ記録がありません</p>
-        <p className="text-gray-400 text-sm mt-2">お絵描きを記録して、成長を見てみましょう！</p>
       </div>
     );
   }
 
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-      {posts.map((post) => {
-        const hasError = imageErrors.has(post.id);
-        
-        return (
-          <Link
-            key={post.id}
-            href={`/record/${post.id}`}
-            className="group relative overflow-hidden rounded-lg hover:shadow-lg transition-shadow block"
-          >
-            {/* アスペクト比コンテナ */}
-            <div className="relative w-full bg-white" style={{ paddingBottom: '100%' }}>
-              {/* 画像 または フォールバック */}
-              <div className="absolute inset-0 bg-gray-100">
-                {hasError || !post.imageUrl ? (
-                  // エラーまたはURL不在の場合
-                  <div className="w-full h-full flex items-center justify-center">
-                    <div className="text-center">
-                      <span className="text-3xl block mb-1">⚠️</span>
-                      <p className="text-xs text-gray-600">読み込み失敗</p>
-                    </div>
-                  </div>
-                ) : (
-                  // 画像表示 - 通常の img タグを使用
-                  <img
-                    src={getProxyImageUrl(post.imageUrl)}
-                    alt={post.comment || 'drawing'}
-                    className="w-full h-full object-cover block"
-                    style={{ backgroundColor: 'transparent' }}
-                    onError={() => {
-                      console.error(`[HistoryGrid] img onError 発火: ${post.id}`);
-                      handleImageError(post.id, post.imageUrl);
-                    }}
-                    onLoad={(e) => {
-                      const img = e.currentTarget as HTMLImageElement;
-                      console.log(`[HistoryGrid] img 読み込み完了: ${post.id}`, {
-                        naturalWidth: img.naturalWidth,
-                        naturalHeight: img.naturalHeight,
-                      });
-                    }}
-                    loading="lazy"
-                  />
-                )}
-              </div>
+    <div className="space-y-4">
 
-              {/* ホバー時の情報表示（透明→RGBAホバーに切替） */}
-              <div className="absolute inset-0 transition-all duration-200 flex flex-col justify-end p-3 bg-[rgba(0,0,0,0)] group-hover:bg-[rgba(0,0,0,0.6)]">
-                <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                  <p className="text-white text-xs font-semibold">
-                    {formatDate(post.createdAt)}
-                  </p>
-                  {post.minutes > 0 && (
-                    <p className="text-white text-xs">
-                      ⏱️ {post.minutes}分
-                    </p>
+      {/* 操作バー */}
+      <div className="flex items-center gap-3">
+
+        <button
+          onClick={() => {
+            setSelectMode(!selectMode);
+            setSelectedIds([]);
+          }}
+          className="px-4 py-2 rounded bg-gray-800 text-white text-sm"
+        >
+          {selectMode ? '選択終了' : '9選を作る'}
+        </button>
+
+        {selectMode && (
+          <>
+            <span className="text-sm text-gray-500">
+              {selectedIds.length} / 9 選択
+            </span>
+
+            <button
+              onClick={createNine}
+              disabled={selectedIds.length !== 9}
+              className="px-4 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-40"
+            >
+              9選画像を作成
+            </button>
+          </>
+        )}
+
+      </div>
+
+      {/* グリッド */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+        {posts.map((post) => {
+
+          const hasError = imageErrors.has(post.id);
+          const selected = selectedIds.includes(post.id);
+
+          return (
+            <div
+              key={post.id}
+              onClick={() => {
+                if (selectMode) {
+                  toggleSelect(post.id);
+                } else {
+                  router.push(`/record/${post.id}`);
+                }
+              }}
+              className={`group relative overflow-hidden rounded-lg cursor-pointer
+              ${selected ? 'ring-4 ring-blue-500' : ''}
+              `}
+            >
+
+              <div className="relative w-full bg-white" style={{ paddingBottom: '100%' }}>
+                <div className="absolute inset-0 bg-gray-100">
+
+                  {hasError || !post.imageUrl ? (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <span className="text-2xl">⚠️</span>
+                    </div>
+                  ) : (
+                    <img
+                      src={getProxyImageUrl(post.imageUrl)}
+                      alt={post.comment || 'drawing'}
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                      onError={() => handleImageError(post.id)}
+                    />
                   )}
+
                 </div>
+
+                {/* 選択マーク */}
+                {selectMode && selected && (
+                  <div className="absolute top-2 right-2 bg-blue-600 text-white text-xs px-2 py-1 rounded">
+                    ✓
+                  </div>
+                )}
+
+                {/* ホバー情報 */}
+                <div className="absolute inset-0 flex flex-col justify-end p-3 bg-[rgba(0,0,0,0)] group-hover:bg-[rgba(0,0,0,0.6)] transition">
+                  <div className="opacity-0 group-hover:opacity-100 text-white text-xs">
+                    <p>{formatDate(post.createdAt)}</p>
+                    {post.minutes > 0 && <p>⏱️ {post.minutes}分</p>}
+                  </div>
+                </div>
+
               </div>
             </div>
-          </Link>
-        );
-      })}
+          );
+        })}
+      </div>
+
     </div>
   );
 }

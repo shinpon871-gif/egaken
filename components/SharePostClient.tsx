@@ -137,7 +137,7 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
 
       {post.aiComment && (
         <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
-          <span className="font-semibold text-blue-600">AIコメント</span>
+          <span className="font-semibold text-blue-600">えがけん応援コメント</span>
           <p className="text-gray-700 whitespace-pre-wrap">{post.aiComment}</p>
         </div>
       )}

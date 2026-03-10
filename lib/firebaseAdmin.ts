@@ -34,7 +34,7 @@ try {
     }
   }
 
-  // Admin SDK 初期化
+  // Admin SDK 初期化（既に初期化済みであれば再初期化しない）
   if (!admin.apps.length && serviceAccount) {
     const storageBucket =
       process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET ||
@@ -52,6 +52,7 @@ try {
     console.log('[FIREBASE_ADMIN] Firebase Admin SDK 初期化完了')
   }
 
+  // Firestore インスタンス取得
   adminDb = admin.firestore()
   // gRPCエラー回避: REST経由でFirestoreを動かす
   adminDb.settings({ experimentalForceLongPolling: true, useFetchStreams: true })

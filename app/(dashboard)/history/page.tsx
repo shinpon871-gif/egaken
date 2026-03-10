@@ -16,23 +16,22 @@ export default function HistoryPage() {
   const { user } = useAuth() // Firebase Auth から現在ログインユーザー取得
 
   useEffect(() => {
-    if (!user) {
-      setLoading(false) // ユーザーがいない場合もローディングを終了
+    if (!user?.uid) {
+      setLoading(false)
       setPosts([])
       return
     }
 
     async function loadPosts() {
       try {
-        const res = await fetch(`/api/myPosts?uid=${user?.uid}`) // uid付きでAPI呼び出し
+        const res = await fetch(`/api/myPosts?uid=${user?.uid}`)
         if (!res.ok) {
-          const text = await res.text()
-          console.error('API error:', text)
+          console.error('API error:', await res.text())
           setPosts([])
           return
         }
 
-        const data = await res.json()
+        const data: { posts: Post[] } = await res.json()
         setPosts(data.posts ?? [])
       } catch (error) {
         console.error('fetch error:', error)

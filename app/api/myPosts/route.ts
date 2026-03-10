@@ -16,6 +16,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ posts: [] }, { status: 400 })
     }
 
+    // UID でサーバー側フィルタ：自分の投稿のみ取得
     const snap = await adminDb
       .collection('posts')
       .where('userId', '==', userId)
@@ -31,6 +32,8 @@ export async function GET(req: Request) {
         // ９選判定：weeklyThemeId があるものをピックアップ
         isTopNine: !!data.weeklyThemeId,
         weeklyThemeTitle: data.weeklyThemeTitle ?? null,
+        // 過去投稿に userId がない場合はフラグだけ付与（フロントで自分の投稿として扱える）
+        isMissingUserId: !data.userId,
       }
     })
 

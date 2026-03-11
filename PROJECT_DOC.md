@@ -39,6 +39,7 @@
       - [APIレスポンス例](#apiレスポンス例)
       - [拡張・カスタマイズ方法](#拡張カスタマイズ方法)
     - [AIコメント機能：注意点](#aiコメント機能注意点)
+    - [✨ 「#えがけん最近描いた絵9選」機能フロー](#-えがけん最近描いた絵9選機能フロー)
   - [開発コマンド](#開発コマンド)
   - [セキュリティ](#セキュリティ)
   - [今後の拡張機能候補](#今後の拡張機能候補)
@@ -221,6 +222,7 @@ egaken/
 │   │   │   └── page.tsx
 │   │   ├── history/
 │   │   │   └── page.tsx
+│   │   │       (✨ ユーザーの投稿履歴一覧・9選画像作成UI)
 │   │   ├── home/
 │   │   │   └── page.tsx
 │   │   ├── post/
@@ -228,16 +230,34 @@ egaken/
 │   │   │       └── page.tsx
 │   │   └── ...
 │   ├── api/
+│   │   ├── createNine/
+│   │   │   └── route.ts
+│   │   │       (✨ 9枚の投稿画像をGrid状に合成・PNG生成・Firestore保存)
 │   │   ├── generate-comment/
 │   │   │   └── route.ts
-│   │   └── image-proxy/
-│   │       └── route.ts
+│   │   ├── grid/
+│   │   │   └── [shareId]/
+│   │   │       └── route.tsx
+│   │   │           (✨ 9選のOGP画像生成・3x3グリッド+ハッシュタグOGP表示)
+│   │   ├── image-proxy/
+│   │   │   └── route.ts
+│   │   ├── myPosts/
+│   │   │   └── route.ts
+│   │   │       (✨ ログインユーザーの投稿一覧をサーバー取得・9選作成用)
+│   │   └── og/
+│   │       └── [recordId]/
+│   │           └── route.tsx
+│   │               (単一投稿のOGP画像生成)
 │   ├── auth/
 │   │   └── login/
 │   │       └── page.tsx
 │   ├── i/
 │   │   └── [hash]/
 │   │       └── route.ts
+│   ├── nine/
+│   │   └── [shareId]/
+│   │       └── page.tsx
+│   │           (✨ 9選共有ページ・Firestore取得・X投稿リンク表示)
 │   ├── profile/
 │   │   └── page.tsx
 │   ├── record/
@@ -252,6 +272,7 @@ egaken/
 │   ├── CreateRecordForm.tsx
 │   ├── FirebaseSecurityDiagnostic.tsx
 │   ├── HistoryGrid.tsx
+│   │   (✨ 投稿選択グリッド・9選生成ボタン・チェックボックスUI)
 │   ├── ImageUploadArea.tsx
 │   ├── LinkEmailForm.tsx
 │   ├── RecordList.tsx
@@ -263,6 +284,8 @@ egaken/
 │   └── AuthContext.tsx
 ├── lib/
 │   ├── firebase.ts
+│   ├── firebaseAdmin.ts
+│   │   (サーバー側Firebase Admin SDK初期化)
 │   ├── getPost.ts
 │   ├── growth.ts
 │   ├── stats.ts
@@ -446,6 +469,59 @@ POST /api/generate-comment
   createdAt: Timestamp,        // 作成日時
 ```
 
+### ✨ 「#えがけん最近描いた絵9選」機能フロー
+
+**概要:**
+ユーザーの投稿から任意の9枚を選択し、3x3グリッド状に合成した画像を自動生成。
+Firestoreに保存してシェアリンクを生成し、X(Twitter)で投稿可能にする機能です。
+
+**実装フロー:**
+
+1. **投稿一覧取得** (`/dashboard/history`)
+   - `AuthContext` からログインユーザー情報を取得
+   - `/api/myPosts?uid={userId}` を呼び出し、投稿一覧を取得
+
+2. **9枚選択UI** (`HistoryGrid.tsx`)
+   - 投稿をグリッド状に表示
+   - チェックボックスで9枚まで選択可能
+   - 「9選を生成」ボタンで作成開始
+
+3. **画像合成・生成** (`/api/createNine`)
+   - 選択された9つの投稿IDから画像URLを取得
+   - 各画像をダウンロード（失敗時はグレー代替画像）
+   - `sharp`ライブラリで 300px × 300px のグリッド画像に合成
+   - PNG形式をBase64エンコードして `data:image/png;base64,...` 形式に変換
+
+4. **Firestore保存** (`/api/createNine`)
+   - `nineShares` コレクションに以下を保存:
+     - `shareId`: ランダム生成（UUID → 8文字）
+     - `postIds`: 選択された投稿ID配列
+     - `imageUrls`: 各投稿の画像URL配列
+     - `imageDataUrl`: 合成画像（Base64 Data URL）
+     - `createdAt`: 作成日時
+
+5. **9選ページ表示** (`/nine/[shareId]`)
+   - Firestoreから共有データを取得
+   - 合成画像を表示
+   - X投稿インテントURL生成：
+  
+     ```text
+     https://twitter.com/intent/tweet?text=%23えがけん最近描いた絵9選&url={shareUrl}
+     ```
+
+6. **OGP画像生成** (`/api/grid/[shareId]`)
+   - Firestore REST APIから `imageUrls` を取得
+   - `next/og` で 1200×1200px の OGP 画像を生成
+   - 3×3グリッド + ハッシュタグテキスト表示
+
+**関連ファイル:**
+
+- `HistoryGrid.tsx`: 選択UI・9選生成ボタン
+- `/api/myPosts/route.ts`: ユーザー投稿取得API
+- `/api/createNine/route.ts`: 画像合成・Firestore保存
+- `/nine/[shareId]/page.tsx`: 9選共有ページ
+- `/api/grid/[shareId]/route.tsx`: OGP画像生成
+  
 ## 開発コマンド
 
 ```bash

@@ -1,6 +1,7 @@
 // app/nine/[shareId]/page.tsx
 import { Metadata } from "next";
 import { notFound } from "next/navigation";
+import Link from "next/link";
 
 // キャッシュを無効化し、常に最新の状態でレンダリングする設定
 export const dynamic = 'force-dynamic';
@@ -73,6 +74,9 @@ export default async function SharePage({ params }: { params: PageParams | Promi
 
   return (
     <div className="max-w-xs mx-auto py-8 px-4">
+      <Link href="/" className="inline-block mb-4 px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded">
+        ← ホームへ戻る
+      </Link>
       <h1 className="text-xl font-bold mb-4 text-center">9選画像</h1>
       <img src={imageUrl} alt="9選画像" className="w-full rounded-lg shadow mb-4" style={{ maxWidth: 300, width: "100%" }} />
       <div className="flex justify-center mb-2">

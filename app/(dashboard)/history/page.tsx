@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import HistoryGrid from '@/components/HistoryGrid'
 import { useAuth } from '@/contexts/AuthContext' // ログイン済みユーザー情報を取得するフック
 
@@ -50,6 +51,9 @@ export default function HistoryPage() {
 
   return (
     <div className="p-6">
+      <Link href="/" className="inline-block mb-4 px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded">
+        ← ホームへ戻る
+      </Link>
       <HistoryGrid posts={posts} />
     </div>
   )

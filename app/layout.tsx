@@ -16,6 +16,25 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://egaken.vercel.app"),
+  title: {
+    default: "えがけん",
+    template: "%s | えがけん",
+  },
+  description: "お絵描きの記録を毎日続けるWebアプリ",
+  openGraph: {
+    title: {
+      default: "えがけん",
+      template: "%s | えがけん",
+    },
+    description: "お絵描きの記録を毎日続けるWebアプリ",
+    type: "website",
+    locale: "ja_JP",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "えがけん",
+    description: "お絵描きの記録を毎日続けるWebアプリ",
+  },
 };
 
 export default function RootLayout({

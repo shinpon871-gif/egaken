@@ -4,10 +4,11 @@ import { notFound } from "next/navigation";
 
 // キャッシュを無効化し、常に最新の状態でレンダリングする設定
 export const dynamic = 'force-dynamic';
-export const revalidate = 0;
+export const revalidate = false;
+export const dynamicParams = true;
 
-interface PageProps {
-  params: { shareId: string } | Promise<{ shareId: string }>;
+interface PageParams {
+  shareId: string;
 }
 
 // Share ID の形式チェック
@@ -21,11 +22,13 @@ const getNineShareImageUrl = (shareId: string) => {
   return `https://firebasestorage.googleapis.com/v0/b/egaken-b4a7e.firebasestorage.app/o/nineShares%2F${shareId}.jpg?alt=media`;
 };
 
-export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
-  const resolvedParams = await (params instanceof Promise ? params : Promise.resolve(params));
+export async function generateMetadata(
+  { params }: { params: PageParams | Promise<PageParams> }
+): Promise<Metadata> {
+  const resolvedParams = params instanceof Promise ? await params : params;
   const { shareId } = resolvedParams;
 
-  // デバッグ用ログ
+  // メタデータ生成のログを出力
   console.log(`[METADATA] Generating metadata for shareId: ${shareId}`);
 
   if (!isValidShareId(shareId)) {
@@ -42,6 +45,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       title: "えがけん - 9選画像",
       description: "最近描いた9枚の絵",
       url: `https://egaken.vercel.app/nine/${shareId}`,
+      type: "website",
       images: [{ url: imageUrl, width: 1200, height: 630, alt: "9選合成画像" }],
     },
     twitter: {
@@ -53,26 +57,37 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-export default async function SharePage({ params }: PageProps) {
-  const resolvedParams = await (params instanceof Promise ? params : Promise.resolve(params));
+export default async function SharePage({ params }: { params: PageParams | Promise<PageParams> }) {
+  const resolvedParams = params instanceof Promise ? await params : params;
   const { shareId } = resolvedParams;
   
-  // デバッグ用ログ：サーバーのコンソールを確認してください
-  console.log(`Rendering SharePage for ID: ${shareId}`);
+  // ページレンダリングのログを出力
+  console.log(`[PAGE] Rendering SharePage for shareId: ${shareId}`);
+  
   const imageUrl = getNineShareImageUrl(shareId);
-  console.log(`Generated Image URL: ${imageUrl}`);
+  console.log(`[PAGE] Image URL: ${imageUrl}`);
 
   if (!isValidShareId(shareId)) {
     notFound();
   }
 
   return (
-    <div style={{ padding: '20px', border: '10px solid red', backgroundColor: 'lightyellow' }}>
-      <h1 style={{ fontSize: '24px', fontWeight: 'bold', color: 'red' }}>【最終テスト】このファイルが読み込まれています</h1>
-      <p>Share ID: {shareId}</p>
-      <p>画像URL:</p>
-      <textarea readOnly style={{ width: '100%', height: '100px', border: '1px solid black' }} defaultValue={imageUrl} />
-      <img src={imageUrl} alt="9選合成画像" style={{ width: '100%', border: '5px solid blue', marginTop: '10px' }} />
+    <div className="max-w-xs mx-auto py-8 px-4">
+      <h1 className="text-xl font-bold mb-4 text-center">9選画像</h1>
+      <img src={imageUrl} alt="9選画像" className="w-full rounded-lg shadow mb-4" style={{ maxWidth: 300, width: "100%" }} />
+      <div className="flex justify-center mb-2">
+        <a
+          href={`https://twitter.com/intent/tweet?text=%23えがけん最近描いた絵9選&url=https://egaken.vercel.app/nine/${shareId}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-block bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded"
+        >
+          X（Twitter）で投稿
+        </a>
+      </div>
+      <div className="text-center text-gray-400 text-xs">
+        <span>Share ID: {shareId}</span>
+      </div>
     </div>
   );
 }

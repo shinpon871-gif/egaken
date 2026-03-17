@@ -1,98 +1,182 @@
+// app\api\createNine\route.ts
 import { NextResponse } from "next/server"
 import sharp from "sharp"
+import { admin, adminDb, adminStorage } from "@/lib/firebaseAdmin"
 
 export const runtime = "nodejs"
 
 const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID
+const storageBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
 
 export async function POST(req: Request) {
-  const { postIds } = await req.json()
+  console.log("[createNine] リクエスト開始")
 
-  if (!postIds || !Array.isArray(postIds) || postIds.length !== 9) {
-    return NextResponse.json({ error: "9 posts required" }, { status: 400 })
-  }
+  try {
+    const { postIds } = await req.json()
 
-  // 画像URL取得
-  const imageUrls: string[] = await Promise.all(
-    postIds.map(async (id: string) => {
-      const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/posts/${id}`
-      const doc = await fetch(url).then(r => r.json())
-      return doc.fields.imageUrl.stringValue
-    })
-  )
-
-  // 画像をダウンロード
-  const images: Buffer[] = await Promise.all(
-    imageUrls.map(async (url: string) => {
-      try {
-        const res = await fetch(url)
-        const arrayBuffer = await res.arrayBuffer()
-        return Buffer.from(arrayBuffer)
-      } catch {
-        // 失敗時はグレー画像
-        return await sharp({
-          create: {
-            width: 100,
-            height: 100,
-            channels: 3,
-            background: { r: 238, g: 238, b: 238 }
-          }
-        }).png().toBuffer()
-      }
-    })
-  )
-
-  // 3x3グリッドで合成
-  const size = 300        // 全体 300px
-  const cell = 100        // 1セル 100px
-  const composites: sharp.OverlayOptions[] = []
-
-  for (let i = 0; i < 9; i++) {
-    composites.push({
-      input: await sharp(images[i]).resize(cell, cell).toBuffer(),
-      left: (i % 3) * cell,
-      top: Math.floor(i / 3) * cell
-    })
-  }
-
-  // 背景白
-  let base = sharp({
-    create: {
-      width: size,
-      height: size,
-      channels: 3,
-      background: { r: 255, g: 255, b: 255 }
+    if (!postIds || !Array.isArray(postIds) || postIds.length !== 9) {
+      console.error("[createNine] postIds検証失敗", postIds?.length)
+      return NextResponse.json({ error: "9 posts required" }, { status: 400 })
     }
-  }).png()
 
-  // 合成
-  base = base.composite(composites)
+    console.log("[createNine] postIds検証完了", postIds.length)
 
-  // PNGバッファ
-  const buffer = await base.png().toBuffer()
+    // 画像URL取得
+    const imageUrls: string[] = []
+    for (const id of postIds) {
+      console.log("[createNine] postId取得", id)
 
-  // shareId生成
-  const shareId = crypto.randomUUID().replace(/-/g, "").slice(0, 8)
+      try {
+        if (!adminDb) {
+          throw new Error("Firestore が初期化されていません")
+        }
+        const doc = await adminDb.collection("posts").doc(id).get()
+        const imageUrl = doc.data()?.imageUrl
+        if (!imageUrl) {
+          throw new Error(`imageUrl not found for post ${id}`)
+        }
+        console.log("[createNine] imageUrl", imageUrl)
+        imageUrls.push(imageUrl)
+      } catch (err) {
+        console.error("[createNine] Firestore取得失敗", id, err)
+        throw err
+      }
+    }
 
-  // Firestore nineSharesに保存
-  const saveUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/nineShares/${shareId}`
+    console.log("[createNine] 全imageUrl取得完了", imageUrls.length)
 
-  // Base64で保存
-  const imageBase64 = buffer.toString('base64')
-  const imageDataUrl = `data:image/png;base64,${imageBase64}`
+    // 画像をダウンロード（サムネイル化・並列処理）
+    const images: Buffer[] = await Promise.all(
+      imageUrls.map(async (url) => {
+        const thumbUrl = url + "=w450-h450-c"
+        console.log("[createNine] サムネイルURL", thumbUrl)
 
-  await fetch(saveUrl, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      fields: {
-        postIds: { arrayValue: { values: postIds.map((id: string) => ({ stringValue: id })) } },
-        imageUrls: { arrayValue: { values: imageUrls.map((u: string) => ({ stringValue: u })) } },
-        imageDataUrl: { stringValue: imageDataUrl },
-        createdAt: { timestampValue: new Date().toISOString() }
+        try {
+          const res = await fetch(thumbUrl)
+          const arrayBuffer = await res.arrayBuffer()
+          const buffer = Buffer.from(arrayBuffer)
+          console.log("[createNine] サムネイルDL", buffer.length)
+          return buffer
+        } catch (err) {
+          console.error("[createNine] ダウンロード失敗", thumbUrl)
+          console.log("[createNine] 代替画像使用")
+
+          const fallbackBuffer = await sharp({
+            create: {
+              width: 100,
+              height: 100,
+              channels: 3,
+              background: { r: 238, g: 238, b: 238 }
+            }
+          }).png().toBuffer()
+
+          return fallbackBuffer
+        }
+      })
+    )
+
+    console.log("[createNine] 全画像ダウンロード完了", images.length)
+
+    // 3x3グリッドで合成
+    const width = 1200
+    const height = 630
+    const cellWidth = width / 3
+    const cellHeight = height / 3
+    const composites: sharp.OverlayOptions[] = []
+
+    for (let i = 0; i < 9; i++) {
+      const col = i % 3
+      const row = Math.floor(i / 3)
+      const left = col * cellWidth
+      const top = row * cellHeight
+
+      console.log("[createNine] 画像配置", i, left, top)
+
+      const resized = await sharp(images[i])
+        .resize(Math.round(cellWidth), Math.round(cellHeight), { fit: "cover" })
+        .toBuffer()
+
+      composites.push({
+        input: resized,
+        left: Math.round(left),
+        top: Math.round(top)
+      })
+    }
+
+    console.log("[createNine] 配置完了", composites.length)
+
+    // 背景白で合成
+    const buffer = await sharp({
+      create: {
+        width: width,
+        height: height,
+        channels: 3,
+        background: { r: 255, g: 255, b: 255 }
       }
     })
-  })
+      .composite(composites)
+      .jpeg({
+        quality: 78,
+        progressive: true,
+        mozjpeg: true,
+        chromaSubsampling: "4:2:0"
+      })
+      .toBuffer()
 
-  return NextResponse.json({ shareId })
+    console.log("[createNine] 合成完了", buffer.length)
+    console.log("[createNine] JPEGサイズ", buffer.length)
+
+    // shareId生成
+    const shareId = crypto.randomUUID().slice(0, 8)
+    console.log("[createNine] shareId生成", shareId)
+
+    // Firebase Storage にアップロード
+    if (!adminStorage) {
+      throw new Error("Storage が初期化されていません")
+    }
+
+    const filePath = `nineShares/${shareId}.jpg`
+    console.log("[createNine] Storage upload", filePath)
+
+    const bucket = adminStorage
+    const file = bucket.file(filePath)
+
+    await file.save(buffer, {
+      metadata: {
+        contentType: "image/jpeg",
+        cacheControl: "public, max-age=31536000, immutable"
+      }
+    })
+
+    await file.makePublic()
+
+    const bucketName = storageBucket || "egaken-b4a7e.appspot.com"
+    const publicUrl =
+      `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(filePath)}?alt=media`
+    console.log("[createNine] publicUrl", publicUrl)
+
+    // Firestore に保存
+    if (!adminDb) {
+      throw new Error("Firestore が初期化されていません")
+    }
+
+    const db = adminDb
+    const now = new Date().toISOString()
+
+    await db.collection("nineShares").doc(shareId).set({
+      postIds: postIds,
+      imageUrls: imageUrls,
+      imageStoragePath: filePath,
+      imageUrl: publicUrl,
+      createdAt: now,
+      updatedAt: now
+    })
+
+    console.log("[createNine] Firestore保存完了", shareId)
+
+    return NextResponse.json({ shareId, imageUrl: publicUrl })
+  } catch (err) {
+    console.error("[createNine] 処理失敗", err)
+    return NextResponse.json({ error: "Failed to create nine share" }, { status: 500 })
+  }
 }

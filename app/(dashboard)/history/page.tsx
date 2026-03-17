@@ -51,8 +51,9 @@ export default function HistoryPage() {
 
   return (
     <div className="p-6">
-      <Link href="/" className="inline-block mb-4 px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded">
-        ← ホームへ戻る
+      <Link href="/" className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-6 py-3 font-semibold text-gray-700 transition hover:bg-gray-50 mb-4">
+        <span>←</span>
+        ホームに戻る
       </Link>
       <HistoryGrid posts={posts} />
     </div>

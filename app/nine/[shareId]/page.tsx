@@ -74,8 +74,9 @@ export default async function SharePage({ params }: { params: PageParams | Promi
 
   return (
     <div className="max-w-xs mx-auto py-8 px-4">
-      <Link href="/" className="inline-block mb-4 px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded">
-        ← ホームへ戻る
+      <Link href="/" className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-6 py-3 font-semibold text-gray-700 transition hover:bg-gray-50 mb-4">
+        <span>←</span>
+        ホームに戻る
       </Link>
       <h1 className="text-xl font-bold mb-4 text-center">9選画像</h1>
       <img src={imageUrl} alt="9選画像" className="w-full rounded-lg shadow mb-4" style={{ maxWidth: 300, width: "100%" }} />

@@ -1,3 +1,4 @@
+// components/HistoryGrid.tsx
 'use client'
 
 import React, { useState } from 'react'
@@ -65,21 +66,29 @@ export default function HistoryGrid({ posts }: Props) {
         {posts.map((post) => {
           const checked = selected.includes(post.id)
           const disabled = !checked && selected.length >= 9
+
           return (
             <div
               key={post.id}
-              className={`relative aspect-square overflow-hidden rounded-lg border ${checked ? 'ring-4 ring-blue-400' : ''}`}
+              className={`relative aspect-square overflow-hidden rounded-lg border ${
+                checked ? 'ring-4 ring-blue-400' : ''
+              }`}
             >
+              {/* ▼ ここ追加：画像クリックで遷移 */}
               <img
                 src={post.imageUrl}
                 alt="post"
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover cursor-pointer"
+                onClick={() => router.push(`/record/${post.id}`)}
               />
+
+              {/* ▼ ここ修正：イベント伝播を止める */}
               <input
                 type="checkbox"
                 className="absolute top-2 right-2 w-5 h-5 accent-blue-500"
                 checked={checked}
                 disabled={disabled}
+                onClick={(e) => e.stopPropagation()}
                 onChange={() => toggleSelect(post.id)}
                 aria-label="画像を選択"
               />
@@ -87,15 +96,17 @@ export default function HistoryGrid({ posts }: Props) {
           )
         })}
       </div>
+
       <div className="mt-6 flex justify-center">
         <button
-          className={`px-6 py-2 rounded bg-blue-600 text-white font-bold disabled:bg-gray-300`}
+          className="px-6 py-2 rounded bg-blue-600 text-white font-bold disabled:bg-gray-300"
           disabled={selected.length !== 9 || loading}
           onClick={handleCreateNine}
         >
           {loading ? '生成中...' : '9選を生成'}
         </button>
       </div>
+
       <div className="mt-2 text-center text-sm text-gray-500">
         {selected.length} / 9 枚選択
       </div>

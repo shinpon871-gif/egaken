@@ -202,37 +202,71 @@ export function RecordList({ refresh }: RecordListProps) {
                 {formatDate(record.createdAt)}
               </time>
 
-              {record.comment && (
-                <p className="mb-3 whitespace-pre-wrap text-gray-700">
-                  {record.comment}
-                </p>
+              {editingId === record.id ? (
+                <div className="mb-3 space-y-2">
+                  <textarea
+                    value={editComment}
+                    onChange={(e) => setEditComment(e.target.value)}
+                    maxLength={140}
+                    className="w-full rounded border border-gray-300 p-2 text-sm focus:border-blue-500 focus:outline-none"
+                    rows={3}
+                  />
+                  <p className="text-xs text-gray-500">
+                    {editComment.length}/140
+                  </p>
+                </div>
+              ) : (
+                record.comment && (
+                  <p className="mb-3 whitespace-pre-wrap text-gray-700">
+                    {record.comment}
+                  </p>
+                )
               )}
 
               <div className="flex flex-wrap items-center gap-2">
-                <ShareButton
-                  recordId={record.id}
-                  comment={record.comment}
-                  practiceMinutes={record.minutes}
-                  aiComment={record.aiComment}
-                  imageUrl={record.imageUrl}
-                  themeId={record.weeklyThemeId}
-                  themeTitle={record.weeklyThemeTitle}
-                />
+                {editingId === record.id ? (
+                  <>
+                    <button
+                      onClick={() => handleSaveEdit(record.id)}
+                      className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+                    >
+                      保存
+                    </button>
+                    <button
+                      onClick={handleCancelEdit}
+                      className="rounded-lg px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                    >
+                      キャンセル
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <ShareButton
+                      recordId={record.id}
+                      comment={record.comment}
+                      practiceMinutes={record.minutes}
+                      aiComment={record.aiComment}
+                      imageUrl={record.imageUrl}
+                      themeId={record.weeklyThemeId}
+                      themeTitle={record.weeklyThemeTitle}
+                    />
 
-                <button
-                  onClick={() => handleEditClick(record)}
-                  className="rounded-lg px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-50"
-                >
-                  編集
-                </button>
+                    <button
+                      onClick={() => handleEditClick(record)}
+                      className="rounded-lg px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                    >
+                      編集
+                    </button>
 
-                <button
-                  onClick={() => handleDelete(record.id)}
-                  disabled={deletingId === record.id}
-                  className="rounded-lg px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50"
-                >
-                  削除
-                </button>
+                    <button
+                      onClick={() => handleDelete(record.id)}
+                      disabled={deletingId === record.id}
+                      className="rounded-lg px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50"
+                    >
+                      削除
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </article>

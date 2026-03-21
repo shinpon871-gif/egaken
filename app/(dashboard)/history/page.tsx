@@ -50,12 +50,7 @@ export default function HistoryPage() {
   if (!posts.length) return <div className="p-6">投稿がまだありません</div>
 
   return (
-    <div className="p-6">
-      <Link href="/" className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-6 py-3 font-semibold text-gray-700 transition hover:bg-gray-50 mb-4">
-        <span>←</span>
-        ホームに戻る
-      </Link>
-
+    <div className="p-6 flex flex-col min-h-screen">
       {/* ▼ ユーザー向け説明パネル */}
       <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
         <h2 className="text-lg font-bold text-blue-900 mb-3">📖 この画面の使い方</h2>
@@ -75,7 +70,16 @@ export default function HistoryPage() {
         </ul>
       </div>
 
-      <HistoryGrid posts={posts} />
+      <div className="flex-1">
+        <HistoryGrid posts={posts} />
+      </div>
+
+      {/* アクション */}
+      <div className="flex gap-3 mt-8">
+        <Link href="/" className="flex-1 rounded-lg border border-gray-300 px-4 py-3 font-semibold text-gray-700 transition hover:bg-gray-50 text-center">
+          ← ホームに戻る
+        </Link>
+      </div>
     </div>
   )
 }

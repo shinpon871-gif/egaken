@@ -85,25 +85,30 @@ export default async function SharePage({ params }: { params: PageParams | Promi
       </header>
 
       {/* Main Content */}
-      <main className="max-w-xs mx-auto py-8 px-4">
-        <Link href="/" className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-6 py-3 font-semibold text-gray-700 transition hover:bg-gray-50 mb-4">
-          <span>←</span>
-          ホームに戻る
-        </Link>
-        <h1 className="text-xl font-bold mb-4 text-center">#えがけん最近描いた絵9選</h1>
-        <img src={imageUrl} alt="" className="w-full rounded-lg shadow mb-4" style={{ maxWidth: 300, width: "100%" }} />
-        <div className="flex justify-center mb-2">
-          <a
-            href={`https://twitter.com/intent/tweet?text=%23えがけん最近描いた絵9選&url=https://egaken.vercel.app/nine/${shareId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-block bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded"
-          >
-            X（Twitter）で投稿
-          </a>
+      <main className="max-w-xs mx-auto py-8 px-4 flex flex-col min-h-[calc(100vh-120px)]">
+        <div className="flex-1">
+          <h1 className="text-xl font-bold mb-4 text-center">#えがけん最近描いた絵9選</h1>
+          <img src={imageUrl} alt="" className="w-full rounded-lg shadow mb-4" style={{ maxWidth: 300, width: "100%" }} />
+          <div className="flex justify-center mb-2">
+            <a
+              href={`https://twitter.com/intent/tweet?text=%23えがけん最近描いた絵9選&url=https://egaken.vercel.app/nine/${shareId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded"
+            >
+              X（Twitter）で投稿
+            </a>
+          </div>
+          <div className="text-center text-gray-400 text-xs">
+            <span>Share ID: {shareId}</span>
+          </div>
         </div>
-        <div className="text-center text-gray-400 text-xs">
-          <span>Share ID: {shareId}</span>
+
+        {/* アクション */}
+        <div className="flex gap-3 mt-8">
+          <Link href="/" className="flex-1 rounded-lg border border-gray-300 px-4 py-3 font-semibold text-gray-700 transition hover:bg-gray-50 text-center">
+            ← ホームに戻る
+          </Link>
         </div>
       </main>
     </div>

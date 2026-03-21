@@ -223,7 +223,21 @@ export function RecordList({ refresh }: RecordListProps) {
                 )
               )}
 
-              <div className="flex flex-wrap items-center gap-2">
+              {!editingId && (
+                <div className="mb-3">
+                  <ShareButton
+                    recordId={record.id}
+                    comment={record.comment}
+                    practiceMinutes={record.minutes}
+                    aiComment={record.aiComment}
+                    imageUrl={record.imageUrl}
+                    themeId={record.weeklyThemeId}
+                    themeTitle={record.weeklyThemeTitle}
+                  />
+                </div>
+              )}
+
+              <div className="flex gap-2">
                 {editingId === record.id ? (
                   <>
                     <button
@@ -241,16 +255,6 @@ export function RecordList({ refresh }: RecordListProps) {
                   </>
                 ) : (
                   <>
-                    <ShareButton
-                      recordId={record.id}
-                      comment={record.comment}
-                      practiceMinutes={record.minutes}
-                      aiComment={record.aiComment}
-                      imageUrl={record.imageUrl}
-                      themeId={record.weeklyThemeId}
-                      themeTitle={record.weeklyThemeTitle}
-                    />
-
                     <button
                       onClick={() => handleEditClick(record)}
                       className="rounded-lg px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-50"

@@ -21,6 +21,9 @@ export const metadata: Metadata = {
     template: "%s | えがけん",
   },
   description: "お絵描きの記録を毎日続けるWebアプリ",
+  icons: {
+    icon: "/egaken.png",
+  },
   openGraph: {
     title: {
       default: "えがけん",

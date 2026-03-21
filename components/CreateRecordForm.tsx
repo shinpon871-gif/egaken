@@ -22,7 +22,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentTheme, setCurrentTheme] = useState<any>(null);
-  const [participateInTheme, setParticipateInTheme] = useState(true); // お題参加チェックボックス
+  const [participateInTheme, setParticipateInTheme] = useState(false); // お題参加チェックボックス
 
   useEffect(() => {
     (async () => {

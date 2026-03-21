@@ -90,8 +90,8 @@ export default async function SharePage({ params }: { params: PageParams | Promi
           <span>←</span>
           ホームに戻る
         </Link>
-        <h1 className="text-xl font-bold mb-4 text-center">9選画像</h1>
-        <img src={imageUrl} alt="9選画像" className="w-full rounded-lg shadow mb-4" style={{ maxWidth: 300, width: "100%" }} />
+        <h1 className="text-xl font-bold mb-4 text-center">#えがけん最近描いた絵9選</h1>
+        <img src={imageUrl} alt="" className="w-full rounded-lg shadow mb-4" style={{ maxWidth: 300, width: "100%" }} />
         <div className="flex justify-center mb-2">
           <a
             href={`https://twitter.com/intent/tweet?text=%23えがけん最近描いた絵9選&url=https://egaken.vercel.app/nine/${shareId}`}

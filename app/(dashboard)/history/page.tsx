@@ -55,6 +55,26 @@ export default function HistoryPage() {
         <span>←</span>
         ホームに戻る
       </Link>
+
+      {/* ▼ ユーザー向け説明パネル */}
+      <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <h2 className="text-lg font-bold text-blue-900 mb-3">📖 この画面の使い方</h2>
+        <ul className="space-y-2 text-sm text-blue-800">
+          <li className="flex items-start gap-2">
+            <span className="text-lg">🖼️</span>
+            <span><strong>投稿画像をクリック</strong> → 投稿の詳細ページが開きます</span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-lg">☑️</span>
+            <span><strong>右上のチェックボックスをクリック</strong> → 最大9枚まで「9選画像」用に選択できます（青い枠が表示されます）</span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-lg">✨</span>
+            <span><strong>9枚全て選択したら「9選を生成」ボタン</strong> → 3×3グリッド状に合成した画像が作成され、X(Twitter)でシェアできます</span>
+          </li>
+        </ul>
+      </div>
+
       <HistoryGrid posts={posts} />
     </div>
   )

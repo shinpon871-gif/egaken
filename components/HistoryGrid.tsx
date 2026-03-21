@@ -53,6 +53,12 @@ export default function HistoryGrid({ posts }: Props) {
 
   return (
     <div>
+      {/* ▼ 操作ガイド */}
+      <div className="mb-4 text-xs sm:text-sm text-gray-600 bg-gray-100 p-3 rounded">
+        <strong className="text-gray-800">💡 操作のコツ：</strong> 
+        <span className="ml-2">画像クリック＝詳細表示 | チェックボックス＝9選に選択</span>
+      </div>
+
       <div
         className="
           grid

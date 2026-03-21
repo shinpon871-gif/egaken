@@ -483,8 +483,15 @@ Firestoreに保存してシェアリンクを生成し、X(Twitter)で投稿可�
 
 2. **9枚選択UI** (`HistoryGrid.tsx`)
    - 投稿をグリッド状に表示
-   - チェックボックスで9枚まで選択可能
-   - 「9選を生成」ボタンで作成開始
+   - **2つの操作方法が共存：**
+     - **投稿画像をクリック** → `/record/[recordId]` に遷移し、その投稿の詳細ページを表示
+     - **チェックボックスをクリック** → 最大9枚まで9選用に選択（チェック状態は青い枠で表示）
+   - 「9選を生成」ボタンで作成開始（9枚全て選択されたときのみクリック可能）
+
+   **ユーザー操作ガイド：**
+   - ✅ 個別投稿の詳細を見たい → 画像本体をクリック
+   - ✅ 9選に含める投稿を選びたい → 画像右上のチェックボックスをクリック
+   - ✅ どちらも可能 → 同じグリッド上で両方の操作ができます
 
 3. **画像合成・生成** (`/api/createNine`)
    - 選択された9つの投稿IDから画像URLを取得
@@ -521,6 +528,34 @@ Firestoreに保存してシェアリンクを生成し、X(Twitter)で投稿可�
 - `/api/createNine/route.ts`: 画像合成・Firestore保存
 - `/nine/[shareId]/page.tsx`: 9選共有ページ
 - `/api/grid/[shareId]/route.tsx`: OGP画像生成
+
+**実装の注意点（イベント処理）：**
+
+```typescript
+// HistoryGrid.tsx での実装例
+
+// 画像クリックで個別投稿ページへ遷移
+<img
+  src={post.imageUrl}
+  alt="post"
+  className="w-full h-full object-cover cursor-pointer"
+  onClick={() => router.push(`/record/${post.id}`)}
+/>
+
+// チェックボックスクリックはイベント伝播を止める（画像クリックイベントが発火しないように）
+<input
+  type="checkbox"
+  className="absolute top-2 right-2 w-5 h-5 accent-blue-500"
+  checked={checked}
+  disabled={disabled}
+  onClick={(e) => e.stopPropagation()}  // ← クリックイベントの伝播を停止
+  onChange={() => toggleSelect(post.id)}
+  aria-label="画像を選択"
+/>
+```
+
+- 画像をクリック時にチェックボックスが反応しないよう `e.stopPropagation()` でイベント伝播を明示的に止める
+- これにより、画像クリック時は必ず遷移、チェックボックスクリック時は選択状態の切り替えのみが実行される
   
 ## 開発コマンド
 

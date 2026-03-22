@@ -208,7 +208,7 @@ export function RecordList({ refresh }: RecordListProps) {
                     value={editComment}
                     onChange={(e) => setEditComment(e.target.value)}
                     maxLength={140}
-                    className="w-full rounded border border-gray-300 p-2 text-sm focus:border-blue-500 focus:outline-none"
+                    className="w-full rounded border border-gray-300 p-2 text-sm focus:border-blue-500 focus:outline-none appearance-none text-gray-900"
                     rows={3}
                   />
                   <p className="text-xs text-gray-500">

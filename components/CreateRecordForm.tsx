@@ -23,11 +23,19 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [currentTheme, setCurrentTheme] = useState<any>(null);
   const [participateInTheme, setParticipateInTheme] = useState(false); // お題参加チェックボックス
+  const [showThemeInfoBanner, setShowThemeInfoBanner] = useState(false); // お題情報バナー初回表示フラグ
 
   useEffect(() => {
     (async () => {
       const theme = await getCurrentWeeklyTheme();
       setCurrentTheme(theme);
+
+      // ローカルストレージから初回表示フラグを確認
+      const hasSeenThemeInfo = localStorage.getItem('hasSeenThemeInfo');
+      if (!hasSeenThemeInfo) {
+        setShowThemeInfoBanner(true);
+        localStorage.setItem('hasSeenThemeInfo', 'true');
+      }
     })();
   }, []);
 
@@ -225,7 +233,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         <>
           <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4">
             <p className="text-sm text-blue-800 font-semibold">
-              🔥 今週のお題：{currentTheme.title}
+              今週のお題：{currentTheme.title}
             </p>
           </div>
           <label className="flex items-center space-x-2 mt-2">
@@ -235,11 +243,11 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
               onChange={(e) => setParticipateInTheme(e.target.checked)}
             />
             <span className="text-sm text-gray-700">
-              今週のお題に参加する
+              参加する
             </span>
           </label>
           <p className="text-xs text-gray-500">
-            参加するとSNSシェア時に企画バッジが表示されます
+            お題バッジはシェア用プレビューにのみ付与され、作品そのものは加工されません。
           </p>
         </>
       )}
@@ -247,14 +255,19 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       <button
         type="submit"
         disabled={isLoading || !selectedFile}
-        className="w-full rounded-lg bg-orange-500 px-6 py-3 font-semibold text-white transition hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="w-full rounded-lg bg-orange-500 px-6 py-3 font-semibold text-white transition hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed mt-6"
       >
         {isLoading ? '保存中...' : '記録する'}
       </button>
-      <p className="text-xs text-gray-500 mt-2">
-        ※作品画像自体にバッジ等の加工は施されません。
-        SNSシェア時のプレビュー画像にのみ、お題参加バッジが重なって表示されます。
-      </p>
+
+      {/* 初回表示：お題情報バナー */}
+      {showThemeInfoBanner && (
+        <div className="bg-amber-50 border border-amber-200 rounded px-3 py-2 mt-4 h-8 flex items-center">
+          <p className="text-xs text-amber-800">
+            毎週の「お題」に参加して、みんなと一緒に作品を楽しみましょう（参加は任意）
+          </p>
+        </div>
+      )}
     </form>
   );
 }

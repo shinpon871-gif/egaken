@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase';
+import { calculateTrainingDays } from '@/lib/utils';
 import {
   collection,
   query,
@@ -42,6 +43,7 @@ export function RecordList({ refresh }: RecordListProps) {
   const [indexUrl, setIndexUrl] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editComment, setEditComment] = useState('');
+  const [trainingDays, setTrainingDays] = useState<number>(0);
 
   useEffect(() => {
     if (!user) return;
@@ -51,6 +53,14 @@ export function RecordList({ refresh }: RecordListProps) {
       where('userId', '==', user.uid),
       orderBy('createdAt', 'desc')
     );
+
+    // trainingDays を計算
+    calculateTrainingDays(user.uid).then((days) => {
+      setTrainingDays(days);
+    }).catch((e) => {
+      console.error('calculateTrainingDays failed:', e);
+      setTrainingDays(0);
+    });
 
     const unsubscribe = onSnapshot(
       q,
@@ -68,7 +78,7 @@ export function RecordList({ refresh }: RecordListProps) {
       (error) => {
         console.error('リスト取得エラー:', error);
         try {
-          const msg = (error && (error as any).message) || '';
+          const msg = (error && (error as unknown as { message?: string }).message) || '';
           const m = msg.match(/https:\/\/console\.firebase\.google\.com\/[\w\-\./?=%&,:]*/);
           if (m) setIndexUrl(m[0]);
         } catch {}
@@ -229,11 +239,17 @@ export function RecordList({ refresh }: RecordListProps) {
                     recordId={record.id}
                     comment={record.comment}
                     practiceMinutes={record.minutes}
-                    aiComment={record.aiComment}
-                    imageUrl={record.imageUrl}
                     themeId={record.weeklyThemeId}
                     themeTitle={record.weeklyThemeTitle}
+                    trainingDays={trainingDays}
                   />
+                </div>
+              )}
+
+              {record.aiComment && (
+                <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                  <span className="font-semibold text-blue-600">えがけん応援コメント</span>
+                  <p className="text-gray-700 whitespace-pre-wrap text-sm mt-1">{record.aiComment}</p>
                 </div>
               )}
 

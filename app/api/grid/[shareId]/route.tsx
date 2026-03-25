@@ -23,7 +23,7 @@ export async function GET(
 
   const urls: string[] =
     doc.fields.imageUrls.arrayValue.values.map(
-      (v: any) => v.stringValue
+      (v: unknown) => (v as Record<string, unknown>).stringValue
     )
 
   return new ImageResponse(

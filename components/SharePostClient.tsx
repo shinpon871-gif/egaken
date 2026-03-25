@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { calculateTrainingDays } from "@/lib/utils";
 import { ShareButton } from "@/components/ShareButton";
@@ -16,20 +16,27 @@ type Post = {
   minutes?: number;
   aiComment?: string;
   imageUrl?: string;
-  createdAt?: any;
+  createdAt?: unknown;
   weeklyThemeId?: string;
   weeklyThemeTitle?: string;
+  showOgp?: boolean;
+  ogpCrop?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
 };
 
 type Props = {
   recordId?: string;
   version?: string;
-  initialData: Post | null;
+  initialData: (Post | Record<string, unknown>) | null;
   v?: string;
 };
 
 export default function SharePostClient({ recordId, version, initialData, v }: Props) {
-  const [post, setPost] = useState<Post | null>(initialData);
+  const [post, setPost] = useState<Post | Record<string, unknown> | null>(initialData as Post | Record<string, unknown> | null);
   const [isLoading, setIsLoading] = useState<boolean>(!initialData);
   const [error, setError] = useState<string | null>(null);
   const [trainingDays, setTrainingDays] = useState<number>(0);
@@ -41,60 +48,61 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
       return;
     }
 
-    const fetchPost = async () => {
-      let currentPost = post;
+    // リアルタイムリスナーで投稿データの変更を監視
+    // これにより、AIコメント生成完了時に自動的に反映される
+    const unsubscribe = onSnapshot(
+      doc(db, "posts", recordId),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as Post;
+          const currentPost = { ...data, id: recordId };
 
-      // 投稿データがない、またはIDが一致しない場合は取得
-      if (!currentPost || currentPost.id !== recordId) {
-        setIsLoading(true);
-        setError(null);
-        try {
-          const docRef = doc(db, "posts", recordId);
-          const snap = await getDoc(docRef);
-          if (snap.exists()) {
-            const data = snap.data() as Post;
-            currentPost = { ...data, id: recordId };
-          } else {
-            setError("投稿が存在しません");
-            setIsLoading(false);
-            return;
+          // お題タイトルが欠けている場合のフォールバック取得
+          if (currentPost.weeklyThemeId && !currentPost.weeklyThemeTitle) {
+            getDoc(doc(db, "weeklyThemes", currentPost.weeklyThemeId)).then(
+              (themeSnap) => {
+                if (themeSnap.exists()) {
+                  const themeData = themeSnap.data();
+                  setPost((prevPost) => {
+                    if (!prevPost) return currentPost;
+                    return {
+                      ...(prevPost as Post),
+                      weeklyThemeTitle:
+                        themeData.title || "今週のお題",
+                    };
+                  });
+                }
+              }
+            );
           }
-        } catch (e) {
-          setError("データ取得中にエラーが発生しました");
+
+          setPost(currentPost);
           setIsLoading(false);
-          return;
+        } else {
+          setError("投稿が存在しません");
+          setIsLoading(false);
         }
+      },
+      (error) => {
+        console.error("リアルタイム監視エラー:", error);
+        setError("データ取得中にエラーが発生しました");
+        setIsLoading(false);
       }
+    );
 
-      // 2. お題タイトルが欠けている場合のフォールバック取得
-      if (currentPost && currentPost.weeklyThemeId && !currentPost.weeklyThemeTitle) {
-        try {
-          const themeSnap = await getDoc(doc(db, "weeklyThemes", currentPost.weeklyThemeId));
-          if (themeSnap.exists()) {
-            const themeData = themeSnap.data();
-            currentPost = {
-              ...currentPost,
-              weeklyThemeTitle: themeData.title || "今週のお題",
-            };
-          }
-        } catch (e) {
-          console.error("お題情報の取得に失敗しました:", e);
-        }
-      }
-
-      setPost(currentPost);
-      setIsLoading(false);
-    };
-    fetchPost();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => unsubscribe();
   }, [recordId]);
 
   // 通算日数を計算
   useEffect(() => {
-    if (post?.userId) {
-      calculateTrainingDays(post.userId).then(setTrainingDays);
+    const userId = (post as any)?.userId;
+    if (userId && typeof userId === 'string') {
+      calculateTrainingDays(userId).then(setTrainingDays).catch((e) => {
+        console.error('calculateTrainingDays failed:', e);
+        setTrainingDays(0);
+      });
     }
-  }, [post?.userId]);
+  }, [(post as any)?.userId]);
 
   if (isLoading) {
     return <p className="text-gray-600">読み込み中…</p>;
@@ -124,24 +132,24 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
 
   return (
     <div className="min-h-screen bg-gray-50 px-4 py-8 max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-4 text-gray-800">{post.title || 'お絵描きの記録'}</h1>
+      <h1 className="text-2xl font-bold mb-4 text-gray-800">{(post as Post | null)?.title || 'お絵描きの記録'}</h1>
 
-      {post.imageUrl && (
+      {(post as Post | null)?.imageUrl && (
         <div className="mb-4 w-full aspect-square relative rounded-lg overflow-hidden border bg-gray-100">
-          <Image src={post.imageUrl} alt="投稿画像" fill className="object-cover" unoptimized />
+          <Image src={(post as Post).imageUrl as string} alt="投稿画像" fill className="object-cover" unoptimized />
         </div>
       )}
 
-      {post.comment && (
+      {(post as Post | null)?.comment && (
         <div className="mb-4">
           <h3 className="font-semibold text-gray-800">コメント</h3>
-          <p className="text-gray-700 whitespace-pre-wrap">{post.comment}</p>
+          <p className="text-gray-700 whitespace-pre-wrap">{(post as Post).comment as string}</p>
         </div>
       )}
 
-      {post.minutes && post.minutes > 0 && (
+      {(post as Post | null)?.minutes && (post as Post).minutes! > 0 && (
         <div className="mb-4 p-3 bg-orange-50 rounded-lg text-gray-800">
-          <span>⏱️ 練習時間: {post.minutes}分</span>
+          <span>⏱️ 練習時間: {(post as Post).minutes!}分</span>
           {trainingDays > 0 && (
             <div className="mt-2">
               <span>📅 通算: {trainingDays}日目</span>
@@ -150,23 +158,23 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
         </div>
       )}
 
-      {post.aiComment && (
+      {(post as Post | null)?.aiComment && (
         <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
           <span className="font-semibold text-blue-600">えがけん応援コメント</span>
-          <p className="text-gray-700 whitespace-pre-wrap">{post.aiComment}</p>
+          <p className="text-gray-700 whitespace-pre-wrap">{(post as Post).aiComment as string}</p>
         </div>
       )}
 
       <div className="mb-4">
         <ShareButton
-          recordId={post.id}
-          comment={post.comment || ""}
-          practiceMinutes={post.minutes || 0}
-          aiComment={post.aiComment || ""}
-          imageUrl={post.imageUrl || ""}
-          themeId={post.weeklyThemeId}
-          themeTitle={post.weeklyThemeTitle}
-          userId={post.userId}
+          recordId={(post as Post).id as string}
+          comment={(post as Post).comment || ""}
+          practiceMinutes={(post as Post).minutes || 0}
+          themeId={(post as Post).weeklyThemeId as string | undefined}
+          themeTitle={(post as Post).weeklyThemeTitle as string | undefined}
+          userId={(post as Post).userId as string | undefined}
+          trainingDays={trainingDays}
+          showOgp={(post as Post).showOgp !== false}
         />
       </div>
 

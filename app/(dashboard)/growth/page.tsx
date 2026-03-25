@@ -37,7 +37,7 @@ export default function GrowthPage() {
         }
       } catch (err) {
         console.error('成長データ取得エラー:', err);
-        const errorMsg = (err as any)?.message || '不明なエラー';
+        const errorMsg = (err as unknown as Record<string, unknown>)?.message || '不明なエラー';
         setError(`データ取得に失敗しました。${errorMsg}`);
       } finally {
         setIsLoading(false);

@@ -1,4 +1,4 @@
-import { collection, getDocs, query, where, Timestamp } from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
 import { db } from "./firebase";
 
 export async function getCurrentWeeklyTheme() {

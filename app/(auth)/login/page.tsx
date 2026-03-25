@@ -10,7 +10,6 @@ import {
   User,
 } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '@/contexts/AuthContext';
 import { onAuthStateChanged } from 'firebase/auth';
 
 // --- アプリ内ブラウザ検出ユーティリティ ---
@@ -31,8 +30,6 @@ export default function LoginPage() {
   const [isRegister, setIsRegister] = useState(false);
   const [emailErrorMsg, setEmailErrorMsg] = useState('');
   const [showExternalMessage, setShowExternalMessage] = useState(false);
-  // external=1フラグ
-  const [isForcedExternal, setIsForcedExternal] = useState(false);
 
   // --- auth初期化 ---
   useEffect(() => {
@@ -40,11 +37,6 @@ export default function LoginPage() {
       setUser(u);
       setLoading(false);
     });
-    // external=1クエリ判定
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      setIsForcedExternal(params.get('external') === '1');
-    }
     return () => unsub();
   }, []);
 
@@ -79,8 +71,9 @@ export default function LoginPage() {
         const { sendPasswordResetEmail } = await import('firebase/auth');
         await sendPasswordResetEmail(auth, cleanedEmail);
         setEmailErrorMsg('パスワードリセット用のメールを送信しました');
-      } catch (err: any) {
-        switch (err.code) {
+      } catch (err: unknown) {
+        const error = err as { code?: string; message?: string };
+        switch (error.code) {
           case 'auth/user-not-found':
             setEmailErrorMsg('登録されていないメールアドレスです');
             break;
@@ -115,8 +108,9 @@ export default function LoginPage() {
       // Safari対応: popupは必ずボタン直後に同期で呼ぶ
       await signInWithPopup(auth, provider);
       // setPersistenceはlib/firebase.tsで一度だけ実行
-    } catch (err: any) {
-      setGoogleErrorMsg(err.message || 'Googleログインに失敗しました');
+    } catch (err: unknown) {
+      const error = err as { message?: string };
+      setGoogleErrorMsg(error.message || 'Googleログインに失敗しました');
     } finally {
       setIsSigningIn(false);
     }
@@ -153,8 +147,9 @@ export default function LoginPage() {
         await signInWithEmailAndPassword(auth, cleanedEmail, cleanedPassword);
       }
       router.replace('/home');
-    } catch (err: any) {
-      switch (err.code) {
+    } catch (err: unknown) {
+      const error = err as { code?: string; message?: string };
+      switch (error.code) {
         case 'auth/invalid-email':
           setEmailErrorMsg('メールアドレスの形式が正しくありません。');
           break;
@@ -180,7 +175,7 @@ export default function LoginPage() {
           setEmailErrorMsg('ログインできません。再度お試しください。');
           break;
         default:
-          setEmailErrorMsg(err.message || 'エラーが発生しました');
+          setEmailErrorMsg(error.message || 'エラーが発生しました');
           break;
       }
     } finally {

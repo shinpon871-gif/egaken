@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, Timestamp, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 
 /**
  * Firebase Storage 画像URL デバッグページ
@@ -11,7 +11,7 @@ import { collection, query, where, getDocs, Timestamp, orderBy, limit } from 'fi
  */
 export default function DebugStoragePage() {
   const { user } = useAuth();
-  const [posts, setPosts] = useState<any[]>([]);
+  const [posts, setPosts] = useState<Record<string, unknown>[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [testUrls, setTestUrls] = useState<Map<string, string>>(new Map());
 
@@ -31,7 +31,7 @@ export default function DebugStoragePage() {
         );
 
         const snapshot = await getDocs(q);
-        const postsData: any[] = [];
+        const postsData: Record<string, unknown>[] = [];
 
         snapshot.forEach((doc) => {
           const data = doc.data();
@@ -117,63 +117,67 @@ export default function DebugStoragePage() {
       </div>
 
       <div className="space-y-4">
-        {posts.map((post) => (
-          <div key={post.id} className="border rounded-lg p-4 space-y-2">
-            <p className="font-bold text-gray-800">投稿 ID: {post.id}</p>
+        {posts.map((post) => {
+          const postId = post.id as string;
+          const postImageUrl = post.imageUrl as string;
+          const postComment = post.comment as string;
+          return (
+            <div key={postId} className="border rounded-lg p-4 space-y-2">
+              <p className="font-bold text-gray-800">投稿 ID: {postId}</p>
 
-            {/* imageUrl */}
-            <div>
-              <label className="text-sm font-semibold text-gray-700">画像 URL:</label>
-              <textarea
-                value={post.imageUrl}
-                readOnly
-                className="w-full bg-gray-50 border border-gray-300 rounded p-2 text-xs font-mono mt-1"
-                rows={3}
-              />
-            </div>
-
-            {/* テストボタン */}
-            <button
-              onClick={() => testImageUrl(post.id, post.imageUrl)}
-              className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded text-sm font-semibold"
-            >
-              💾 このURLをテスト
-            </button>
-
-            {/* テスト結果 */}
-            {testUrls.has(post.id) && (
-              <div className="bg-gray-100 p-2 rounded text-sm font-mono">
-                {testUrls.get(post.id)}
-              </div>
-            )}
-
-            {/* 画像プレビュー（読み込みテスト） */}
-            <details className="cursor-pointer">
-              <summary className="text-sm font-semibold text-gray-700">
-                画像プレビュー（クリックして展開）
-              </summary>
-              <div className="mt-2 p-2 bg-gray-50 rounded border border-gray-200">
-                <img
-                  src={post.imageUrl}
-                  alt={post.comment}
-                  className="max-w-full max-h-64 border border-gray-300 rounded"
-                  onLoad={() => console.log(`✅ 画像読み込み成功: ${post.id}`)}
-                  onError={() => console.error(`❌ 画像読み込み失敗: ${post.id}`)}
-                  crossOrigin="anonymous"
+              {/* imageUrl */}
+              <div>
+                <label className="text-sm font-semibold text-gray-700">画像 URL:</label>
+                <textarea
+                  value={postImageUrl}
+                  readOnly
+                  className="w-full bg-gray-50 border border-gray-300 rounded p-2 text-xs font-mono mt-1"
+                  rows={3}
                 />
               </div>
-            </details>
 
-            {/* コメント */}
-            {post.comment && (
-              <div className="text-sm text-gray-600">
-                <strong>コメント:</strong> {post.comment}
-              </div>
-            )}
+              {/* テストボタン */}
+              <button
+                onClick={() => testImageUrl(postId, postImageUrl)}
+                className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded text-sm font-semibold"
+              >
+                💾 このURLをテスト
+              </button>
 
-            <hr className="my-2" />
-          </div>
-        ))}
+              {testUrls.has(postId) ? (
+                <div className="bg-gray-100 p-2 rounded text-sm font-mono">
+                  {(testUrls.get(postId) ?? '') as string}
+                </div>
+              ) : null}
+
+              {/* 画像プレビュー（読み込みテスト） */}
+              <details className="cursor-pointer">
+                <summary className="text-sm font-semibold text-gray-700">
+                  画像プレビュー（クリックして展開）
+                </summary>
+                <div className="mt-2 p-2 bg-gray-50 rounded border border-gray-200">
+                  <img
+                    src={postImageUrl}
+                    alt={postComment}
+                    className="max-w-full max-h-64 border border-gray-300 rounded"
+                    onLoad={() => console.log(`✅ 画像読み込み成功: ${postId}`)}
+                    onError={() => console.error(`❌ 画像読み込み失敗: ${postId}`)}
+                    crossOrigin="anonymous"
+                  />
+                </div>
+              </details>
+
+              {/* コメント */}
+              {postComment && (
+                <div className="text-sm text-gray-600">
+                  <strong>コメント:</strong> {postComment}
+                </div>
+              )}
+
+              <hr className="my-2" />
+            </div>
+          );
+        })}
       </div>
 
       {/* Firebase Security Rules ドキュメント */}

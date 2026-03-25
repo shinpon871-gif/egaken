@@ -24,10 +24,9 @@ const getNineShareImageUrl = (shareId: string) => {
 };
 
 export async function generateMetadata(
-  { params }: { params: PageParams | Promise<PageParams> }
+  { params }: { params: Promise<PageParams> }
 ): Promise<Metadata> {
-  const resolvedParams = params instanceof Promise ? await params : params;
-  const { shareId } = resolvedParams;
+  const { shareId } = await params;
 
   // メタデータ生成のログを出力
   console.log(`[METADATA] Generating metadata for shareId: ${shareId}`);
@@ -58,9 +57,8 @@ export async function generateMetadata(
   };
 }
 
-export default async function SharePage({ params }: { params: PageParams | Promise<PageParams> }) {
-  const resolvedParams = params instanceof Promise ? await params : params;
-  const { shareId } = resolvedParams;
+export default async function SharePage({ params }: { params: Promise<PageParams> }) {
+  const { shareId } = await params;
   
   // ページレンダリングのログを出力
   console.log(`[PAGE] Rendering SharePage for shareId: ${shareId}`);

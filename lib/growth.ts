@@ -96,8 +96,8 @@ export async function getGrowthData(userId: string): Promise<GrowthData | null> 
   } catch (error) {
     console.error('成長データ取得エラー:', error);
     // Firestore インデックス エラーかどうかを確認
-    const errorMessage = (error as any)?.message || '';
-    if (errorMessage.includes('index')) {
+    const errorMessage = (error as unknown as Record<string, unknown>)?.message || '';
+    if (String(errorMessage).includes('index')) {
       console.error('Firestore複合インデックスが必要です。Firebase コンソールでインデックスを作成してください。');
     }
     return null;

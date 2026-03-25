@@ -8,15 +8,15 @@ let adminDb: admin.firestore.Firestore | null = null;
 let adminStorage: Bucket | null = null;
 
 try {
-  let serviceAccount: any = null;
+  let serviceAccount: Record<string, unknown> | null = null;
 
   try {
     // 環境変数から読み込む場合（本番用）
     const key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
     if (key) {
       serviceAccount = JSON.parse(key);
-      if (serviceAccount.private_key) {
-        serviceAccount.private_key = serviceAccount.private_key
+      if (serviceAccount && serviceAccount.private_key) {
+        (serviceAccount as Record<string, unknown>).private_key = ((serviceAccount as Record<string, unknown>).private_key as string)
           .replace(/^["']|["']$/g, "")
           .replace(/\\n/g, "\n");
       }
@@ -47,9 +47,9 @@ try {
 
     admin.initializeApp({
       credential: admin.credential.cert({
-        projectId: serviceAccount.project_id,
-        clientEmail: serviceAccount.client_email,
-        privateKey: serviceAccount.private_key,
+        projectId: (serviceAccount as Record<string, unknown>).project_id as string,
+        clientEmail: (serviceAccount as Record<string, unknown>).client_email as string,
+        privateKey: (serviceAccount as Record<string, unknown>).private_key as string,
       }),
       storageBucket,
     });

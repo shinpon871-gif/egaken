@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { db, storage } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
@@ -8,9 +8,18 @@ import { getCurrentWeeklyTheme } from '@/lib/getCurrentWeeklyTheme';
 import { calculateTrainingDays } from '@/lib/utils';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { ImageUploadArea } from './ImageUploadArea';
+import { OgpCropper } from './OgpCropper';
+import type { Area } from 'react-easy-crop';
 
 interface CreateRecordFormProps {
   onSuccess?: () => void;
+}
+
+interface OgpCropData {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
@@ -22,10 +31,14 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const [characterType, setCharacterType] = useState('strategist'); // キャラ選択
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [currentTheme, setCurrentTheme] = useState<any>(null);
+  const [currentTheme, setCurrentTheme] = useState<Record<string, unknown> | null>(null);
   const [participateInTheme, setParticipateInTheme] = useState(false); // お題参加チェックボックス
   const [showThemeInfoBanner, setShowThemeInfoBanner] = useState(false); // お題情報バナー初回表示フラグ
   const [trainingDays, setTrainingDays] = useState<number>(0); // 通算日数
+  const [showOgp, setShowOgp] = useState(true); // OGP画像表示フラグ
+  const [ogpCrop, setOgpCrop] = useState<OgpCropData | null>(null); // OGP画像トリミング情報（元画像ベース）
+  const [showCropper, setShowCropper] = useState(false); // Cropperモーダル表示フラグ
+  const [previewSize, setPreviewSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 }); // プレビュー表示サイズ
 
   useEffect(() => {
     (async () => {
@@ -54,7 +67,18 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
     // プレビュー画像の生成
     const reader = new FileReader();
     reader.onload = (event) => {
-      setPreview(event.target?.result as string);
+      const dataUrl = event.target?.result as string;
+      setPreview(dataUrl);
+      
+      // 画像のサイズを取得
+      const img = new Image();
+      img.onload = () => {
+        setPreviewSize({
+          width: img.width,
+          height: img.height,
+        });
+      };
+      img.src = dataUrl;
     };
     reader.readAsDataURL(file);
     setError(null);
@@ -84,9 +108,6 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       const uploadResult = await uploadBytes(storageRef, selectedFile, { contentType: selectedFile.type });
       const imageUrl = await getDownloadURL(uploadResult.ref);
 
-      // お題情報を取得
-      const theme = await getCurrentWeeklyTheme();
-
       // Firestoreにレコードを投稿として保存
       const recordRef = await addDoc(collection(db, 'posts'), {
         userId: user.uid,
@@ -101,6 +122,8 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         weeklyThemeTitle: currentTheme && participateInTheme
           ? currentTheme.title
           : null,
+        showOgp,
+        ogpCrop: ogpCrop || null,
       });
 
       // AI コメント生成を別途実行（記録の保存を待たずに非同期で実行）
@@ -142,6 +165,8 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       setComment('');
       setPracticeMinutes('');
       setCharacterType('strategist');
+      setShowOgp(true);
+      setOgpCrop(null);
 
       onSuccess?.();
     } catch (error) {
@@ -175,6 +200,84 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
           isLoading={isLoading}
         />
       </div>
+
+      {/* OGP設定（画像選択後に表示） */}
+      {preview && (
+        <div className="mb-6 border border-orange-200 bg-orange-50 rounded-lg p-4">
+          <h3 className="font-semibold text-gray-800 mb-3">🖼️ Twitter シェア画像設定</h3>
+          
+          {/* OGP表示チェックボックス */}
+          <div className="mb-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showOgp}
+                onChange={(e) => setShowOgp(e.target.checked)}
+                disabled={isLoading}
+                className="w-4 h-4"
+              />
+              <span className="text-sm text-gray-700">Twitter で OGP画像を表示する</span>
+            </label>
+            <p className="text-xs text-gray-600 mt-1 ml-6">
+              オフにするとテキストのみでシェアされます
+            </p>
+          </div>
+
+          {/* トリミング範囲設定 */}
+          {showOgp && (
+            <div className="mt-3 pt-3 border-t border-orange-200">
+              <p className="text-sm text-gray-700 mb-2">
+                📍 表示範囲を指定（オプション）
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowCropper(true)}
+                disabled={isLoading}
+                className="text-sm px-3 py-1 bg-white border border-orange-400 text-orange-600 rounded hover:bg-orange-50 transition disabled:opacity-50"
+              >
+                {ogpCrop ? '✓ トリミング済み - 変更する' : 'トリミング範囲を指定'}
+              </button>
+              {ogpCrop && (
+                <button
+                  type="button"
+                  onClick={() => setOgpCrop(null)}
+                  className="text-xs ml-2 text-gray-600 hover:text-red-600 underline transition"
+                >
+                  リセット
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Cropper モーダル */}
+      {showCropper && preview && (
+        <OgpCropper
+          imageSrc={preview}
+          onCropComplete={(croppedAreaPixels, naturalSize) => {
+            // Cropperから返される座標は「表示サイズ」ベースなため、
+            // 元画像のnaturalSizeとの比率でスケーリング調整
+            const scaleX = naturalSize.width / previewSize.width;
+            const scaleY = naturalSize.height / previewSize.height;
+            
+            const adjustedCrop: OgpCropData = {
+              x: Math.round(croppedAreaPixels.x * scaleX),
+              y: Math.round(croppedAreaPixels.y * scaleY),
+              width: Math.round(croppedAreaPixels.width * scaleX),
+              height: Math.round(croppedAreaPixels.height * scaleY),
+            };
+            
+            console.log('[CreateRecordForm] Cropper座標:', croppedAreaPixels);
+            console.log('[CreateRecordForm] 表示サイズ:', previewSize);
+            console.log('[CreateRecordForm] 元画像サイズ:', naturalSize);
+            console.log('[CreateRecordForm] スケーリング後:', adjustedCrop);
+            
+            setOgpCrop(adjustedCrop);
+          }}
+          onClose={() => setShowCropper(false)}
+        />
+      )}
 
       {/* コメント・工夫した点（統合） */}
       <div className="mb-6">
@@ -251,7 +354,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         <>
           <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4">
             <p className="text-sm text-blue-800 font-semibold">
-              今週のお題：{currentTheme.title}
+              今週のお題：{(currentTheme as Record<string, unknown>)?.title as string}
             </p>
           </div>
           <label className="flex items-center space-x-2 mt-2">

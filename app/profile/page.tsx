@@ -1,11 +1,11 @@
 "use client";
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { getAuth, EmailAuthProvider, linkWithCredential, updateProfile } from "firebase/auth";
+import { getAuth, EmailAuthProvider, linkWithCredential, updateProfile, User } from "firebase/auth";
 import { getFirestore, doc, setDoc } from "firebase/firestore";
 import { useState } from "react";
 
-const LinkEmailForm = ({ user }: { user: any }) => {
+const LinkEmailForm = ({ user }: { user: User }) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [toast, setToast] = useState<string | null>(null); // 成功/失敗トースト用
@@ -17,12 +17,13 @@ const LinkEmailForm = ({ user }: { user: any }) => {
       await linkWithCredential(user, credential);
       await user.reload();
       setToast("ログインメールアドレス追加に成功しました");
-    } catch (err: any) {
-      if (err.code === "auth/provider-already-linked") {
+    } catch (err: unknown) {
+      const error = err as { code?: string; message?: string };
+      if (error.code === "auth/provider-already-linked") {
         await user.reload();
         setToast("すでにメールアドレスが追加されています");
       } else {
-        setToast("メール追加に失敗しました: " + (err.message || "不明なエラー"));
+        setToast("メール追加に失敗しました: " + (error.message || "不明なエラー"));
         console.error(err);
       }
     }
@@ -61,10 +62,9 @@ const LinkEmailForm = ({ user }: { user: any }) => {
   );
 };
 
-const UserProfileForm = ({ user }: { user: any }) => {
+const UserProfileForm = ({ user }: { user: User }) => {
   const [displayName, setDisplayName] = useState(user.displayName || "");
   const db = getFirestore();
-  const router = useRouter();
   const [toast, setToast] = useState<string | null>(null); // 成功/失敗トースト用
   // 修正理由: ボタンUI明確化・モバイル対応・トースト追加（影響範囲：UIのみ）
   const handleUpdate = async (e: React.FormEvent | React.MouseEvent | React.TouchEvent) => {
@@ -73,10 +73,10 @@ const UserProfileForm = ({ user }: { user: any }) => {
       await updateProfile(user, { displayName });
       await setDoc(doc(db, "users", user.uid), { displayName }, { merge: true });
       setToast("ユーザー名変更に成功しました");
-    } catch (err) {
-      // 修正理由: TypeScript型エラー回避（errをany型にキャスト）
-      const e = err as any;
-      setToast("ユーザー名変更に失敗しました: " + (e?.message || "不明なエラー"));
+    } catch (err: unknown) {
+      // 修正理由: TypeScript型エラー回避
+      const error = err as { message?: string };
+      setToast("ユーザー名変更に失敗しました: " + (error?.message || "不明なエラー"));
       console.error(err);
     }
     setTimeout(() => setToast(null), 3000);
@@ -123,7 +123,7 @@ const BackButton = () => {
 export default function ProfilePage() {
   const auth = getAuth();
   const router = useRouter();
-  const [user, setUser] = useState<any | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -138,12 +138,10 @@ export default function ProfilePage() {
     return () => unsubscribe();
   }, [auth, router]);
 
-  const hasPasswordProvider = user?.providerData?.some((p: any) => p.providerId === "password");
-
   if (loading) return null;
   if (!user) return null;
 
-  const providers = user.providerData.map((p: any) => p.providerId);
+  const providers = user.providerData.map((p) => (p as unknown as Record<string, unknown>).providerId);
 
   return (
     <div style={{ maxWidth: 400, margin: "40px auto", padding: 24, border: "1px solid #eee", borderRadius: 8, minHeight: '80vh', position: 'relative' }}>

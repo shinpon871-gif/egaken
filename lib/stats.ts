@@ -55,7 +55,7 @@ export function calculateStreak(posts: Post[]): number {
 
   // 連続投稿日数をカウント
   let streak = 0;
-  let currentDate = new Date(latestPostDate);
+  const currentDate = new Date(latestPostDate);
 
   while (true) {
     const dateKey = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;

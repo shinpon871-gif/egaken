@@ -93,15 +93,13 @@ const openai = new OpenAI({
 
 export async function POST(request: NextRequest) {
   // ---- bodyを安全に1回だけ取得 ----
-  let body: any = {};
+  let body: Record<string, unknown> = {};
   try {
     body = await request.json();
   } catch {
     body = {};
   }
 
-
-  const imageUrl = body.imageUrl || "";
   const practiceMinutes = body.practiceMinutes || 0;
   const comment = body.comment || "";
 
@@ -116,7 +114,7 @@ export async function POST(request: NextRequest) {
 
   try {
     // コメント内容を必ず参照するプロンプトに統一
-    let userMessage = `\nユーザーはお絵描き練習をしました。\n\n練習時間: ${practiceMinutes}分\nコメント・工夫した点:\n${comment || "（特に記載なし）"}\n\n【絶対条件】\n・「コメント・工夫した点」の内容に必ず具体的に触れる\n・可能なら一部を引用する\n・抽象的な褒めは禁止\n・努力と挑戦を認める\n・上から目線禁止\n・2〜4文\n`;
+    const userMessage = `\nユーザーはお絵描き練習をしました。\n\n練習時間: ${practiceMinutes}分\nコメント・工夫した点:\n${comment || "（特に記載なし）"}\n\n【絶対条件】\n・「コメント・工夫した点」の内容に必ず具体的に触れる\n・可能なら一部を引用する\n・抽象的な褒めは禁止\n・努力と挑戦を認める\n・上から目線禁止\n・2〜4文\n`;
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.8,

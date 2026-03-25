@@ -48,10 +48,11 @@ export async function GET() {
     });
   } catch (e) {
     console.error("[debug-theme] エラー詳細:", e);
+    const errorCode = (e as unknown as Record<string, unknown>)?.code;
     return NextResponse.json({ 
       error: String(e),
       errorType: e instanceof Error ? e.constructor.name : typeof e,
-      errorCode: (e as any)?.code
+      errorCode
     }, { status: 500 });
   }
 }

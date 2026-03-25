@@ -11,7 +11,7 @@ type PostData = {
   comment: string;
   minutes: number;
   aiComment?: string;
-  createdAt: any; // Timestamp
+  createdAt: unknown; // Timestamp
   weeklyThemeId?: string | null;
 };
 
@@ -80,13 +80,22 @@ export default async function RecordPage(props: Props) {
   const postData = snap.data() as PostData;
 
   // クライアントコンポーネントに渡すためにシリアライズ可能な形式に変換
+  let createdAtStr = new Date().toISOString();
+  try {
+    if (postData.createdAt && typeof postData.createdAt === 'object' && 'toDate' in (postData.createdAt as Record<string, unknown>)) {
+      createdAtStr = ((postData.createdAt as Record<string, unknown>).toDate as () => Date)().toISOString();
+    }
+  } catch {
+    // fallback
+  }
+
   const initialData = {
     id: snap.id,
     comment: postData.comment,
     minutes: postData.minutes,
     aiComment: postData.aiComment,
     imageUrl: postData.imageUrl,
-    createdAt: postData.createdAt?.toDate?.().toISOString() || new Date().toISOString(),
+    createdAt: createdAtStr,
     title: 'お絵描きの記録',
     weeklyThemeId: postData.weeklyThemeId ?? undefined,
   };

@@ -11,8 +11,8 @@ let db: admin.firestore.Firestore | null = null;
 let storage: admin.storage.Storage | null = null;
 
 try {
-  let serviceAccount: any = null;
-  let keyError: any = null;
+  let serviceAccount: Record<string, unknown> | null = null;
+  let keyError: Error | null = null;
   try {
     const key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
     if (!key) {
@@ -23,11 +23,11 @@ try {
     }
     try {
       serviceAccount = JSON.parse(key);
-		if (serviceAccount.private_key) {
-		serviceAccount.private_key = serviceAccount.private_key
-			.replace(/^["']|["']$/g, '') // 前後の引用符を削除
-			.replace(/\\n/g, '\n');      // 改行コードを置換
-		}
+      if (serviceAccount && serviceAccount.private_key) {
+        (serviceAccount as Record<string, unknown>).private_key = (serviceAccount.private_key as string)
+          .replace(/^["']|["']$/g, '') // 前後の引用符を削除
+          .replace(/\\n/g, '\n');      // 改行コードを置換
+      }
       console.log('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み成功');
     } catch (parseErr) {
       if (process.env.NODE_ENV === 'production') {
@@ -36,10 +36,12 @@ try {
       throw parseErr;
     }
   } catch (e) {
-    keyError = e;
+    keyError = e as Error;
     // ローカルのみ JSON ファイルから読み込む（存在すれば）
     try {
-      serviceAccount = require('../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-dacdaab784.json');
+      const jsonPath = '../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-dacdaab784.json';
+      const jsonContent = fs.readFileSync(path.resolve(process.cwd(), jsonPath), 'utf-8');
+      serviceAccount = JSON.parse(jsonContent);
       console.log('[OGP_API] ローカルJSON読み込み成功');
     } catch (e2) {
       console.error('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み失敗', keyError);
@@ -60,9 +62,9 @@ try {
 
     admin.initializeApp({
       credential: admin.credential.cert({
-        projectId: serviceAccount.project_id,
-        clientEmail: serviceAccount.client_email,
-        privateKey: serviceAccount.private_key,
+        projectId: (serviceAccount as Record<string, unknown>).project_id as string,
+        clientEmail: (serviceAccount as Record<string, unknown>).client_email as string,
+        privateKey: (serviceAccount as Record<string, unknown>).private_key as string,
       }),
       storageBucket,
     });
@@ -82,7 +84,7 @@ try {
 
 export async function GET(
   _req: NextRequest,
-  context: { params: { recordId: string } } | { params: Promise<{ recordId: string }> }
+  context: { params: Promise<{ recordId: string }> }
 ): Promise<Response> {
   try {
     console.log('[OGP_API] function start', new Date().toISOString());
@@ -96,13 +98,7 @@ export async function GET(
     }
 
     // 1. recordId取得
-    let recordId: string;
-    if ('then' in context.params && typeof context.params.then === 'function') {
-      const resolved = await context.params;
-      recordId = resolved.recordId;
-    } else {
-      recordId = (context.params as { recordId: string }).recordId;
-    }
+    const { recordId } = await context.params;
     console.log('[OGP_API] recordId:', recordId);
 
     // Firestore呼び出し直前ログ
@@ -124,10 +120,20 @@ export async function GET(
       console.log('[OGP_API] Firestore: ドキュメントが存在しません', recordId);
       return new Response('Not found', { status: 404 });
     }
-    const record = snap.data() as { imageUrl: string; weeklyThemeId?: string };
+    const record = snap.data() as { 
+      imageUrl: string; 
+      weeklyThemeId?: string;
+      ogpCrop?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      };
+    };
 
     console.log('[OGP_API] weeklyThemeId:', record.weeklyThemeId);
     console.log('[OGP_API] record.imageUrl:', record.imageUrl);
+    console.log('[OGP_API] record.ogpCrop:', JSON.stringify(record.ogpCrop));
 
     if (!record.imageUrl) {
       console.log('[OGP_API] imageUrlがありません');
@@ -169,12 +175,50 @@ export async function GET(
       return new Response('Failed to get image', { status: 500 });
     }
 
-    // --- 4. 土台のリサイズを一度確定させる（サイズエラー回避のため） ---
+    // --- 4. トリミング処理（ogpCrop が存在する場合） ---
+    let croppedBuffer = imageBuffer;
+    if (record.ogpCrop) {
+      try {
+        const { x, y, width, height } = record.ogpCrop;
+        console.log('[OGP_API] トリミング開始日時:', new Date().toISOString());
+        console.log('[OGP_API] トリミング元の座標:', { x, y, width, height });
+        
+        // 念のため数値を正の整数に正規化
+        const cropX = Math.max(0, Math.round(x || 0));
+        const cropY = Math.max(0, Math.round(y || 0));
+        const cropWidth = Math.max(1, Math.round(width || 100));
+        const cropHeight = Math.max(1, Math.round(height || 100));
+        
+        console.log('[OGP_API] トリミング正規化後:', { cropX, cropY, cropWidth, cropHeight });
+        
+        const startTime = Date.now();
+        croppedBuffer = await sharp(imageBuffer)
+          .extract({
+            left: cropX,
+            top: cropY,
+            width: cropWidth,
+            height: cropHeight,
+          })
+          .toBuffer();
+        
+        const duration = Date.now() - startTime;
+        console.log(`[OGP_API] トリミング成功（${duration}ms）`);
+      } catch (e) {
+        console.error('[OGP_API] トリミング処理エラー:', e);
+        console.error('[OGP_API] エラーが発生しましたが、元のバッファをそのまま使用します');
+        // エラーの場合は元のバッファをそのまま使用
+        croppedBuffer = imageBuffer;
+      }
+    } else {
+      console.log('[OGP_API] ogpCropが未設定のため、トリミング処理をスキップ（全体表示）');
+    }
+
+    // --- 5. 土台のリサイズを一度確定させる（サイズエラー回避のため） ---
     const OGP_WIDTH = 1200;
     const OGP_HEIGHT = 630;
 
       // 一度リサイズを実行し、バッファに書き出してサイズを「1200x630」に完全に固定する
-      const resizedBaseBuffer = await sharp(imageBuffer)
+      const resizedBaseBuffer = await sharp(croppedBuffer)
         .resize({
           width: OGP_WIDTH,
           height: OGP_HEIGHT,
@@ -186,7 +230,7 @@ export async function GET(
 
     let ogp = sharp(resizedBaseBuffer); 
 
-    // --- 5. 透過済みのバッジ画像を重ねる ---
+    // --- 6. 透過済みのバッジ画像を重ねる ---
     if (record.weeklyThemeId) {
       try {
         const badgePath = path.join(process.cwd(), 'assets/badge_ogp.png');
@@ -212,10 +256,10 @@ export async function GET(
       }
     }
 
-    // 6. JPEG バッファ取得
+    // 7. JPEG バッファ取得
     const outputBuffer = await ogp.jpeg().toBuffer();
 
-    // 7. レスポンス返却
+    // 8. レスポンス返却
     return new Response(new Uint8Array(outputBuffer), {
       headers: {
         'Content-Type': 'image/jpeg',

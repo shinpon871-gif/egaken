@@ -8,12 +8,12 @@ interface ShareButtonProps {
   recordId: string;
   comment: string;
   practiceMinutes: number;
-  aiComment?: string;
-  imageUrl: string;
   v?: string; // ← ここに v を追加することで page.tsx からの型エラーを解消
   themeId?: string;
   themeTitle?: string;
   userId?: string;
+  trainingDays?: number;
+  showOgp?: boolean; // OGP表示フラグ
 }
 
 /**
@@ -28,15 +28,15 @@ export function ShareButton({
   recordId, 
   comment, 
   practiceMinutes, 
-  aiComment, 
-  imageUrl,
   v, // Propsとして受け取る
   themeId,
   themeTitle,
   userId,
+  trainingDays: initialTrainingDays = 0,
+  showOgp = true, // OGP表示フラグ（デフォルトtrue）
 }: ShareButtonProps) {
   const [isSharing, setIsSharing] = useState(false);
-  const [trainingDays, setTrainingDays] = useState<number>(0);
+  const [trainingDays, setTrainingDays] = useState<number>(initialTrainingDays);
 
   const effectiveComment = useMemo(() => {
     return (themeId && themeTitle)
@@ -46,10 +46,17 @@ export function ShareButton({
 
   // 通算日数を取得
   useEffect(() => {
+    // 親から trainingDays が渡されている場合はそれを使用
+    if (initialTrainingDays && initialTrainingDays > 0) {
+      setTrainingDays(initialTrainingDays);
+      return;
+    }
+    
+    // userId がある場合は計算
     if (userId) {
       calculateTrainingDays(userId).then(setTrainingDays);
     }
-  }, [userId]);
+  }, [userId, initialTrainingDays]);
 
   // シェア用URLの生成ロジック
   const getShareUrl = () => {
@@ -58,7 +65,8 @@ export function ShareButton({
     
     // すでにURLパラメータ(v)がある場合はそれを使用し、なければ現在の時間を付与
     const cacheBuster = v || Date.now().toString();
-    return `${baseUrl}/share/${recordId}?v=${cacheBuster}`;
+    const ogParam = showOgp ? '1' : '0';
+    return `${baseUrl}/share/${recordId}?og=${ogParam}&v=${cacheBuster}`;
   };
 
   const tweetResult = useMemo(() => {

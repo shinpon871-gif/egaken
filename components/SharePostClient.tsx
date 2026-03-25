@@ -38,13 +38,11 @@ type Props = {
 export default function SharePostClient({ recordId, version, initialData, v }: Props) {
   const [post, setPost] = useState<Post | Record<string, unknown> | null>(initialData as Post | Record<string, unknown> | null);
   const [isLoading, setIsLoading] = useState<boolean>(!initialData);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(recordId ? null : "Record ID が指定されていません");
   const [trainingDays, setTrainingDays] = useState<number>(0);
 
   useEffect(() => {
     if (!recordId) {
-      setError("Record ID が指定されていません");
-      setIsLoading(false);
       return;
     }
 
@@ -95,14 +93,14 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
 
   // 通算日数を計算
   useEffect(() => {
-    const userId = (post as any)?.userId;
+    const userId = (post as Post)?.userId as string | undefined;
     if (userId && typeof userId === 'string') {
       calculateTrainingDays(userId).then(setTrainingDays).catch((e) => {
         console.error('calculateTrainingDays failed:', e);
         setTrainingDays(0);
       });
     }
-  }, [(post as any)?.userId]);
+  }, [post]);
 
   if (isLoading) {
     return <p className="text-gray-600">読み込み中…</p>;

@@ -1,12 +1,16 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import Cropper from 'react-easy-crop';
 import type { Area } from 'react-easy-crop';
 
 interface OgpCropperProps {
   imageSrc: string;
-  onCropComplete: (croppedAreaPixels: Area, naturalSize: { width: number; height: number }) => void;
+  onCropComplete: (
+    croppedAreaPixels: Area, 
+    naturalSize: { width: number; height: number },
+    displayedSize: { width: number; height: number }
+  ) => void;
   onClose?: () => void;
 }
 
@@ -15,6 +19,7 @@ export function OgpCropper({ imageSrc, onCropComplete, onClose }: OgpCropperProp
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const cropperContainerRef = useRef<HTMLDivElement>(null);
 
   const handleCropComplete = useCallback(
     (_croppedArea: Area, croppedAreaPixels: Area) => {
@@ -28,8 +33,17 @@ export function OgpCropper({ imageSrc, onCropComplete, onClose }: OgpCropperProp
   }, []);
 
   const handleApply = () => {
-    if (croppedAreaPixels) {
-      onCropComplete(croppedAreaPixels, naturalSize);
+    if (croppedAreaPixels && cropperContainerRef.current) {
+      // Cropper内部の画像要素のclientWidth/clientHeightを取得
+      const imgElement = cropperContainerRef.current.querySelector('img');
+      const displayedSize = {
+        width: imgElement?.clientWidth || 0,
+        height: imgElement?.clientHeight || 0,
+      };
+
+      console.log('[OgpCropper] displayedSize:', displayedSize);
+      
+      onCropComplete(croppedAreaPixels, naturalSize, displayedSize);
       onClose?.();
     }
   };
@@ -59,7 +73,7 @@ export function OgpCropper({ imageSrc, onCropComplete, onClose }: OgpCropperProp
         </div>
 
         {/* Cropper コンテナ */}
-        <div className="flex-1 relative overflow-hidden">
+        <div className="flex-1 relative overflow-hidden" ref={cropperContainerRef}>
           <Cropper
             image={imageSrc}
             crop={crop}

@@ -255,12 +255,16 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       {showCropper && preview && (
         <OgpCropper
           imageSrc={preview}
-          onCropComplete={(croppedAreaPixels, naturalSize) => {
-            // Cropperから返される座標は「表示サイズ」ベースなため、
-            // 元画像のnaturalSizeとの比率でスケーリング調整
-            const scaleX = naturalSize.width / previewSize.width;
-            const scaleY = naturalSize.height / previewSize.height;
+          onCropComplete={(croppedAreaPixels, naturalSize, displayedSize) => {
+            // 重要：displayedSize は Cropper内部の実際の画像描画サイズ
+            // naturalSize は元画像の実寸法
+            // croppedAreaPixels は displayedSize ベースの座標
             
+            // スケーリング係数を計算
+            const scaleX = naturalSize.width / displayedSize.width;
+            const scaleY = naturalSize.height / displayedSize.height;
+            
+            // croppedAreaPixels をスケーリング補正
             const adjustedCrop: OgpCropData = {
               x: Math.round(croppedAreaPixels.x * scaleX),
               y: Math.round(croppedAreaPixels.y * scaleY),
@@ -268,10 +272,11 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
               height: Math.round(croppedAreaPixels.height * scaleY),
             };
             
-            console.log('[CreateRecordForm] Cropper座標:', croppedAreaPixels);
-            console.log('[CreateRecordForm] 表示サイズ:', previewSize);
-            console.log('[CreateRecordForm] 元画像サイズ:', naturalSize);
-            console.log('[CreateRecordForm] スケーリング後:', adjustedCrop);
+            console.log('[CreateRecordForm] croppedAreaPixels (表示サイズベース):', croppedAreaPixels);
+            console.log('[CreateRecordForm] displayedSize (Cropper内部の実描画サイズ):', displayedSize);
+            console.log('[CreateRecordForm] naturalSize (元画像の実寸法):', naturalSize);
+            console.log('[CreateRecordForm] スケーリング係数:', { scaleX, scaleY });
+            console.log('[CreateRecordForm] adjustedCrop (元画像ベース):', adjustedCrop);
             
             setOgpCrop(adjustedCrop);
           }}

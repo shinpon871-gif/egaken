@@ -3,12 +3,14 @@
 import { useEffect, useState } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { calculateTrainingDays } from "@/lib/utils";
 import { ShareButton } from "@/components/ShareButton";
 import Image from "next/image";
 import Link from "next/link";
 
 type Post = {
   id: string;
+  userId?: string;
   title?: string;
   comment?: string;
   minutes?: number;
@@ -30,6 +32,7 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
   const [post, setPost] = useState<Post | null>(initialData);
   const [isLoading, setIsLoading] = useState<boolean>(!initialData);
   const [error, setError] = useState<string | null>(null);
+  const [trainingDays, setTrainingDays] = useState<number>(0);
 
   useEffect(() => {
     if (!recordId) {
@@ -86,6 +89,13 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recordId]);
 
+  // 通算日数を計算
+  useEffect(() => {
+    if (post?.userId) {
+      calculateTrainingDays(post.userId).then(setTrainingDays);
+    }
+  }, [post?.userId]);
+
   if (isLoading) {
     return <p className="text-gray-600">読み込み中…</p>;
   }
@@ -132,6 +142,11 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
       {post.minutes && post.minutes > 0 && (
         <div className="mb-4 p-3 bg-orange-50 rounded-lg text-gray-800">
           <span>⏱️ 練習時間: {post.minutes}分</span>
+          {trainingDays > 0 && (
+            <div className="mt-2">
+              <span>📅 通算: {trainingDays}日目</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -151,6 +166,7 @@ export default function SharePostClient({ recordId, version, initialData, v }: P
           imageUrl={post.imageUrl || ""}
           themeId={post.weeklyThemeId}
           themeTitle={post.weeklyThemeTitle}
+          userId={post.userId}
         />
       </div>
 

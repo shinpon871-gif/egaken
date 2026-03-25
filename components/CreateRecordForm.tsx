@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { db, storage } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
 import { getCurrentWeeklyTheme } from '@/lib/getCurrentWeeklyTheme';
+import { calculateTrainingDays } from '@/lib/utils';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { ImageUploadArea } from './ImageUploadArea';
 
@@ -24,6 +25,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const [currentTheme, setCurrentTheme] = useState<any>(null);
   const [participateInTheme, setParticipateInTheme] = useState(false); // お題参加チェックボックス
   const [showThemeInfoBanner, setShowThemeInfoBanner] = useState(false); // お題情報バナー初回表示フラグ
+  const [trainingDays, setTrainingDays] = useState<number>(0); // 通算日数
 
   useEffect(() => {
     (async () => {
@@ -38,6 +40,13 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       }
     })();
   }, []);
+
+  // 通算日数を計算
+  useEffect(() => {
+    if (user?.uid) {
+      calculateTrainingDays(user.uid).then(setTrainingDays);
+    }
+  }, [user?.uid]);
 
   const handleFileSelect = (file: File) => {
     setSelectedFile(file);
@@ -203,6 +212,15 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
           className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 disabled:bg-gray-50"
         />
       </div>
+
+      {/* 通算日数表示 */}
+      {trainingDays > 0 && (
+        <div className="mb-6 p-3 bg-purple-50 rounded-lg border border-purple-100">
+          <p className="text-sm text-purple-800">
+            📅 <span className="font-semibold">通算 {trainingDays}日目</span> で投稿しようとしています
+          </p>
+        </div>
+      )}
 
 
 

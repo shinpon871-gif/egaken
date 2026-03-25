@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { generateTweetText } from '@/lib/twitter';
+import { calculateTrainingDays } from '@/lib/utils';
 
 interface ShareButtonProps {
   recordId: string;
@@ -12,6 +13,7 @@ interface ShareButtonProps {
   v?: string; // ← ここに v を追加することで page.tsx からの型エラーを解消
   themeId?: string;
   themeTitle?: string;
+  userId?: string;
 }
 
 /**
@@ -31,14 +33,23 @@ export function ShareButton({
   v, // Propsとして受け取る
   themeId,
   themeTitle,
+  userId,
 }: ShareButtonProps) {
   const [isSharing, setIsSharing] = useState(false);
+  const [trainingDays, setTrainingDays] = useState<number>(0);
 
   const effectiveComment = useMemo(() => {
     return (themeId && themeTitle)
       ? `今週のお題：${themeTitle}\n${comment}`
       : comment;
   }, [themeId, themeTitle, comment]);
+
+  // 通算日数を取得
+  useEffect(() => {
+    if (userId) {
+      calculateTrainingDays(userId).then(setTrainingDays);
+    }
+  }, [userId]);
 
   // シェア用URLの生成ロジック
   const getShareUrl = () => {
@@ -52,8 +63,8 @@ export function ShareButton({
 
   const tweetResult = useMemo(() => {
     // プレビュー表示用。URLを含めない状態のテキストを生成
-    return generateTweetText(practiceMinutes, effectiveComment, '');
-  }, [practiceMinutes, effectiveComment]);
+    return generateTweetText(practiceMinutes, effectiveComment, '', trainingDays);
+  }, [practiceMinutes, effectiveComment, trainingDays]);
 
   const handleShare = async () => {
     if (!recordId) {
@@ -68,7 +79,7 @@ export function ShareButton({
 
     const shareUrl = getShareUrl();
     // 実際のツイート本文。末尾にパラメータ付きURLを1つだけ挿入
-    const shareText = generateTweetText(practiceMinutes, effectiveComment, shareUrl).text;
+    const shareText = generateTweetText(practiceMinutes, effectiveComment, shareUrl, trainingDays).text;
     
     const iosDevice = isIOS();
     const intentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`;

@@ -17,16 +17,25 @@ const WARNING_THRESHOLD = 120;
  * @param minutes - 練習時間（分）
  * @param userComment - ユーザーのコメント
  * @param postUrl - 記録詳細ページのURL（オプション）
+ * @param trainingDays - 通算日数（オプション）
  * @returns 投稿テキスト、文字数、警告フラグ、超過フラグ
  */
 export function generateTweetText(
   minutes: number,
   userComment: string,
-  postUrl?: string
+  postUrl?: string,
+  trainingDays?: number
 ): GenerateTweetTextResult {
   // 投稿テンプレートを構築
   let text = '#えがけん記録\n';
-  text += `練習時間: ${minutes}分\n`;
+  
+  // 練習時間と通算日数を同じ行に表示
+  let practiceInfo = `練習時間: ${minutes}分`;
+  if (trainingDays && trainingDays > 0) {
+    practiceInfo += ` / 通算 ${trainingDays}日目`;
+  }
+  text += practiceInfo + '\n';
+  
   text += `${userComment}\n`;
   text += '\n#えがけん';
 

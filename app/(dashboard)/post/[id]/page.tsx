@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase';
 import { doc, getDoc, Timestamp } from 'firebase/firestore';
 import { useRouter, useParams } from 'next/navigation';
+import { calculateTrainingDays } from '@/lib/utils';
 import Image from 'next/image';
 
 interface PostData {
@@ -26,6 +27,7 @@ export default function PostDetailPage() {
   const [post, setPost] = useState<PostData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [trainingDays, setTrainingDays] = useState<number>(0);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -70,6 +72,13 @@ export default function PostDetailPage() {
 
     fetchPost();
   }, [user, postId, authLoading, router]);
+
+  // 通算日数を計算
+  useEffect(() => {
+    if (post?.userId) {
+      calculateTrainingDays(post.userId).then(setTrainingDays);
+    }
+  }, [post?.userId]);
 
   const formatDate = (timestamp: Timestamp | null) => {
     if (!timestamp) return '';
@@ -145,6 +154,12 @@ export default function PostDetailPage() {
               <span>⏱️</span>
               <span className="font-semibold text-orange-700">{post.minutes}分</span>
             </div>
+            {trainingDays > 0 && (
+              <div className="flex items-center gap-2 mt-2">
+                <span>📅</span>
+                <span className="font-semibold text-orange-700">通算 {trainingDays}日目</span>
+              </div>
+            )}
           </div>
         )}
 

@@ -36,9 +36,8 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const [showThemeInfoBanner, setShowThemeInfoBanner] = useState(false); // お題情報バナー初回表示フラグ
   const [trainingDays, setTrainingDays] = useState<number>(0); // 通算日数
   const [showOgp, setShowOgp] = useState(true); // OGP画像表示フラグ
-  const [ogpCrop, setOgpCrop] = useState<OgpCropData | null>(null); // OGP画像トリミング情報（元画像ベース）
+  const [ogpCrop, setOgpCrop] = useState<OgpCropData | null>(null); // OGP画像トリミング情報
   const [showCropper, setShowCropper] = useState(false); // Cropperモーダル表示フラグ
-  const [previewSize, setPreviewSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 }); // プレビュー表示サイズ
 
   useEffect(() => {
     (async () => {
@@ -67,18 +66,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
     // プレビュー画像の生成
     const reader = new FileReader();
     reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
-      setPreview(dataUrl);
-      
-      // 画像のサイズを取得
-      const img = new Image();
-      img.onload = () => {
-        setPreviewSize({
-          width: img.width,
-          height: img.height,
-        });
-      };
-      img.src = dataUrl;
+      setPreview(event.target?.result as string);
     };
     reader.readAsDataURL(file);
     setError(null);
@@ -255,30 +243,19 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       {showCropper && preview && (
         <OgpCropper
           imageSrc={preview}
-          onCropComplete={(croppedAreaPixels, naturalSize, displayedSize) => {
-            // 重要：displayedSize は Cropper内部の実際の画像描画サイズ
-            // naturalSize は元画像の実寸法
-            // croppedAreaPixels は displayedSize ベースの座標
-            
-            // スケーリング係数を計算
-            const scaleX = naturalSize.width / displayedSize.width;
-            const scaleY = naturalSize.height / displayedSize.height;
-            
-            // croppedAreaPixels をスケーリング補正
-            const adjustedCrop: OgpCropData = {
-              x: Math.round(croppedAreaPixels.x * scaleX),
-              y: Math.round(croppedAreaPixels.y * scaleY),
-              width: Math.round(croppedAreaPixels.width * scaleX),
-              height: Math.round(croppedAreaPixels.height * scaleY),
+          onCropComplete={(croppedAreaPixels) => {
+            // react-easy-crop の croppedAreaPixels は既に元画像ベースのピクセル座標
+            // スケーリング補正は不要。そのまま保存する。
+            const crop: OgpCropData = {
+              x: Math.round(croppedAreaPixels.x),
+              y: Math.round(croppedAreaPixels.y),
+              width: Math.round(croppedAreaPixels.width),
+              height: Math.round(croppedAreaPixels.height),
             };
             
-            console.log('[CreateRecordForm] croppedAreaPixels (表示サイズベース):', croppedAreaPixels);
-            console.log('[CreateRecordForm] displayedSize (Cropper内部の実描画サイズ):', displayedSize);
-            console.log('[CreateRecordForm] naturalSize (元画像の実寸法):', naturalSize);
-            console.log('[CreateRecordForm] スケーリング係数:', { scaleX, scaleY });
-            console.log('[CreateRecordForm] adjustedCrop (元画像ベース):', adjustedCrop);
+            console.log('[CreateRecordForm] croppedAreaPixels をそのまま保存:', crop);
             
-            setOgpCrop(adjustedCrop);
+            setOgpCrop(crop);
           }}
           onClose={() => setShowCropper(false)}
         />

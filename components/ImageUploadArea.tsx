@@ -29,9 +29,9 @@ export function ImageUploadArea({
       return false;
     }
 
-    const maxSize = 10 * 1024 * 1024; // 10MB
+    const maxSize = 5 * 1024 * 1024; // 5MB
     if (file.size > maxSize) {
-      setError('ファイルサイズは10MB以下にしてください');
+      setError('ファイルサイズは5MB以下にしてください');
       return false;
     }
 
@@ -130,7 +130,7 @@ export function ImageUploadArea({
           <p className="font-semibold text-gray-700">
             {isDragOver ? 'ここにドロップ' : 'クリック・ドラッグ・貼り付けで画像追加'}
           </p>
-          <p className="text-xs text-gray-500 mt-1">PNG, JPG, GIF, WebP（最大10MB）</p>
+          <p className="text-xs text-gray-500 mt-1">PNG, JPG, GIF, WebP（最大5MB）</p>
         </div>
       )}
 

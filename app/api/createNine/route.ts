@@ -7,11 +7,87 @@ export const runtime = "nodejs"
 
 const storageBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
 
-async function createGridTile(buffer: Buffer, cellWidth: number, cellHeight: number) {
+type OgpCrop = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+function isValidOgpCrop(value: unknown): value is OgpCrop {
+  if (!value || typeof value !== "object") {
+    return false
+  }
+
+  const crop = value as Partial<OgpCrop>
+  return (
+    Number.isFinite(crop.x) &&
+    Number.isFinite(crop.y) &&
+    Number.isFinite(crop.width) &&
+    Number.isFinite(crop.height) &&
+    (crop.width ?? 0) > 0 &&
+    (crop.height ?? 0) > 0
+  )
+}
+
+function clampCropStart(start: number, cropSize: number, maxSize: number) {
+  if (cropSize >= maxSize) {
+    return 0
+  }
+
+  return Math.min(Math.max(0, Math.round(start)), maxSize - cropSize)
+}
+
+async function createGridTile(
+  buffer: Buffer,
+  cellWidth: number,
+  cellHeight: number,
+  ogpCrop?: OgpCrop | null,
+  tileIndex?: number
+) {
+  const targetWidth = Math.round(cellWidth)
+  const targetHeight = Math.round(cellHeight)
+
+  if (ogpCrop) {
+    const metadata = await sharp(buffer).metadata()
+    const sourceWidth = metadata.width ?? 1
+    const sourceHeight = metadata.height ?? 1
+
+    const cropX = Math.max(0, Math.round(ogpCrop.x))
+    const cropY = Math.max(0, Math.round(ogpCrop.y))
+    const cropW = Math.max(1, Math.round(ogpCrop.width))
+    const cropH = Math.max(1, Math.round(ogpCrop.height))
+
+    const safeX = clampCropStart(cropX, cropW, sourceWidth)
+    const safeY = clampCropStart(cropY, cropH, sourceHeight)
+    const safeW = Math.min(cropW, sourceWidth - safeX)
+    const safeH = Math.min(cropH, sourceHeight - safeY)
+
+    try {
+      const tile = await sharp(buffer)
+        .extract({ left: safeX, top: safeY, width: safeW, height: safeH })
+        .resize(targetWidth, targetHeight, { fit: "cover", position: "centre" })
+        .toBuffer()
+
+      console.log("[createNine] ogpCrop 適用", {
+        index: tileIndex,
+        crop: { x: safeX, y: safeY, width: safeW, height: safeH },
+      })
+
+      return tile
+    } catch (error) {
+      console.warn("[createNine] ogpCrop クロップ失敗。north にフォールバック", error)
+    }
+  } else {
+    console.log("[createNine] ogpCrop 未設定または無効。north を使用", {
+      index: tileIndex,
+    })
+  }
+
   return sharp(buffer)
-    .resize(Math.round(cellWidth), Math.round(cellHeight), {
+    .resize(targetWidth, targetHeight, {
       fit: "cover",
-      position: sharp.strategy.attention,
+      position: "north",
     })
     .toBuffer()
 }
@@ -29,8 +105,9 @@ export async function POST(req: Request) {
 
     console.log("[createNine] postIds検証完了", postIds.length)
 
-    // 画像URL取得
+    // 画像URL・ogpCrop取得
     const imageUrls: string[] = []
+    const ogpCrops: (OgpCrop | null)[] = []
     for (const id of postIds) {
       console.log("[createNine] postId取得", id)
 
@@ -39,12 +116,23 @@ export async function POST(req: Request) {
           throw new Error("Firestore が初期化されていません")
         }
         const doc = await adminDb.collection("posts").doc(id).get()
-        const imageUrl = doc.data()?.imageUrl
+        const data = doc.data()
+        const imageUrl = data?.imageUrl
         if (!imageUrl) {
           throw new Error(`imageUrl not found for post ${id}`)
         }
         console.log("[createNine] imageUrl", imageUrl)
         imageUrls.push(imageUrl)
+
+        const rawCrop = data?.ogpCrop
+        const validCrop = isValidOgpCrop(rawCrop) ? rawCrop : null
+        ogpCrops.push(validCrop)
+
+        console.log("[createNine] ogpCrop 状態", {
+          postId: id,
+          hasRawCrop: Boolean(rawCrop),
+          validCrop: Boolean(validCrop),
+        })
       } catch (err) {
         console.error("[createNine] Firestore取得失敗", id, err)
         throw err
@@ -102,7 +190,7 @@ export async function POST(req: Request) {
 
       console.log("[createNine] 画像配置", i, left, top)
 
-      const resized = await createGridTile(images[i], cellWidth, cellHeight)
+      const resized = await createGridTile(images[i], cellWidth, cellHeight, ogpCrops[i], i)
 
       composites.push({
         input: resized,

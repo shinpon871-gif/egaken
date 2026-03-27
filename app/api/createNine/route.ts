@@ -84,6 +84,11 @@ async function createGridTile(
     })
   }
 
+  // デフォルトのトリミング戦略：
+  // 1. entropy: エッジやコントラストを重視（顔が選ばれやすいが、服に反応することもある）
+  // 2. attention: 顕著性を重視（実験の結果、entropyと大差ないケースあり）
+  // 3. "north": 常に上部を優先（高頭身キャラには向くが、デフォルメキャラでは顔が切れる）
+  // 自動判定には限界があるため、ユーザーに ogpCrop の手動設定を促す運用を前提とする。
   return sharp(buffer)
     .resize(targetWidth, targetHeight, {
       fit: "cover",

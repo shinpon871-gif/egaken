@@ -63,7 +63,27 @@ function getVisionClient() {
   return visionClient
 }
 
-function getFaceBounds(face: FaceAnnotation) {
+// 顔の目ランドマークから中点を取得する（Vision API が返す type は文字列）
+function getFaceEyeCenter(face: FaceAnnotation): { x: number; y: number } | null {
+  const landmarks = face.landmarks ?? []
+  const eyeLandmarks = landmarks.filter(
+    (l) => l.type === "LEFT_EYE" || l.type === "RIGHT_EYE" || l.type === 1 || l.type === 8
+  )
+
+  if (eyeLandmarks.length < 2) {
+    return null
+  }
+
+  const xs = eyeLandmarks.map((l) => (typeof l.position?.x === "number" ? l.position.x : 0))
+  const ys = eyeLandmarks.map((l) => (typeof l.position?.y === "number" ? l.position.y : 0))
+
+  return {
+    x: xs.reduce((a, b) => a + b, 0) / xs.length,
+    y: ys.reduce((a, b) => a + b, 0) / ys.length,
+  }
+}
+
+function getFaceBoundCenter(face: FaceAnnotation): { x: number; y: number } | null {
   const vertices = face.fdBoundingPoly?.vertices ?? face.boundingPoly?.vertices ?? []
   const points = vertices
     .map((vertex) => ({
@@ -86,14 +106,16 @@ function getFaceBounds(face: FaceAnnotation) {
   const ys = points.map((point) => point.y)
 
   return {
-    left: Math.min(...xs),
-    top: Math.min(...ys),
-    right: Math.max(...xs),
-    bottom: Math.max(...ys),
+    x: (Math.min(...xs) + Math.max(...xs)) / 2,
+    y: (Math.min(...ys) + Math.max(...ys)) / 2,
   }
 }
 
-async function detectFaceCenter(buffer: Buffer) {
+// 目の中点が取れた場合は isEyeCenter=true を返す
+// 取れない場合は顔ボックス中心を返す
+async function detectFaceCenter(
+  buffer: Buffer
+): Promise<{ x: number; y: number; isEyeCenter: boolean } | null> {
   const client = getVisionClient()
 
   if (!client) {
@@ -102,28 +124,33 @@ async function detectFaceCenter(buffer: Buffer) {
 
   try {
     const [result] = await client.faceDetection({ image: { content: buffer } })
-    const faces = (result.faceAnnotations ?? [])
-      .map(getFaceBounds)
-      .filter((face): face is NonNullable<ReturnType<typeof getFaceBounds>> => Boolean(face))
+    const annotations = result.faceAnnotations ?? []
 
-    if (!faces.length) {
+    if (!annotations.length) {
       return null
     }
 
-    const combined = faces.reduce(
-      (acc, face) => ({
-        left: Math.min(acc.left, face.left),
-        top: Math.min(acc.top, face.top),
-        right: Math.max(acc.right, face.right),
-        bottom: Math.max(acc.bottom, face.bottom),
-      }),
-      faces[0]
-    )
+    // 信頼度が最も高い顔ひとつを使う
+    const primaryFace = annotations.reduce((best, face) => {
+      const score = (face.detectionConfidence ?? 0)
+      return score > (best.detectionConfidence ?? 0) ? face : best
+    }, annotations[0])
 
-    return {
-      x: (combined.left + combined.right) / 2,
-      y: (combined.top + combined.bottom) / 2,
+    // まず目のランドマークを試みる
+    const eyeCenter = getFaceEyeCenter(primaryFace)
+    if (eyeCenter) {
+      console.log("[createNine] 目のランドマーク検出成功", eyeCenter)
+      return { ...eyeCenter, isEyeCenter: true }
     }
+
+    // フォールバック: 顔ボックス中心
+    const boundCenter = getFaceBoundCenter(primaryFace)
+    if (boundCenter) {
+      console.log("[createNine] 顔ボックス中心フォールバック", boundCenter)
+      return { ...boundCenter, isEyeCenter: false }
+    }
+
+    return null
   } catch (error) {
     console.warn("[createNine] 顔検出失敗。attention クロップへフォールバックします", error)
     return null
@@ -182,7 +209,14 @@ async function createGridTile(
   }
 
   const left = clampCropStart(faceCenter.x - cropWidth / 2, cropWidth, sourceWidth)
-  const top = clampCropStart(faceCenter.y - cropHeight / 2, cropHeight, sourceHeight)
+
+  // 目ランドマークが使えた場合は目を縦1/3の位置に配置（自然なポートレート構図）
+  // ボックス中心の場合は従来通り中央揃え
+  const EYE_VERTICAL_RATIO = 0.33
+  const verticalOffset = faceCenter.isEyeCenter
+    ? faceCenter.y - cropHeight * EYE_VERTICAL_RATIO
+    : faceCenter.y - cropHeight / 2
+  const top = clampCropStart(verticalOffset, cropHeight, sourceHeight)
 
   console.log("[createNine] 顔中心クロップ", {
     sourceWidth,

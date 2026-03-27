@@ -442,11 +442,8 @@ gcloud storage buckets update gs://<your-bucket> --cors-file=cors.json
 役割:
 
 - 9選画像を生成・保存・公開 URL を返す補助 API
-
-補足:
-
-- 現在の `nineShares` 保存データは `imageUrls` を使っています。
-- この API は `data?.images` を参照しており、現行の主経路では使っていない補助実装です。
+- `nineShares` の `imageUrls` フィールドから画像を取得して合成する
+- 現行の主経路 (`/api/createNine`) ではなく補助実装として存在する
 
 ### `GET /api/image-proxy?url=...`
 
@@ -460,17 +457,6 @@ gcloud storage buckets update gs://<your-bucket> --cors-file=cors.json
 役割:
 
 - `weeklyThemes` を取得し、サーバー時刻と合わせて返す
-
-### `GET /i/[hash]`
-
-役割:
-
-- 短縮ハッシュから画像 URL にリダイレクト
-
-補足:
-
-- 現在のハッシュ管理はメモリ上の `Map` です。
-- プロセス再起動で消えるため、永続短縮 URL としては未完成です。
 
 ---
 
@@ -600,8 +586,7 @@ egaken/
 ├── file.tmp                                    # 一時作業用ファイル
 ├── firestore.indexes.json                      # Firestore インデックス定義
 ├── next-env.d.ts                               # Next.js 用型定義
-├── next.config.js                              # Next.js 設定の JS 版
-├── next.config.ts                              # 現在使っている Next.js 設定
+├── next.config.ts                              # Next.js 設定
 ├── package-lock.json                           # npm lock file
 ├── package.json                                # 依存関係と scripts
 ├── postcss.config.mjs                          # PostCSS 設定
@@ -628,7 +613,6 @@ egaken/
 │   ├── api/nine-ogp/[shareId]/route.ts         # 9選補助 API
 │   ├── api/og/[recordId]/route.tsx             # 投稿 OGP 生成 API
 │   ├── auth/login/page.tsx                     # `/login` への転送ページ
-│   ├── i/[hash]/route.ts                       # 短縮 URL リダイレクト
 │   ├── nine/page.tsx                           # 空の補助ページ
 │   ├── nine/[shareId]/layout.tsx               # 9選レイアウト
 │   ├── nine/[shareId]/page.tsx                 # 9選共有ページ
@@ -642,13 +626,11 @@ egaken/
 │   ├── FirebaseSecurityDiagnostic.tsx          # Storage 診断 UI
 │   ├── HistoryGrid.tsx                         # 9選選択グリッド
 │   ├── ImageUploadArea.tsx                     # 画像入力 UI
-│   ├── LinkEmailForm.tsx                       # メール連携 UI の旧コンポーネント
 │   ├── OgpCropper.tsx                          # OGP トリミング UI
 │   ├── RecordList.tsx                          # 投稿一覧
 │   ├── ShareButton.tsx                         # X 共有ボタン
 │   ├── SharePostClient.tsx                     # 投稿共有クライアント UI
-│   ├── StatsDisplay.tsx                        # 統計表示
-│   └── UserProfileForm.tsx                     # プロフィール編集の旧コンポーネント
+│   └── StatsDisplay.tsx                        # 統計表示
 ├── contexts/
 │   └── AuthContext.tsx                         # 認証状態共有
 ├── hooks/                                      # 現在は空
@@ -656,9 +638,7 @@ egaken/
 │   ├── firebase.ts                             # Firebase クライアント初期化
 │   ├── firebaseAdmin.ts                        # Firebase Admin 初期化
 │   ├── getCurrentWeeklyTheme.ts                # 現在のお題取得
-│   ├── getPost.ts                              # ダミー投稿取得関数
 │   ├── growth.ts                               # 成長データ計算
-│   ├── imageHash.ts                            # 画像短縮 URL 管理
 │   ├── stats.ts                                # 統計計算
 │   ├── twitter.ts                              # X 投稿文生成
 │   └── utils.ts                                # 共通ユーティリティ
@@ -703,12 +683,8 @@ npm run lint
 
 ## 既知の注意点
 
-- `app/profile/page.tsx` にプロフィール更新 UI が内包されており、`components/UserProfileForm.tsx` と `components/LinkEmailForm.tsx` は現状メイン経路では使っていません。
-- `lib/getPost.ts` はダミー実装です。
-- `app/api/nine-ogp/[shareId]/route.ts` は `data.images` を参照しており、現在の `nineShares` 保存形式とは一致していません。
-- `app/i/[hash]/route.ts` の短縮 URL はメモリ保持なので永続化されません。
-- `firestore.indexes.json` は現行コードの主データ保存先 `posts` と完全一致していないため、必要に応じて見直しが必要です。
-- `next.config.js` と `next.config.ts` が共存しています。運用上は `next.config.ts` を基準に確認してください。
+- `app/api/nine-ogp/[shareId]/route.ts` は `POST /api/createNine` の主経路とは別の補助実装です。直接呼ばれることは通常ありません。
+- `app/nine/page.tsx` は実質空ファイルです。`/nine` への直接アクセスは想定していません。
 
 ---
 

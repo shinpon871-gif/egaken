@@ -1,7 +1,7 @@
 {
   "indexes": [
     {
-      "collectionGroup": "records",
+      "collectionGroup": "posts",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "userId", "order": "ASCENDING" },

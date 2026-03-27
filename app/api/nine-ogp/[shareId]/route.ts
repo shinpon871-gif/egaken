@@ -24,7 +24,7 @@ export async function GET(
     return new Response("Share not found", { status: 404 });
   }
   const data = doc.data();
-  const imageUrls: string[] = data?.images ?? [];
+  const imageUrls: string[] = data?.imageUrls ?? [];
   if (!Array.isArray(imageUrls) || imageUrls.length !== 9) {
     return new Response("9 images required", { status: 404 });
   }

@@ -22,6 +22,36 @@ interface OgpCropData {
   height: number;
 }
 
+const FILE_EXTENSION_BY_TYPE: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+};
+
+const getSafeFileExtension = (file: File) => {
+  const extensionFromType = FILE_EXTENSION_BY_TYPE[file.type];
+  if (extensionFromType) {
+    return extensionFromType;
+  }
+
+  const extensionFromName = file.name.split('.').pop()?.toLowerCase() ?? '';
+  if (/^[a-z0-9]+$/.test(extensionFromName)) {
+    return extensionFromName;
+  }
+
+  return 'jpg';
+};
+
+const createStorageFilePath = (userId: string, file: File) => {
+  const extension = getSafeFileExtension(file);
+  const uniqueId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2);
+
+  return `records/${userId}/${Date.now()}_${uniqueId}.${extension}`;
+};
+
 export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const { user } = useAuth();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -91,8 +121,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
 
     try {
       // Firebase Storageに画像をアップロード（contentTypeを明示指定）
-      const fileName = `${user.uid}/${Date.now()}_${selectedFile.name}`;
-      const storageRef = ref(storage, `records/${fileName}`);
+      const storageRef = ref(storage, createStorageFilePath(user.uid, selectedFile));
       const uploadResult = await uploadBytes(storageRef, selectedFile, { contentType: selectedFile.type });
       const imageUrl = await getDownloadURL(uploadResult.ref);
 

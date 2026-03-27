@@ -87,7 +87,7 @@ async function createGridTile(
   return sharp(buffer)
     .resize(targetWidth, targetHeight, {
       fit: "cover",
-      position: "north",
+      position: sharp.strategy.entropy,
     })
     .toBuffer()
 }

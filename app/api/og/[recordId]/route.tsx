@@ -2,85 +2,12 @@
 import sharp from 'sharp';
 import path from 'path';
 import fs from 'fs';
-import admin from 'firebase-admin';
 import type { NextRequest } from 'next/server';
+import { admin, adminDb, adminStorage } from '@/lib/firebaseAdmin';
 
 export const runtime = 'nodejs';
 
-let db: admin.firestore.Firestore | null = null;
-let storage: admin.storage.Storage | null = null;
-
-try {
-  let serviceAccount: Record<string, unknown> | null = null;
-  let keyError: Error | null = null;
-  try {
-    const key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-    if (!key) {
-      if (process.env.NODE_ENV === 'production') {
-        console.error('[OGP_API] 本番環境で FIREBASE_SERVICE_ACCOUNT_KEY が未設定です。必ず環境変数を設定してください。');
-      }
-      throw new Error('FIREBASE_SERVICE_ACCOUNT_KEY が未設定');
-    }
-    try {
-      serviceAccount = JSON.parse(key);
-      if (serviceAccount && serviceAccount.private_key) {
-        (serviceAccount as Record<string, unknown>).private_key = (serviceAccount.private_key as string)
-          .replace(/^["']|["']$/g, '') // 前後の引用符を削除
-          .replace(/\\n/g, '\n');      // 改行コードを置換
-      }
-      console.log('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み成功');
-    } catch (parseErr) {
-      if (process.env.NODE_ENV === 'production') {
-        console.error('[OGP_API] 本番環境で FIREBASE_SERVICE_ACCOUNT_KEY 読み込み失敗', parseErr);
-      }
-      throw parseErr;
-    }
-  } catch (e) {
-    keyError = e as Error;
-    // ローカルのみ JSON ファイルから読み込む（存在すれば）
-    try {
-      const jsonPath = '../../../../egaken-b4a7e-firebase-adminsdk-fbsvc-dacdaab784.json';
-      const jsonContent = fs.readFileSync(path.resolve(process.cwd(), jsonPath), 'utf-8');
-      serviceAccount = JSON.parse(jsonContent);
-      console.log('[OGP_API] ローカルJSON読み込み成功');
-    } catch (e2) {
-      console.error('[OGP_API] FIREBASE_SERVICE_ACCOUNT_KEY 読み込み失敗', keyError);
-      console.error('[OGP_API] JSONファイルが見つかりません', e2);
-    }
-  }
-
-  if (!serviceAccount) {
-    console.error('[OGP_API] サービスアカウント情報が取得できません');
-    throw new Error('Service account not found');
-  }
-
-  // Admin SDK 初期化
-  if (!admin.apps.length && serviceAccount) {
-    const storageBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
-      ? process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
-      : `${serviceAccount.project_id}.appspot.com`;
-
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: (serviceAccount as Record<string, unknown>).project_id as string,
-        clientEmail: (serviceAccount as Record<string, unknown>).client_email as string,
-        privateKey: (serviceAccount as Record<string, unknown>).private_key as string,
-      }),
-      storageBucket,
-    });
-    console.log('[OGP_API] Firebase Admin SDK 初期化完了');
-    console.log('[OGP_API] admin.app().options:', admin.app().options);
-    console.log('[OGP_API] process.version:', process.version);
-  }
-  db = admin.firestore();
-  // gRPCエラー回避: REST経由でFirestoreを動かす
-  db.settings({ experimentalForceLongPolling: true, useFetchStreams: true });
-  storage = admin.storage();
-} catch (err) {
-  console.error('[OGP_API] Firebase Admin SDK 初期化エラー:', err);
-  db = null;
-  storage = null;
-}
+const db = adminDb;
 
 export async function GET(
   _req: NextRequest,
@@ -92,7 +19,7 @@ export async function GET(
       console.log('[OGP_API] Firestore 未初期化');
       return new Response('Firestore not initialized', { status: 500 });
     }
-    if (!storage) {
+    if (!adminStorage) {
       console.log('[OGP_API] Storage 未初期化');
       return new Response('Storage not initialized', { status: 500 });
     }
@@ -109,7 +36,7 @@ export async function GET(
     console.log('[OGP_API] process.env.NODE_ENV:', process.env.NODE_ENV);
     console.log('[OGP_API] process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET:', process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET);
     console.log('[OGP_API] process.env.FIREBASE_SERVICE_ACCOUNT_KEY exists:', !!process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
-    let snap: admin.firestore.DocumentSnapshot;
+    let snap: FirebaseFirestore.DocumentSnapshot;
     try {
       snap = await db.collection('posts').doc(recordId).get();
     } catch (e) {
@@ -155,9 +82,7 @@ export async function GET(
         imageBuffer = Buffer.from(await imageResp.arrayBuffer());
       } else {
         // gs:// 形式やパスの場合は Storage から取得
-        let bucketName = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
-          ? process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
-          : (admin.app().options.storageBucket as string);
+        let bucketName = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || adminStorage.name;
         let filePath = record.imageUrl;
         if (filePath.startsWith('gs://')) {
           const m = filePath.match(/^gs:\/\/(.+?)\/(.+)$/);
@@ -166,7 +91,7 @@ export async function GET(
             filePath = m[2];
           }
         }
-        const file = storage.bucket(bucketName).file(filePath);
+        const file = admin.storage().bucket(bucketName).file(filePath);
         const [data] = await file.download();
         imageBuffer = data;
       }

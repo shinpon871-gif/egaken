@@ -1,12 +1,208 @@
 // app\api\createNine\route.ts
 import { NextResponse } from "next/server"
+import fs from "fs"
+import path from "path"
 import sharp from "sharp"
-import { admin, adminDb, adminStorage } from "@/lib/firebaseAdmin"
+import { ImageAnnotatorClient, protos } from "@google-cloud/vision"
+import { adminDb, adminStorage } from "@/lib/firebaseAdmin"
 
 export const runtime = "nodejs"
 
-const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID
 const storageBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+const serviceAccountPath = path.join(
+  process.cwd(),
+  "egaken-b4a7e-firebase-adminsdk-fbsvc-dacdaab784.json"
+)
+
+type FaceAnnotation = protos.google.cloud.vision.v1.IFaceAnnotation
+
+let visionClient: ImageAnnotatorClient | null | undefined
+
+function getVisionClient() {
+  if (visionClient !== undefined) {
+    return visionClient
+  }
+
+  try {
+    const serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY
+
+    if (serviceAccountKey) {
+      const credentials = JSON.parse(serviceAccountKey) as {
+        client_email?: string
+        private_key?: string
+        project_id?: string
+      }
+
+      if (credentials.private_key) {
+        credentials.private_key = credentials.private_key.replace(/\\n/g, "\n")
+      }
+
+      visionClient = new ImageAnnotatorClient({
+        credentials: {
+          client_email: credentials.client_email,
+          private_key: credentials.private_key,
+        },
+        projectId: credentials.project_id,
+      })
+
+      return visionClient
+    }
+
+    if (fs.existsSync(serviceAccountPath)) {
+      visionClient = new ImageAnnotatorClient({
+        keyFilename: serviceAccountPath,
+      })
+
+      return visionClient
+    }
+  } catch (error) {
+    console.warn("[createNine] Vision client 初期化失敗", error)
+  }
+
+  visionClient = null
+  return visionClient
+}
+
+function getFaceBounds(face: FaceAnnotation) {
+  const vertices = face.fdBoundingPoly?.vertices ?? face.boundingPoly?.vertices ?? []
+  const points = vertices
+    .map((vertex) => ({
+      x: typeof vertex?.x === "number" ? vertex.x : 0,
+      y: typeof vertex?.y === "number" ? vertex.y : 0,
+    }))
+    .filter((point, index, array) => {
+      if (index === 0) {
+        return true
+      }
+
+      return point.x !== array[0].x || point.y !== array[0].y
+    })
+
+  if (!points.length) {
+    return null
+  }
+
+  const xs = points.map((point) => point.x)
+  const ys = points.map((point) => point.y)
+
+  return {
+    left: Math.min(...xs),
+    top: Math.min(...ys),
+    right: Math.max(...xs),
+    bottom: Math.max(...ys),
+  }
+}
+
+async function detectFaceCenter(buffer: Buffer) {
+  const client = getVisionClient()
+
+  if (!client) {
+    return null
+  }
+
+  try {
+    const [result] = await client.faceDetection({ image: { content: buffer } })
+    const faces = (result.faceAnnotations ?? [])
+      .map(getFaceBounds)
+      .filter((face): face is NonNullable<ReturnType<typeof getFaceBounds>> => Boolean(face))
+
+    if (!faces.length) {
+      return null
+    }
+
+    const combined = faces.reduce(
+      (acc, face) => ({
+        left: Math.min(acc.left, face.left),
+        top: Math.min(acc.top, face.top),
+        right: Math.max(acc.right, face.right),
+        bottom: Math.max(acc.bottom, face.bottom),
+      }),
+      faces[0]
+    )
+
+    return {
+      x: (combined.left + combined.right) / 2,
+      y: (combined.top + combined.bottom) / 2,
+    }
+  } catch (error) {
+    console.warn("[createNine] 顔検出失敗。attention クロップへフォールバックします", error)
+    return null
+  }
+}
+
+function clampCropStart(start: number, cropSize: number, maxSize: number) {
+  if (cropSize >= maxSize) {
+    return 0
+  }
+
+  return Math.min(Math.max(0, Math.round(start)), maxSize - cropSize)
+}
+
+async function createGridTile(
+  buffer: Buffer,
+  cellWidth: number,
+  cellHeight: number
+) {
+  const targetWidth = Math.round(cellWidth)
+  const targetHeight = Math.round(cellHeight)
+  const metadata = await sharp(buffer).metadata()
+
+  if (!metadata.width || !metadata.height) {
+    return sharp(buffer)
+      .resize(targetWidth, targetHeight, {
+        fit: "cover",
+        position: sharp.strategy.attention,
+      })
+      .toBuffer()
+  }
+
+  const faceCenter = await detectFaceCenter(buffer)
+
+  if (!faceCenter) {
+    return sharp(buffer)
+      .resize(targetWidth, targetHeight, {
+        fit: "cover",
+        position: sharp.strategy.attention,
+      })
+      .toBuffer()
+  }
+
+  const sourceWidth = metadata.width
+  const sourceHeight = metadata.height
+  const targetAspect = targetWidth / targetHeight
+  const sourceAspect = sourceWidth / sourceHeight
+
+  let cropWidth = sourceWidth
+  let cropHeight = sourceHeight
+
+  if (sourceAspect > targetAspect) {
+    cropWidth = Math.min(sourceWidth, Math.round(sourceHeight * targetAspect))
+  } else {
+    cropHeight = Math.min(sourceHeight, Math.round(sourceWidth / targetAspect))
+  }
+
+  const left = clampCropStart(faceCenter.x - cropWidth / 2, cropWidth, sourceWidth)
+  const top = clampCropStart(faceCenter.y - cropHeight / 2, cropHeight, sourceHeight)
+
+  console.log("[createNine] 顔中心クロップ", {
+    sourceWidth,
+    sourceHeight,
+    cropWidth,
+    cropHeight,
+    left,
+    top,
+  })
+
+  return sharp(buffer)
+    .extract({
+      left,
+      top,
+      width: cropWidth,
+      height: cropHeight,
+    })
+    .resize(targetWidth, targetHeight)
+    .toBuffer()
+}
 
 export async function POST(req: Request) {
   console.log("[createNine] リクエスト開始")
@@ -48,17 +244,19 @@ export async function POST(req: Request) {
     // 画像をダウンロード（サムネイル化・並列処理）
     const images: Buffer[] = await Promise.all(
       imageUrls.map(async (url) => {
-        const thumbUrl = url + "=w450-h450-c"
-        console.log("[createNine] サムネイルURL", thumbUrl)
+        console.log("[createNine] 元画像URL", url)
 
         try {
-          const res = await fetch(thumbUrl)
+          const res = await fetch(url)
+          if (!res.ok) {
+            throw new Error(`Image fetch failed: ${res.status}`)
+          }
           const arrayBuffer = await res.arrayBuffer()
           const buffer = Buffer.from(arrayBuffer)
-          console.log("[createNine] サムネイルDL", buffer.length)
+          console.log("[createNine] 元画像DL", buffer.length)
           return buffer
-        } catch (err) {
-          console.error("[createNine] ダウンロード失敗", thumbUrl)
+        } catch {
+          console.error("[createNine] ダウンロード失敗", url)
           console.log("[createNine] 代替画像使用")
 
           const fallbackBuffer = await sharp({
@@ -92,9 +290,7 @@ export async function POST(req: Request) {
 
       console.log("[createNine] 画像配置", i, left, top)
 
-      const resized = await sharp(images[i])
-        .resize(Math.round(cellWidth), Math.round(cellHeight), { fit: "cover" })
-        .toBuffer()
+      const resized = await createGridTile(images[i], cellWidth, cellHeight)
 
       composites.push({
         input: resized,

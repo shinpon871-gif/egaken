@@ -9,7 +9,6 @@ import { calculateTrainingDays } from '@/lib/utils';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { ImageUploadArea } from './ImageUploadArea';
 import { OgpCropper } from './OgpCropper';
-import type { Area } from 'react-easy-crop';
 
 interface CreateRecordFormProps {
   onSuccess?: () => void;

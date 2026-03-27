@@ -199,6 +199,7 @@ export function RecordList({ refresh }: RecordListProps) {
             className="overflow-hidden rounded-lg bg-white shadow-md hover:shadow-lg"
           >
             <div className="relative aspect-square w-full overflow-hidden bg-gray-100">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={getProxyImageUrl(record.imageUrl)}
                 alt=""

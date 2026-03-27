@@ -39,9 +39,11 @@ export async function GET(
         }}
       >
         {urls.map((u, i) => (
+          // eslint-disable-next-line @next/next/no-img-element
           <img
             key={i}
             src={u}
+            alt=""
             width="400"
             height="400"
             style={{ objectFit: "cover" }}

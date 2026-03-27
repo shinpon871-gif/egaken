@@ -86,6 +86,7 @@ export default async function SharePage({ params }: { params: Promise<PageParams
       <main className="max-w-xs mx-auto py-8 px-4 flex flex-col min-h-[calc(100vh-120px)]">
         <div className="flex-1">
           <h1 className="text-xl font-bold mb-4 text-center">#えがけん最近描いた絵9選</h1>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={imageUrl} alt="" className="w-full rounded-lg shadow mb-4" style={{ maxWidth: 300, width: "100%" }} />
           <div className="flex justify-center mb-2">
             <a

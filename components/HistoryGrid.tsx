@@ -44,7 +44,7 @@ export default function HistoryGrid({ posts }: Props) {
       if (data.shareId) {
         router.push(`/nine/${data.shareId}`)
       }
-    } catch (e) {
+    } catch {
       alert('9選画像の生成に失敗しました')
     } finally {
       setLoading(false)
@@ -81,6 +81,7 @@ export default function HistoryGrid({ posts }: Props) {
               }`}
             >
               {/* ▼ ここ追加：画像クリックで遷移 */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={post.imageUrl}
                 alt="post"

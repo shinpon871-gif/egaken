@@ -30,12 +30,12 @@ type Post = {
 
 type Props = {
   recordId?: string;
-  version?: string;
   initialData: (Post | Record<string, unknown>) | null;
   v?: string;
 };
 
-export default function SharePostClient({ recordId, version, initialData, v }: Props) {
+export default function SharePostClient(props: Props) {
+  const { recordId, initialData } = props;
   const [post, setPost] = useState<Post | Record<string, unknown> | null>(initialData as Post | Record<string, unknown> | null);
   const [isLoading, setIsLoading] = useState<boolean>(!initialData);
   const [error, setError] = useState<string | null>(recordId ? null : "Record ID が指定されていません");

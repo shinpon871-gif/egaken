@@ -98,6 +98,7 @@ export function ImageUploadArea({
 
       {preview ? (
         <div className="mb-4 flex flex-col gap-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={preview}
             alt="プレビュー"

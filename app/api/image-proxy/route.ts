@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { storage } from '@/lib/firebase';
 
 /**
  * Firebase Storage の画像をプロキシして返す API
@@ -23,7 +22,7 @@ export async function GET(request: NextRequest) {
     let imageUrl: string;
     try {
       imageUrl = decodeURIComponent(encodedUrl);
-    } catch (error) {
+    } catch {
       return NextResponse.json(
         { error: 'Invalid URL encoding' },
         { status: 400 }

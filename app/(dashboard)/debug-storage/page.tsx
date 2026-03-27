@@ -156,6 +156,7 @@ export default function DebugStoragePage() {
                   画像プレビュー（クリックして展開）
                 </summary>
                 <div className="mt-2 p-2 bg-gray-50 rounded border border-gray-200">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={postImageUrl}
                     alt={postComment}

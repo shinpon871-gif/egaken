@@ -4,602 +4,755 @@
 
 - [えがけん 開発・運用ドキュメント](#えがけん-開発運用ドキュメント)
   - [目次](#目次)
-  - [クイックスタート](#クイックスタート)
-    - [📋 準備物](#-準備物)
-    - [⚡ 5分でスタート](#-5分でスタート)
-      - [1. Firebase プロジェクト作成（2分）](#1-firebase-プロジェクト作成2分)
-      - [2. Firebase サービス有効化（1分）](#2-firebase-サービス有効化1分)
-        - [Storage の料金プラン表示が出るときの対処](#storage-の料金プラン表示が出るときの対処)
-          - [Firebase Emulator を使った開発（推奨・無料）](#firebase-emulator-を使った開発推奨無料)
-      - [3. CORS設定（Storage画像のSNS対応）](#3-cors設定storage画像のsns対応)
-      - [4. .env.local 設定](#4-envlocal-設定)
-      - [5. 依存パッケージインストール](#5-依存パッケージインストール)
-      - [6. 開発サーバー起動](#6-開発サーバー起動)
-      - [7. OGP/SNS画像対策](#7-ogpsns画像対策)
-      - [8. Twitter(X)シェア・AIコメント](#8-twitterxシェアaiコメント)
   - [概要](#概要)
-  - [主な機能](#主な機能)
+  - [現在の実装サマリ](#現在の実装サマリ)
   - [技術スタック](#技術スタック)
-  - [ディレクトリ構成](#ディレクトリ構成)
-  - [セットアップガイド](#セットアップガイド)
+  - [クイックスタート](#クイックスタート)
+    - [準備物](#準備物)
+    - [セットアップ手順](#セットアップ手順)
+  - [環境変数](#環境変数)
   - [Firebaseセットアップ](#firebaseセットアップ)
-    - [画像アップロード時の注意](#画像アップロード時の注意)
-    - [CORS設定（Google Cloud Shell例）](#cors設定google-cloud-shell例)
-  - [OGP・SNS・画像表示の注意点](#ogpsns画像表示の注意点)
-  - [Twitter(X)共有機能ガイド](#twitterx共有機能ガイド)
-    - [UI要素](#ui要素)
-    - [Twitter(X)共有機能：実装例](#twitterx共有機能実装例)
-    - [Twitter(X)共有機能：注意点](#twitterx共有機能注意点)
-  - [AIコメント機能ガイド](#aiコメント機能ガイド)
-    - [AIコメント機能：実装例](#aiコメント機能実装例)
-      - [キャラクタータイプ例](#キャラクタータイプ例)
-      - [型定義例（Record型）](#型定義例record型)
-      - [Firestore構造例](#firestore構造例)
-      - [APIリクエスト例](#apiリクエスト例)
-      - [APIレスポンス例](#apiレスポンス例)
-      - [拡張・カスタマイズ方法](#拡張カスタマイズ方法)
-    - [AIコメント機能：注意点](#aiコメント機能注意点)
-    - [✨ 「#えがけん最近描いた絵9選」機能フロー](#-えがけん最近描いた絵9選機能フロー)
+    - [Authentication](#authentication)
+    - [Firestore](#firestore)
+    - [Storage](#storage)
+    - [CORS設定](#cors設定)
+  - [データ構造](#データ構造)
+    - [posts コレクション](#posts-コレクション)
+    - [weeklyThemes コレクション](#weeklythemes-コレクション)
+    - [nineShares コレクション](#nineshares-コレクション)
+    - [users コレクション](#users-コレクション)
+  - [主要画面](#主要画面)
+  - [主要API](#主要api)
+  - [OGP・SNS共有](#ogpsns共有)
+  - [AIコメント機能](#aiコメント機能)
+  - [週間お題機能](#週間お題機能)
+  - [9選機能](#9選機能)
+  - [ディレクトリ構成](#ディレクトリ構成)
   - [開発コマンド](#開発コマンド)
-  - [セキュリティ](#セキュリティ)
-  - [今後の拡張機能候補](#今後の拡張機能候補)
-  - [トラブル質問](#トラブル質問)
+  - [セキュリティと運用上の注意](#セキュリティと運用上の注意)
+  - [既知の注意点](#既知の注意点)
+  - [トラブルシュート](#トラブルシュート)
   - [ライセンス](#ライセンス)
-
----
-
-## クイックスタート
-
-「えがけん」MVP を素早くセットアップして動作確認するための手順です。
-
-### 📋 準備物
-
-- Node.js 18 以上
-- Google アカウント
-- Firebase プロジェクト（無料）
-
-### ⚡ 5分でスタート
-
-#### 1. Firebase プロジェクト作成（2分）
-
-```Bash
-1. https://console.firebase.google.com にアクセス
-2. 「プロジェクトを作成」
-3. プロジェクト名: egaken
-4. Google Analytics: オフでOK
-5. 「プロジェクトを作成」をクリック
-```
-
-#### 2. Firebase サービス有効化（1分）
-
-**Authentication:**
-
-- ビルド > Authentication
-- 「Start」 > Google > 有効化
-
-**Firestore Database:**
-
-- ビルド > Firestore Database
-- 「データベースを作成」
-- ロケーション: asia-northeast1（東京）
-- テスト モード で開始
-
-**Cloud Storage:**
-
-- ビルド > Storage
-- 「始める」
-
-> 注意: 一部の環境では `Storage を使用するには、プロジェクトの料金プランをアップグレードしてください` のようなメッセージが出ることがあります。以下を参照して回避してください。
-
-##### Storage の料金プラン表示が出るときの対処
-
-- 原因の例:
-  - Firebase Console ではなく GCP（Google Cloud Console）側でバケット作成を試みたため課金アカウントが必要になった。
-  - 組織ポリシーやプロジェクト作成時の設定により、無料プラン（Spark）での Storage 作成が制限されている。
-
-- 回避策（開発中・MVP 向け）:
-  1. まず Firebase コンソールの `Build > Storage > Get started`（Firebase の「始める」フロー）から作成を試みる。通常は Spark（無料）でバケットが作成できます。
-  2. それでも同じメッセージが出る場合は、ローカルで Firebase Emulator を使って開発を進める（本番デプロイ前は実際の Cloud Storage に切り替え）。
-     - エミュレータを使う利点: 実際の課金を必要とせず Storage/Firestore/Auth をローカルで試せます。
-
-###### Firebase Emulator を使った開発（推奨・無料）
-
-① `firebase-tools` をインストール（グローバル推奨）:
-
-```bash
-# グローバルインストール（必要な場合）
-npm install -g firebase-tools
-```
-
-② プロジェクトルートでエミュレータを初期化（まだ未実行なら）:
-
-```bash
-firebase init emulators
-```
-
-③ エミュレータを起動（Firestore, Storage, Auth のみ）:
-
-```bash
-firebase emulators:start --only firestore,storage,auth
-```
-
-1) 開発用に `lib/firebase.ts` の初期化を切り替える（条件でエミュレータに接続）か、端末で `FIREBASE_FIRESTORE_EMULATOR_HOST` 等の環境変数を設定して接続します。
-
-- 回避策（本番準備が必要な場合）:
-  - 本当にクラウド Storage を利用する場合は、プロジェクトに課金アカウント（Blaze）を紐づけます。Blaze は従量課金ですが、少量なら無料枠内での利用も可能です。課金を有効にする前に使用量とコストを確認してください。
-
----
-
-#### 3. CORS設定（Storage画像のSNS対応）
-
-```sh
-echo '[{"origin": ["*"],"method": ["GET"],"maxAgeSeconds": 3600}]' > cors.json
-gcloud storage buckets update gs://<your-bucket> --cors-file=cors.json
-```
-
-#### 4. .env.local 設定
-
-Firebase Consoleから各種キーを取得し、.env.localに記入。
-
-#### 5. 依存パッケージインストール
-
-```bash
-npm install
-```
-
-#### 6. 開発サーバー起動
-
-```bash
-npm run dev
-```
-
-#### 7. OGP/SNS画像対策
-
-- 画像URLはそのまま。ページURLにのみ?v=...を付与。
-- 画像アップロード時はcontentType指定、Imageタグはunoptimized。
-
-#### 8. Twitter(X)シェア・AIコメント
-
-- シェアボタンは常に最新の?v=...付きURLを生成。
-- AIコメントはOpenAI APIで非同期生成、失敗時は定型文返却。
 
 ---
 
 ## 概要
 
-お絵描きの記録を毎日続けるシンプルなWebアプリ「えがけん」の開発・運用ドキュメントです。
+えがけんは、お絵描きの練習を日々記録し、あとから振り返り、SNSで共有できる Next.js ベースの Web アプリです。
 
-## 主な機能
+現在の実装では、認証、画像付き投稿、投稿一覧、コメント編集・削除、AI応援コメント、週間お題、成長表示、X 共有、単一投稿 OGP、9選生成と共有まで一通り動作します。
 
-- Googleログイン認証（Firebase Authentication）
-- メールアドレス＋パスワードでのログイン・新規登録（/login）
-- パスワードリセット（メール送信による再設定）
-- 画像＋コメント＋練習時間の記録投稿（CreateRecordForm）
-- 記録の一覧表示・削除・リアルタイム反映（RecordList, Firestore）
-- 投稿詳細・シェアページ（/share/[recordId]）
-- OGP画像・SNSシェア完全対応（画像URLはそのまま、ページURLに?v=...付与）
-- 画像アップロード時はcontentType指定、Imageタグはunoptimized
-- AIコメント自動生成（OpenAI API, /api/generate-comment）
-- メールアドレス追加（Google連携ユーザー向け、LinkEmailForm）
-- ユーザー名変更（UserProfileForm, /profile）
-- プロフィール編集（UserProfileForm, /profile）
-- 統計・成長グラフ表示（StatsDisplay, Growth, /dashboard/growth）
-- デバッグ用ストレージ診断（/dashboard/debug-storage）
-- CORS設定済み
+---
+
+## 現在の実装サマリ
+
+- Firebase Authentication による Google ログイン
+- メールアドレス + パスワードでの新規登録・ログイン
+- パスワードリセットメール送信
+- Google ログイン済みユーザーへのメールアドレス連携
+- Firebase Storage への画像アップロード
+- 投稿作成、一覧表示、コメント編集、投稿削除
+- 練習時間、通算日数、継続日数、累計投稿数の可視化
+- OpenAI を使った応援コメント生成
+- 週間お題の取得と投稿への紐付け
+- 投稿詳細ページと共有ページの表示
+- OGP 画像の動的生成と X 共有
+- 任意の 9 投稿から 9選画像を生成し共有
+- Storage 動作確認用のデバッグ画面
+- 週間お題確認用のデバッグ画面
+
+---
 
 ## 技術スタック
 
-| 概要 | 技術 |
+| 区分 | 技術 |
 | --- | --- |
-| フロント | Next.js 15+ (App Router), React 19, TypeScript |
+| フロントエンド | Next.js 15.5, React 19, TypeScript |
 | スタイリング | Tailwind CSS 4 |
-| バックエンド | Firebase (Firestore, Storage, Auth) |
-| 認証 | Firebase Authentication (Google) |
-| データベース | Firestore |
-| ストレージ | Cloud Storage |
-| API | Next.js API Routes (/api/generate-comment, /api/image-proxy) |
-| AI | OpenAI API (AIコメント生成) |
-| UIフック | react-firebase-hooks |
-| その他 | ESLint, PostCSS, OGP対応, CORS, etc. |
+| 認証 | Firebase Authentication |
+| データベース | Cloud Firestore |
+| ストレージ | Firebase Storage |
+| サーバー処理 | Next.js App Router Route Handlers |
+| 画像処理 | sharp, react-easy-crop |
+| AI | OpenAI API |
+| 開発補助 | ESLint 9, PostCSS |
+| 動作前提 | Node.js 24.x |
 
-## ディレクトリ構成
+---
 
-```Bash
-egaken/
-├── app/
-│   ├── globals.css
-│   ├── layout.tsx
-│   ├── not-found.tsx
-│   ├── page.tsx
-│   ├── (auth)/
-│   │   └── login/
-│   │       └── page.tsx
-│   ├── (dashboard)/
-│   │   ├── layout.tsx
-│   │   ├── debug-storage/
-│   │   │   └── page.tsx
-│   │   ├── growth/
-│   │   │   └── page.tsx
-│   │   ├── history/
-│   │   │   └── page.tsx
-│   │   │       (✨ ユーザーの投稿履歴一覧・9選画像作成UI)
-│   │   ├── home/
-│   │   │   └── page.tsx
-│   │   ├── post/
-│   │   │   └── [id]/
-│   │   │       └── page.tsx
-│   │   └── ...
-│   ├── api/
-│   │   ├── createNine/
-│   │   │   └── route.ts
-│   │   │       (✨ 9枚の投稿画像をGrid状に合成・PNG生成・Firestore保存)
-│   │   ├── generate-comment/
-│   │   │   └── route.ts
-│   │   ├── grid/
-│   │   │   └── [shareId]/
-│   │   │       └── route.tsx
-│   │   │           (✨ 9選のOGP画像生成・3x3グリッド+ハッシュタグOGP表示)
-│   │   ├── image-proxy/
-│   │   │   └── route.ts
-│   │   ├── myPosts/
-│   │   │   └── route.ts
-│   │   │       (✨ ログインユーザーの投稿一覧をサーバー取得・9選作成用)
-│   │   └── og/
-│   │       └── [recordId]/
-│   │           └── route.tsx
-│   │               (単一投稿のOGP画像生成)
-│   ├── auth/
-│   │   └── login/
-│   │       └── page.tsx
-│   ├── i/
-│   │   └── [hash]/
-│   │       └── route.ts
-│   ├── nine/
-│   │   └── [shareId]/
-│   │       └── page.tsx
-│   │           (✨ 9選共有ページ・Firestore取得・X投稿リンク表示)
-│   ├── profile/
-│   │   └── page.tsx
-│   ├── record/
-│   │   └── [recordId]/
-│   │       └── page.tsx
-│   ├── share/
-│   │   └── [recordId]/
-│   │       ├── metadata.ts
-│   │       └── page.tsx
-│   └── ...
-├── components/
-│   ├── CreateRecordForm.tsx
-│   ├── FirebaseSecurityDiagnostic.tsx
-│   ├── HistoryGrid.tsx
-│   │   (✨ 投稿選択グリッド・9選生成ボタン・チェックボックスUI)
-│   ├── ImageUploadArea.tsx
-│   ├── LinkEmailForm.tsx
-│   ├── RecordList.tsx
-│   ├── ShareButton.tsx
-│   ├── SharePostClient.tsx
-│   ├── StatsDisplay.tsx
-│   └── UserProfileForm.tsx
-├── contexts/
-│   └── AuthContext.tsx
-├── lib/
-│   ├── firebase.ts
-│   ├── firebaseAdmin.ts
-│   │   (サーバー側Firebase Admin SDK初期化)
-│   ├── getPost.ts
-│   ├── growth.ts
-│   ├── stats.ts
-│   ├── twitter.ts
-│   └── utils.ts
-├── public/
-│   └── ogp.png
-├── ...
+## クイックスタート
+
+### 準備物
+
+- Node.js 24.x
+- npm
+- Firebase プロジェクト
+- OpenAI API キー
+- Firebase Admin SDK 用サービスアカウント
+
+### セットアップ手順
+
+1. 依存関係をインストール
+
+```bash
+npm install
 ```
 
-## セットアップガイド
+2. ルートに `.env.local` を作成し、必要な環境変数を設定
 
-1. リポジトリをクローン
-2. Firebase Consoleから各種キーを取得し、`.env.local` に設定（NEXT_PUBLIC_FIREBASE_... で始まる環境変数）
-3. `npm install` で依存パッケージを導入
-4. `npm run dev` で開発サーバー起動
-5. ブラウザで <http://localhost:3000> にアクセス
-6. Google認証・記録投稿・プロフィール編集・AIコメント・シェア等を動作確認
+3. ローカル開発では以下のいずれかで Admin SDK を有効化
 
-※詳細なトラブルシューティングやTipsはQUICKSTART.mdも参照。
+- ルートにサービスアカウント JSON を置く
+- `FIREBASE_SERVICE_ACCOUNT_KEY` に JSON 文字列を設定する
+
+4. Firebase Console で Authentication / Firestore / Storage を有効化
+
+5. Storage に CORS を設定
+
+6. 開発サーバーを起動
+
+```bash
+npm run dev
+```
+
+7. ブラウザで `http://localhost:3000` を開く
+
+---
+
+## 環境変数
+
+`.env.local` の例です。
+
+```bash
+NEXT_PUBLIC_FIREBASE_API_KEY=...
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=...
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=...
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
+NEXT_PUBLIC_FIREBASE_APP_ID=...
+OPENAI_API_KEY=...
+FIREBASE_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
+```
+
+用途は以下の通りです。
+
+- `NEXT_PUBLIC_FIREBASE_*`: クライアント SDK 初期化用
+- `OPENAI_API_KEY`: AI コメント生成 API 用
+- `FIREBASE_SERVICE_ACCOUNT_KEY`: サーバー側 Admin SDK 初期化用
+
+補足:
+
+- ローカルでは `egaken-b4a7e-firebase-adminsdk-fbsvc-dacdaab784.json` を直接読むフォールバック実装があります。
+- 本番では `FIREBASE_SERVICE_ACCOUNT_KEY` を設定する前提です。
+
+---
 
 ## Firebaseセットアップ
 
-```typescript
-import { initializeApp, getApps, getApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
-import { getStorage } from "firebase/storage";
+### Authentication
 
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-};
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app);
-export const storage = getStorage(app);
+有効化が必要な認証方式:
+
+- Google
+- メール / パスワード
+
+実装済みの認証フロー:
+
+- Google ポップアップログイン
+- メールアドレス新規登録
+- メールアドレスログイン
+- パスワードリセットメール送信
+- Google ログイン済みアカウントへのメールアドレス追加
+
+アプリ内ブラウザ注意:
+
+- Google ログインはアプリ内ブラウザを検出した場合、外部ブラウザ利用を促す UI を表示します。
+
+### Firestore
+
+主に使用するコレクション:
+
+- `posts`
+- `weeklyThemes`
+- `nineShares`
+- `users`
+
+現行コードでは投稿データの主保存先は `posts` です。
+
+### Storage
+
+アップロード先パス:
+
+```text
+records/{userId}/{timestamp}_{uuid}.{ext}
 ```
 
-### 画像アップロード時の注意
+フロント側の許可形式:
 
-```typescript
-await uploadBytes(storageRef, file, { contentType: file.type });
+- PNG
+- JPEG
+- WebP
+- GIF
+
+フロント側のサイズ上限:
+
+- 5MB
+
+重要:
+
+- Storage ルールの最大サイズ制限は、フロント側バリデーションと同じ 5MB に揃えてください。
+- `uploadBytes(..., { contentType: file.type })` で MIME Type を明示しています。
+
+推奨ルール例:
+
+```text
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /records/{userId}/{filename} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp|gif)');
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /nineShares/{filename} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}
 ```
 
-### CORS設定（Google Cloud Shell例）
+### CORS設定
+
+Storage の画像を共有やプレビューで扱うため、CORS を設定します。
 
 ```sh
 echo '[{"origin": ["*"],"method": ["GET"],"maxAgeSeconds": 3600}]' > cors.json
 gcloud storage buckets update gs://<your-bucket> --cors-file=cors.json
 ```
 
-## OGP・SNS・画像表示の注意点
+---
 
-- OGP画像URLはFirebase Storageの生URLをそのまま使用し、v等のクエリは付与しない。
-- ページURL（og:url, canonical）にのみキャッシュバスター（?v=...）を付与。
-- 画像アップロード時は `uploadBytes(..., { contentType: file.type })` でMIMEタイプを必ず指定。
-- Next.jsのImageタグには `unoptimized` を付与し、Storage画像の互換性を担保。
-- CORS設定はGoogle Cloud Shellで明示的に許可。
+## データ構造
 
-## Twitter(X)共有機能ガイド
+### posts コレクション
 
-- シェアボタンは常に最新の?v=...付きURLを生成。
-- OGP画像URLはそのまま、ページURLにのみ?v=...を付与。
-- 画像アップロード時はcontentType指定、Imageタグはunoptimized。
-- CORS設定済み。
-
-### UI要素
-
-- 「𝕏で共有」ボタンでXのintentダイアログが開く
-- 投稿プレビュー・文字数カウンター・エラー表示
-
-### Twitter(X)共有機能：実装例
+投稿の主データです。
 
 ```typescript
-const timestamp = Date.now();
-const baseUrl = window.location.origin;
-const shareUrl = `${baseUrl}/share/${recordId}?v=${timestamp}`;
-const xText = `練習の記録をシェアしました！\n${shareUrl}`;
-const xIntentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(xText)}`;
-```
-
-### Twitter(X)共有機能：注意点
-
-- 画像URLに?v=...を付与しない（トークン破壊防止）
-- ページURLにのみキャッシュバスター
-- contentType指定・unoptimized必須
-- CORS設定必須
-
-## AIコメント機能ガイド
-
-- 投稿保存後、非同期でAIコメント生成APIを呼び出し、Firestoreに保存
-- 失敗時は定型文を返却
-- OGP/SNS・画像・contentType・unoptimized・CORS対応済み
-
-### AIコメント機能：実装例
-
-- `/api/generate-comment/route.ts` でOpenAI API呼び出し
-- Firestoreの該当レコードに `aiComment` と `characterType` を保存
-- `CreateRecordForm.tsx` でキャラクタータイプ選択UI・API呼び出し・保存を実装
-- `RecordList.tsx` で `aiComment` と `characterType` を表示
-
-#### キャラクタータイプ例
-
-| 値           | 表示名           |
-|--------------|------------------|
-| strategist   | 知的で優しい参謀 |
-| genki        | 元気スポーツ少女 |
-| cool         | クール無口       |
-| oneesan      | お姉さん系       |
-| chuunibyou   | 中二病系         |
-| mascot       | 赤ちゃん言葉     |
-
-#### 型定義例（Record型）
-
-```typescript
-interface Record {
-  id: string;
+{
   userId: string;
   imageUrl: string;
-  comment: string;
   minutes: number;
-  aiComment?: string; // AI生成コメント
-  createdAt: Timestamp | null;
-  characterType?: string; // キャラクタータイプ
+  comment: string;
+  createdAt: Timestamp;
+  updatedAt?: Timestamp;
+  aiComment?: string;
+  characterType?: string;
+  weeklyThemeId?: string | null;
+  weeklyThemeTitle?: string | null;
+  showOgp?: boolean;
+  ogpCrop?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null;
 }
 ```
 
-#### Firestore構造例
+### weeklyThemes コレクション
+
+週間お題の管理用データです。
 
 ```typescript
 {
-  id: string,
-  userId: string,
-  imageUrl: string,
-  comment: string,
-  practiceMinutes: number,
-  createdAt: Timestamp,
-  aiComment?: string,      // AI生成コメント
-  characterType?: string,  // キャラクタータイプ
+  title: string;
+  startAt: Timestamp;
+  endAt: Timestamp;
 }
 ```
 
-#### APIリクエスト例
+### nineShares コレクション
+
+9選画像の共有データです。
+
+```typescript
+{
+  postIds: string[];
+  imageUrls: string[];
+  imageStoragePath: string;
+  imageUrl: string;
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+### users コレクション
+
+プロフィール更新時に補助的に保存されます。
+
+```typescript
+{
+  displayName?: string;
+}
+```
+
+---
+
+## 主要画面
+
+### `/`
+
+- 認証状態を見て `/home` または `/login` にリダイレクトします。
+
+### `/login`
+
+- Google ログイン
+- メールアドレスログイン
+- メールアドレス新規登録
+- パスワードリセット
+
+### `/home`
+
+- 統計表示
+- 新規投稿フォームの開閉
+- 投稿一覧表示
+- ヒストリー、成長、プロフィールへの導線
+
+### `/history`
+
+- 自分の投稿をグリッド表示
+- 画像クリックで詳細へ遷移
+- チェックボックスで最大 9 枚選択
+- 9選生成を実行
+
+### `/growth`
+
+- 初回投稿と最新投稿を比較表示
+- 継続日数を表示
+- 投稿が 2 件未満なら説明メッセージを表示
+
+### `/profile`
+
+- ユーザー名更新
+- メールアドレス追加
+- 現在の認証プロバイダ表示
+
+### `/record/[recordId]`
+
+- 単一投稿の詳細表示
+- 共有 UI 表示
+- OGP メタデータ生成あり
+
+### `/share/[recordId]`
+
+- 外部共有向けページ
+- `og=0` で OGP 画像なし共有に切り替え可能
+- `v` パラメータでページ側のキャッシュバスターを付与
+
+### `/nine/[shareId]`
+
+- 9選画像の共有ページ
+- X 投稿導線あり
+
+### `/debug-storage`
+
+- 最新投稿の Storage URL を検査
+- `/api/image-proxy` 経由での取得確認
+
+### `/debug-theme`
+
+- `weeklyThemes` の時刻比較を可視化
+
+---
+
+## 主要API
+
+### `POST /api/generate-comment`
+
+役割:
+
+- OpenAI を使って応援コメントを生成
+
+入力:
 
 ```json
-POST /api/generate-comment
 {
-  "imageUrl": "...",
+  "comment": "線の強弱を意識した",
   "practiceMinutes": 30,
-  "characterType": "genki"
+  "characterType": "strategist"
 }
 ```
 
-#### APIレスポンス例
+出力:
 
 ```json
 {
-  "aiComment": "すごい！今日もたくさん練習したね！..."
+  "aiComment": "線の強弱を意識した点がとても良いですね。..."
 }
 ```
 
-#### 拡張・カスタマイズ方法
+### `GET /api/myPosts?uid={uid}`
 
-- キャラクター追加は `/api/generate-comment/route.ts` の `CHARACTER_CONFIG` に追記し、型（CharacterType）も拡張
-- UIのセレクトボックスに新キャラを追加
-- 定型文・プロンプトも `CHARACTER_CONFIG` で一元管理
+役割:
 
-### AIコメント機能：注意点
+- 指定ユーザーの投稿一覧を取得
+- 9選用のグリッド表示に使う
 
-- 画像URLはそのまま、ページURLにのみ?v=...を付与
-- contentType指定・unoptimized必須
-- CORS設定必須
-  
-```typescript
-  practiceMinutes: number,     // 練習時間（分、任意）
-  createdAt: Timestamp,        // 作成日時
+返却項目:
+
+- `id`
+- `imageUrl`
+- `isTopNine`
+- `weeklyThemeTitle`
+- `isMissingUserId`
+
+### `POST /api/createNine`
+
+役割:
+
+- 9 枚の投稿画像を 3x3 の JPEG に合成
+- Storage に保存
+- `nineShares` に共有データを保存
+
+入力条件:
+
+- `postIds` は必ず 9 件
+
+### `GET /api/og/[recordId]`
+
+役割:
+
+- 単一投稿用の OGP 画像を生成
+- `ogpCrop` があればトリミングを反映
+
+### `GET /api/grid/[shareId]`
+
+役割:
+
+- 9選用の OGP 画像を `next/og` で生成
+
+### `GET /api/nine-ogp/[shareId]`
+
+役割:
+
+- 9選画像を生成・保存・公開 URL を返す補助 API
+
+補足:
+
+- 現在の `nineShares` 保存データは `imageUrls` を使っています。
+- この API は `data?.images` を参照しており、現行の主経路では使っていない補助実装です。
+
+### `GET /api/image-proxy?url=...`
+
+役割:
+
+- Storage 画像をサーバー側で取り直して返す
+- デバッグ画面や CORS 回避確認に利用
+
+### `GET /api/debug-theme`
+
+役割:
+
+- `weeklyThemes` を取得し、サーバー時刻と合わせて返す
+
+### `GET /i/[hash]`
+
+役割:
+
+- 短縮ハッシュから画像 URL にリダイレクト
+
+補足:
+
+- 現在のハッシュ管理はメモリ上の `Map` です。
+- プロセス再起動で消えるため、永続短縮 URL としては未完成です。
+
+---
+
+## OGP・SNS共有
+
+現在の共有仕様:
+
+- 投稿共有 URL は `/share/[recordId]?og=1&v=...`
+- OGP 画像の有無は `og` パラメータで切替
+- ページ URL にのみ `v` を付与してキャッシュバスターに利用
+- 単一投稿 OGP は `/api/og/[recordId]`
+- 9選共有ページは `/nine/[shareId]`
+
+X 投稿文の基本構成:
+
+- `#えがけん記録`
+- 練習時間
+- 通算日数
+- ユーザーコメント
+- `#えがけん`
+- 共有 URL
+
+文字数仕様:
+
+- 現在の実装は 140 文字上限でチェックしています。
+
+OGP 画像の注意点:
+
+- 投稿作成時に `showOgp` をオフにすると、共有ページ側でサマリーカードに切り替え可能です。
+- 投稿作成時に `ogpCrop` を設定すると、単一投稿 OGP のトリミングに反映されます。
+
+---
+
+## AIコメント機能
+
+投稿保存後、AI コメント生成は非同期で実行されます。
+
+流れ:
+
+1. 投稿を `posts` に保存
+2. `POST /api/generate-comment` を呼び出し
+3. 結果の `aiComment` を同じ投稿ドキュメントに追記
+4. 投稿一覧や共有画面はリアルタイム監視で追従
+
+キャラクタータイプ:
+
+- `strategist`
+- `genki`
+- `cool`
+- `oneesan`
+- `chuunibyou`
+- `mascot`
+- `sensei`
+
+実装上の特徴:
+
+- ユーザーのコメント内容に具体的に触れるプロンプト設計
+- 失敗時はキャラごとのフォールバック文を返す
+- 投稿保存自体は AI 失敗で巻き戻さない
+
+---
+
+## 週間お題機能
+
+`weeklyThemes` コレクションから、現在時刻が `startAt <= now <= endAt` に入るお題を取得します。
+
+投稿フォームでの挙動:
+
+- 現在有効なお題があればタイトルを表示
+- チェックボックスで参加可否を選択
+- 参加時のみ投稿に `weeklyThemeId` と `weeklyThemeTitle` を保存
+- シェア時はお題タイトルをコメント先頭に付与
+
+補足:
+
+- お題バッジは共有用プレビュー向けの扱いで、元画像そのものは加工しません。
+
+---
+
+## 9選機能
+
+### 概要
+
+履歴画面から投稿を 9 枚選び、3x3 グリッドの共有画像を生成します。
+
+### 現在のフロー
+
+1. `/history` で `/api/myPosts?uid=...` を呼び出す
+2. `HistoryGrid` で投稿を表示
+3. 画像本体クリックで `/record/[recordId]` へ遷移
+4. チェックボックスクリックで 9選候補に追加
+5. 9 枚そろうと `POST /api/createNine` を実行
+6. `sharp` で 1200x630 の JPEG を生成
+7. Storage の `nineShares/{shareId}.jpg` に保存
+8. Firestore の `nineShares/{shareId}` に保存
+9. `/nine/[shareId]` に遷移
+
+### 生成画像仕様
+
+- 形式: JPEG
+- サイズ: 1200x630
+- 配置: 3x3
+- 画像取得失敗時はグレーの代替画像を使用
+
+### 関連ファイル
+
+- `components/HistoryGrid.tsx`
+- `app/(dashboard)/history/page.tsx`
+- `app/api/myPosts/route.ts`
+- `app/api/createNine/route.ts`
+- `app/nine/[shareId]/page.tsx`
+- `app/api/grid/[shareId]/route.tsx`
+
+---
+
+## ディレクトリ構成
+
+生成物や管理用ディレクトリ（`.git/`, `.next/`, `node_modules/`, `.vercel/`, `.DS_Store` など）は除き、実装・設定上意味のあるファイルを中心にまとめています。
+
+```bash
+egaken/
+├── .env.local                                  # ローカル開発用の環境変数ファイル
+├── .gitignore                                  # Git管理から除外するファイル定義
+├── PROJECT_DOC.md                              # この開発・運用ドキュメント
+├── egaken-b4a7e-firebase-adminsdk-fbsvc-dacdaab784.json  # ローカル用 Firebase Admin SDK 鍵
+├── eslint.config.mjs                           # ESLint 設定
+├── file.tmp                                    # 一時作業用ファイル
+├── firestore.indexes.json                      # Firestore インデックス定義
+├── next-env.d.ts                               # Next.js 用型定義
+├── next.config.js                              # Next.js 設定の JS 版
+├── next.config.ts                              # 現在使っている Next.js 設定
+├── package-lock.json                           # npm lock file
+├── package.json                                # 依存関係と scripts
+├── postcss.config.mjs                          # PostCSS 設定
+├── tsconfig.json                               # TypeScript 設定
+├── app/
+│   ├── globals.css                             # グローバルスタイル
+│   ├── layout.tsx                              # ルートレイアウトと全体メタデータ
+│   ├── not-found.tsx                           # 404 ページ
+│   ├── page.tsx                                # ルートリダイレクトページ
+│   ├── (auth)/login/page.tsx                   # ログイン画面
+│   ├── (dashboard)/layout.tsx                  # ログイン後共通レイアウト
+│   ├── (dashboard)/debug-storage/page.tsx      # Storage デバッグ画面
+│   ├── (dashboard)/debug-theme/page.tsx        # 週間お題デバッグ画面
+│   ├── (dashboard)/growth/page.tsx             # 成長比較ページ
+│   ├── (dashboard)/history/page.tsx            # 投稿履歴と 9選画面
+│   ├── (dashboard)/home/page.tsx               # ホーム画面
+│   ├── (dashboard)/post/[id]/page.tsx          # 自分用投稿詳細
+│   ├── api/createNine/route.ts                 # 9選画像生成 API
+│   ├── api/debug-theme/route.ts                # お題確認 API
+│   ├── api/generate-comment/route.ts           # AI コメント生成 API
+│   ├── api/grid/[shareId]/route.tsx            # 9選 OGP 生成 API
+│   ├── api/image-proxy/route.ts                # 画像プロキシ API
+│   ├── api/myPosts/route.ts                    # 投稿一覧取得 API
+│   ├── api/nine-ogp/[shareId]/route.ts         # 9選補助 API
+│   ├── api/og/[recordId]/route.tsx             # 投稿 OGP 生成 API
+│   ├── auth/login/page.tsx                     # `/login` への転送ページ
+│   ├── i/[hash]/route.ts                       # 短縮 URL リダイレクト
+│   ├── nine/page.tsx                           # 空の補助ページ
+│   ├── nine/[shareId]/layout.tsx               # 9選レイアウト
+│   ├── nine/[shareId]/page.tsx                 # 9選共有ページ
+│   ├── profile/page.tsx                        # アカウント設定ページ
+│   ├── record/[recordId]/page.tsx              # 投稿詳細ページ
+│   └── share/[recordId]/page.tsx               # 外部共有ページ
+├── assets/
+│   └── badge_ogp.png                           # 補助画像
+├── components/
+│   ├── CreateRecordForm.tsx                    # 投稿作成フォーム
+│   ├── FirebaseSecurityDiagnostic.tsx          # Storage 診断 UI
+│   ├── HistoryGrid.tsx                         # 9選選択グリッド
+│   ├── ImageUploadArea.tsx                     # 画像入力 UI
+│   ├── LinkEmailForm.tsx                       # メール連携 UI の旧コンポーネント
+│   ├── OgpCropper.tsx                          # OGP トリミング UI
+│   ├── RecordList.tsx                          # 投稿一覧
+│   ├── ShareButton.tsx                         # X 共有ボタン
+│   ├── SharePostClient.tsx                     # 投稿共有クライアント UI
+│   ├── StatsDisplay.tsx                        # 統計表示
+│   └── UserProfileForm.tsx                     # プロフィール編集の旧コンポーネント
+├── contexts/
+│   └── AuthContext.tsx                         # 認証状態共有
+├── hooks/                                      # 現在は空
+├── lib/
+│   ├── firebase.ts                             # Firebase クライアント初期化
+│   ├── firebaseAdmin.ts                        # Firebase Admin 初期化
+│   ├── getCurrentWeeklyTheme.ts                # 現在のお題取得
+│   ├── getPost.ts                              # ダミー投稿取得関数
+│   ├── growth.ts                               # 成長データ計算
+│   ├── imageHash.ts                            # 画像短縮 URL 管理
+│   ├── stats.ts                                # 統計計算
+│   ├── twitter.ts                              # X 投稿文生成
+│   └── utils.ts                                # 共通ユーティリティ
+├── public/
+│   ├── egaken.png                              # アイコン画像
+│   ├── file.svg                                # 補助 SVG
+│   ├── globe.svg                               # 補助 SVG
+│   ├── next.svg                                # 補助 SVG
+│   ├── ogp.png                                 # フォールバック OGP
+│   ├── top-ogp.png                             # トップ OGP
+│   ├── top-ogp_test.png                        # OGP テスト出力
+│   ├── top-ogp_tmp.png                         # OGP 一時出力
+│   ├── vercel.svg                              # 補助 SVG
+│   └── window.svg                              # 補助 SVG
+└── scripts/
+    └── generate-top-ogp.js                     # トップ OGP 生成スクリプト
 ```
 
-### ✨ 「#えがけん最近描いた絵9選」機能フロー
+---
 
-**概要:**
-ユーザーの投稿から任意の9枚を選択し、3x3グリッド状に合成した画像を自動生成。
-Firestoreに保存してシェアリンクを生成し、X(Twitter)で投稿可能にする機能です。
-
-**実装フロー:**
-
-1. **投稿一覧取得** (`/dashboard/history`)
-   - `AuthContext` からログインユーザー情報を取得
-   - `/api/myPosts?uid={userId}` を呼び出し、投稿一覧を取得
-
-2. **9枚選択UI** (`HistoryGrid.tsx`)
-   - 投稿をグリッド状に表示
-   - **2つの操作方法が共存：**
-     - **投稿画像をクリック** → `/record/[recordId]` に遷移し、その投稿の詳細ページを表示
-     - **チェックボックスをクリック** → 最大9枚まで9選用に選択（チェック状態は青い枠で表示）
-   - 「9選を生成」ボタンで作成開始（9枚全て選択されたときのみクリック可能）
-
-   **ユーザー操作ガイド：**
-   - ✅ 個別投稿の詳細を見たい → 画像本体をクリック
-   - ✅ 9選に含める投稿を選びたい → 画像右上のチェックボックスをクリック
-   - ✅ どちらも可能 → 同じグリッド上で両方の操作ができます
-
-3. **画像合成・生成** (`/api/createNine`)
-   - 選択された9つの投稿IDから画像URLを取得
-   - 各画像をダウンロード（失敗時はグレー代替画像）
-   - `sharp`ライブラリで 300px × 300px のグリッド画像に合成
-   - PNG形式をBase64エンコードして `data:image/png;base64,...` 形式に変換
-
-4. **Firestore保存** (`/api/createNine`)
-   - `nineShares` コレクションに以下を保存:
-     - `shareId`: ランダム生成（UUID → 8文字）
-     - `postIds`: 選択された投稿ID配列
-     - `imageUrls`: 各投稿の画像URL配列
-     - `imageDataUrl`: 合成画像（Base64 Data URL）
-     - `createdAt`: 作成日時
-
-5. **9選ページ表示** (`/nine/[shareId]`)
-   - Firestoreから共有データを取得
-   - 合成画像を表示
-   - X投稿インテントURL生成：
-  
-     ```text
-     https://twitter.com/intent/tweet?text=%23えがけん最近描いた絵9選&url={shareUrl}
-     ```
-
-6. **OGP画像生成** (`/api/grid/[shareId]`)
-   - Firestore REST APIから `imageUrls` を取得
-   - `next/og` で 1200×1200px の OGP 画像を生成
-   - 3×3グリッド + ハッシュタグテキスト表示
-
-**関連ファイル:**
-
-- `HistoryGrid.tsx`: 選択UI・9選生成ボタン
-- `/api/myPosts/route.ts`: ユーザー投稿取得API
-- `/api/createNine/route.ts`: 画像合成・Firestore保存
-- `/nine/[shareId]/page.tsx`: 9選共有ページ
-- `/api/grid/[shareId]/route.tsx`: OGP画像生成
-
-**実装の注意点（イベント処理）：**
-
-```typescript
-// HistoryGrid.tsx での実装例
-
-// 画像クリックで個別投稿ページへ遷移
-<img
-  src={post.imageUrl}
-  alt="post"
-  className="w-full h-full object-cover cursor-pointer"
-  onClick={() => router.push(`/record/${post.id}`)}
-/>
-
-// チェックボックスクリックはイベント伝播を止める（画像クリックイベントが発火しないように）
-<input
-  type="checkbox"
-  className="absolute top-2 right-2 w-5 h-5 accent-blue-500"
-  checked={checked}
-  disabled={disabled}
-  onClick={(e) => e.stopPropagation()}  // ← クリックイベントの伝播を停止
-  onChange={() => toggleSelect(post.id)}
-  aria-label="画像を選択"
-/>
-```
-
-- 画像をクリック時にチェックボックスが反応しないよう `e.stopPropagation()` でイベント伝播を明示的に止める
-- これにより、画像クリック時は必ず遷移、チェックボックスクリック時は選択状態の切り替えのみが実行される
-  
 ## 開発コマンド
 
 ```bash
-# 開発サーバー起動
 npm run dev
-
-# 本番ビルド
 npm run build
-
-# 本番サーバー起動
 npm start
-
-# ESLint実行
 npm run lint
 ```
 
-## セキュリティ
+---
 
-- Firebase Authentication で安全なログイン
-- Firestore ルールでユーザーデータを隔離
-- Cloud Storage ルールでファイルサイズ・形式を制限
-- Firestore・Storage のセキュリティルール設定が必須
+## セキュリティと運用上の注意
 
-## 今後の拡張機能候補
+- `.env.local` とサービスアカウント JSON は Git に含めない
+- 本番では `FIREBASE_SERVICE_ACCOUNT_KEY` を環境変数で管理する
+- Storage の書き込み上限とフロントのファイル制限を一致させる
+- Firestore と Storage のセキュリティルールは Firebase Console 側で必ず設定する
+- 公開共有用の 9選画像は Storage 上で公開 URL として配信される
+- `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` と実バケット名の不一致があると OGP や画像取得で失敗しやすい
 
-- ストリーク表示（連続記録日数）
-- 統計（月別投稿数、総練習時間）
-- カレンダービュー（日付ごとの記録確認）
-- 検索機能（コメントで記録検索）
-- プロフィール（ユーザー情報編集）
-- AI コメント（ChatGPT統合）
-- ダークモード（ダークテーマ対応）
+---
 
-## トラブル質問
+## 既知の注意点
 
-1. コンソール（F12）でエラーメッセージを確認
-2. QUICKSTART.mdのトラブルシューティングを確認
-3. Firebase ドキュメントを参照
+- `app/profile/page.tsx` にプロフィール更新 UI が内包されており、`components/UserProfileForm.tsx` と `components/LinkEmailForm.tsx` は現状メイン経路では使っていません。
+- `lib/getPost.ts` はダミー実装です。
+- `app/api/nine-ogp/[shareId]/route.ts` は `data.images` を参照しており、現在の `nineShares` 保存形式とは一致していません。
+- `app/i/[hash]/route.ts` の短縮 URL はメモリ保持なので永続化されません。
+- `firestore.indexes.json` は現行コードの主データ保存先 `posts` と完全一致していないため、必要に応じて見直しが必要です。
+- `next.config.js` と `next.config.ts` が共存しています。運用上は `next.config.ts` を基準に確認してください。
+
+---
+
+## トラブルシュート
+
+### ログインできない
+
+- Firebase Authentication で Google とメール / パスワードが有効か確認
+- Google ログインをアプリ内ブラウザで試していないか確認
+- `NEXT_PUBLIC_FIREBASE_*` の値が正しいか確認
+
+### 画像アップロードに失敗する
+
+- Storage が有効化されているか確認
+- ファイル形式が PNG / JPEG / WebP / GIF のいずれかか確認
+- サイズが 5MB 以下か確認
+- Storage ルールとフロント側制限が一致しているか確認
+
+### AI コメントが付かない
+
+- `OPENAI_API_KEY` を確認
+- サーバーログで `/api/generate-comment` の失敗を確認
+- 投稿保存自体は成功していても、AI 生成だけ失敗している可能性があります
+
+### 共有画像が意図通り出ない
+
+- `showOgp` がオフになっていないか確認
+- ページ URL 側の `v` パラメータを更新して再取得を試す
+- OGP トリミング指定が極端な範囲になっていないか確認
+
+### 9選生成に失敗する
+
+- ちょうど 9 枚選択しているか確認
+- Admin SDK が初期化できているか確認
+- Storage バケット名とサービスアカウント権限を確認
+
+### 週間お題が出ない
+
+- `weeklyThemes` に `startAt`, `endAt` があるか確認
+- 現在時刻が期間内か確認
+- `/debug-theme` で時刻判定を確認
+
+---
 
 ## ライセンス
 
 MIT License
-
----
-
-Happy drawing! 🎨

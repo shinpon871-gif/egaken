@@ -81,9 +81,15 @@ export async function performPasswordReset(
     console.log(`[${timestamp}] [reset-send-success] Email sending appears successful`);
 
     // ✅ 成功（ただし実際にメールが届いたかは不明）
+    // Gmail特有の注意書きを追加
+    const isGmail = cleanedEmail.toLowerCase().endsWith('@gmail.com');
+    const gmailNote = isGmail 
+      ? '\n\n⚠️  Gmail をご利用の場合：迷惑メール フォルダを必ずご確認ください。' 
+      : '';
+    
     return {
       success: true,
-      userMessage: 'パスワードリセットメールを送信しました。\n(数分以内に受け取りが無い場合は迷惑メールフォルダをご確認ください)',
+      userMessage: `パスワードリセットメールを送信しました。\n(数分以内に受け取りが無い場合は迷惑メールフォルダをご確認ください)${gmailNote}`,
       internalMessage: `Password reset email sent to ${cleanedEmail}`,
     };
   } catch (err: unknown) {

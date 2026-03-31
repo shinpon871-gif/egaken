@@ -295,6 +295,19 @@ export default function LoginPage() {
             >
               パスワードを忘れた場合
             </button>
+            
+            {/* Gmail特有ガイド */}
+            <div className="mt-4 rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-800">
+              <p className="font-semibold mb-1">📧 Gmail をお使いの方へ</p>
+              <p className="mb-2">
+                パスワードリセットメールが届かない場合、以下をご確認ください：
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-blue-700">
+                <li>迷惑メール フォルダを確認</li>
+                <li>Gmail 設定 → セキュリティレベルを「標準」に変更</li>
+                <li>noreply@firebase.com をメール連絡先に追加</li>
+              </ul>
+            </div>
         </form>
 
         <p className="mt-6 text-xs text-gray-500 text-center">

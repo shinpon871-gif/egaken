@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
+import { isXAppBrowserFromUserAgent } from "@/lib/isInAppBrowser";
 
 // --- CHARACTER_CONFIG: データのみ、処理コード混入禁止 ---
 const CHARACTER_CONFIG = {
@@ -92,6 +93,18 @@ const openai = new OpenAI({
 });
 
 export async function POST(request: NextRequest) {
+  // ---- Xアプリ内ブラウザからのリクエストをブロック ----
+  const userAgent = request.headers.get("user-agent") || "";
+  if (isXAppBrowserFromUserAgent(userAgent)) {
+    return NextResponse.json(
+      {
+        error: "Xアプリ内ブラウザからの投稿はできません",
+        message: "SafariやChromeなどの通常のブラウザでお試しください",
+      },
+      { status: 403 }
+    );
+  }
+
   // ---- bodyを安全に1回だけ取得 ----
   let body: Record<string, unknown> = {};
   try {

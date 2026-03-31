@@ -6,6 +6,7 @@ import { db, storage } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
 import { getCurrentWeeklyTheme } from '@/lib/getCurrentWeeklyTheme';
 import { calculateTrainingDays } from '@/lib/utils';
+import { isInXAppBrowser } from '@/lib/isInAppBrowser';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { ImageUploadArea } from './ImageUploadArea';
 import { OgpCropper } from './OgpCropper';
@@ -67,7 +68,14 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const [showOgp, setShowOgp] = useState(true); // OGP画像表示フラグ
   const [ogpCrop, setOgpCrop] = useState<OgpCropData | null>(null); // OGP画像トリミング情報
   const [showCropper, setShowCropper] = useState(false); // Cropperモーダル表示フラグ
+  const [isXAppBrowser, setIsXAppBrowser] = useState(false); // Xアプリ内ブラウザフラグ
 
+  // Xアプリ内ブラウザの検知（初回レンダリング時）
+  useEffect(() => {
+    setIsXAppBrowser(isInXAppBrowser());
+  }, []);
+
+  // 今週のお題を取得
   useEffect(() => {
     (async () => {
       const theme = await getCurrentWeeklyTheme();
@@ -123,6 +131,40 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       const storageRef = ref(storage, createStorageFilePath(user.uid, selectedFile));
       const uploadResult = await uploadBytes(storageRef, selectedFile, { contentType: selectedFile.type });
       const imageUrl = await getDownloadURL(uploadResult.ref);
+
+      // ---- サーバー側のuser-agentチェック（二重防御） ----
+      const checkResponse = await fetch('/api/create-post', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: user.uid,
+          imageUrl,
+          minutes: practiceMinutes ? parseInt(practiceMinutes, 10) : 0,
+          comment: comment.trim() || '',
+          characterType: characterType || 'strategist',
+          weeklyThemeId: currentTheme && participateInTheme ? currentTheme.id : null,
+          weeklyThemeTitle: currentTheme && participateInTheme ? currentTheme.title : null,
+          showOgp,
+          ogpCrop: ogpCrop || null,
+        }),
+      });
+
+      // 403 Forbidden の場合、Xアプリ内ブラウザからのリクエスト
+      if (checkResponse.status === 403) {
+        const errorData = await checkResponse.json();
+        setError(`投稿エラー: ${errorData.message || 'Xアプリ内ブラウザでは投稿できません'}`);
+        setIsLoading(false);
+        return;
+      }
+
+      if (!checkResponse.ok) {
+        const errorData = await checkResponse.json();
+        setError(`投稿エラー: ${errorData.message || 'サーバーエラーが発生しました'}`);
+        setIsLoading(false);
+        return;
+      }
 
       // Firestoreにレコードを投稿として保存
       const recordRef = await addDoc(collection(db, 'posts'), {
@@ -197,25 +239,53 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
     <form onSubmit={handleSubmit} className="rounded-lg bg-white p-6 shadow-md">
       <h2 className="mb-6 text-2xl font-bold text-gray-800">今日のお絵描きを記録</h2>
 
-      {error && (
-        <div className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
-          {error}
+      {/* Xアプリ内ブラウザの場合はブロック */}
+      {isXAppBrowser && (
+        <div className="rounded-lg bg-red-50 border-2 border-red-300 p-6 mb-6 text-center">
+          <div className="text-3xl mb-3">🚫</div>
+          <p className="text-base font-semibold text-red-800 mb-3">
+            Xアプリ内ブラウザでは投稿できません
+          </p>
+          <p className="text-sm text-red-700 mb-6">
+            SafariやChromeなどの通常のブラウザで開いてください
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== 'undefined') {
+                window.open(window.location.href, '_blank');
+              }
+            }}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-6 py-3 font-semibold text-white transition hover:bg-red-700 active:scale-95"
+          >
+            <span>🌐</span>
+            外部ブラウザで開く
+          </button>
         </div>
       )}
 
-      {/* 画像アップロード */}
-      <div className="mb-6">
-        <label className="mb-2 block text-sm font-semibold text-gray-700">
-          画像を選択 <span className="text-red-500">*</span>
-        </label>
-        
-        <ImageUploadArea
-          onFileSelect={handleFileSelect}
-          preview={preview}
-          onPreviewClear={handlePreviewClear}
-          isLoading={isLoading}
-        />
-      </div>
+      {/* 通常フォーム（Xアプリ内ブラウザ以外） */}
+      {!isXAppBrowser && (
+        <>
+          {error && (
+            <div className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          {/* 画像アップロード */}
+          <div className="mb-6">
+            <label className="mb-2 block text-sm font-semibold text-gray-700">
+              画像を選択 <span className="text-red-500">*</span>
+            </label>
+            
+            <ImageUploadArea
+              onFileSelect={handleFileSelect}
+              preview={preview}
+              onPreviewClear={handlePreviewClear}
+              isLoading={isLoading}
+            />
+          </div>
 
       {/* OGP設定（画像選択後に表示） */}
       {preview && (
@@ -398,6 +468,8 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
             毎週の「お題」に参加して、みんなと一緒に作品を楽しみましょう（参加は任意）
           </p>
         </div>
+      )}
+        </>
       )}
     </form>
   );

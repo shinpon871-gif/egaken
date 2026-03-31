@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { auth } from '@/lib/firebase';
+import { performPasswordReset, printDiagnosticChecklist } from '@/lib/passwordReset';
 import {
   GoogleAuthProvider,
   signInWithPopup,
@@ -57,35 +58,50 @@ export default function LoginPage() {
       </div>
     );
   }
-    // --- パスワードリセット ---
-    const handlePasswordReset = async () => {
-      setEmailErrorMsg('');
-      // 前後の全角/半角スペース除去・不可視文字除去
-      const normalize = (str: string) => str.replace(/[\s\u3000]+/g, '');
-      const cleanedEmail = normalize(email);
-      if (!cleanedEmail) {
-        setEmailErrorMsg('まずメールアドレスを入力してください');
-        return;
+
+  // --- パスワードリセット ---
+  const handlePasswordReset = async () => {
+    setEmailErrorMsg('');
+
+    if (!email.trim()) {
+      setEmailErrorMsg('メールアドレスを入力してください');
+      return;
+    }
+
+    // 診断ログ出力（開発時用）
+    console.log('[🔐 PASSWORD RESET] Initiating diagnostic reset...');
+    console.log('[🔐 PASSWORD RESET] email input:', email);
+    console.log('[🔐 PASSWORD RESET] auth initialized:', !!auth);
+
+    try {
+      // continueUrl を動的に生成（現在のドメイン）
+      const continueUrl = typeof window !== 'undefined' 
+        ? `${window.location.origin}/login`
+        : undefined;
+      
+      console.log('[🔐 PASSWORD RESET] continueUrl:', continueUrl);
+
+      // performPasswordReset は詳細なログを出力しながら実行
+      const result = await performPasswordReset(auth, email, continueUrl);
+
+      // ユーザー向けメッセージを表示
+      if (result.success) {
+        setEmailErrorMsg(result.userMessage);
+      } else {
+        setEmailErrorMsg(result.userMessage);
       }
-      try {
-        const { sendPasswordResetEmail } = await import('firebase/auth');
-        await sendPasswordResetEmail(auth, cleanedEmail);
-        setEmailErrorMsg('パスワードリセット用のメールを送信しました');
-      } catch (err: unknown) {
-        const error = err as { code?: string; message?: string };
-        switch (error.code) {
-          case 'auth/user-not-found':
-            setEmailErrorMsg('登録されていないメールアドレスです');
-            break;
-          case 'auth/invalid-email':
-            setEmailErrorMsg('メールアドレスの形式が正しくありません');
-            break;
-          default:
-            setEmailErrorMsg('メール送信に失敗しました。再度お試しください');
-            break;
-        }
-      }
-    };
+
+      // 内部ログ（開発者用）
+      console.log('[🔐 PASSWORD RESET] Result:', {
+        success: result.success,
+        errorCode: result.errorCode,
+        internalMessage: result.internalMessage,
+      });
+    } catch (err: unknown) {
+      console.error('[🔐 PASSWORD RESET] Unexpected error:', err);
+      setEmailErrorMsg('予期しないエラーが発生しました');
+    }
+  };
 
   // ❌ 真ん中の useEffect 完全削除
 

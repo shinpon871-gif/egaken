@@ -52,6 +52,43 @@ const createStorageFilePath = (userId: string, file: File) => {
   return `records/${userId}/${Date.now()}_${uniqueId}.${extension}`;
 };
 
+const parsePracticeMinutes = (rawValue: string): number | null => {
+  if (!rawValue.trim()) {
+    return 0;
+  }
+
+  // Android IMEで混ざる全角数字を半角へ寄せる
+  const normalized = rawValue.normalize('NFKC').trim();
+  if (!/^\d+$/.test(normalized)) {
+    return null;
+  }
+
+  const minutes = Number.parseInt(normalized, 10);
+  if (!Number.isFinite(minutes) || minutes < 0 || minutes > 1440) {
+    return null;
+  }
+
+  return minutes;
+};
+
+const fetchWithTimeout = async (
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs = 15000,
+) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
 export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
   const { user } = useAuth();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -126,6 +163,13 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
     setIsLoading(true);
     setError(null);
 
+    const minutes = parsePracticeMinutes(practiceMinutes);
+    if (minutes === null) {
+      setError('練習時間は0〜1440の数字で入力してください');
+      setIsLoading(false);
+      return;
+    }
+
     try {
       // Firebase Storageに画像をアップロード（contentTypeを明示指定）
       const storageRef = ref(storage, createStorageFilePath(user.uid, selectedFile));
@@ -133,7 +177,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       const imageUrl = await getDownloadURL(uploadResult.ref);
 
       // ---- サーバー側のuser-agentチェック（二重防御） ----
-      const checkResponse = await fetch('/api/create-post', {
+      const checkResponse = await fetchWithTimeout('/api/create-post', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -141,7 +185,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
         body: JSON.stringify({
           userId: user.uid,
           imageUrl,
-          minutes: practiceMinutes ? parseInt(practiceMinutes, 10) : 0,
+          minutes,
           comment: comment.trim() || '',
           characterType: characterType || 'strategist',
           weeklyThemeId: currentTheme && participateInTheme ? currentTheme.id : null,
@@ -170,7 +214,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       const recordRef = await addDoc(collection(db, 'posts'), {
         userId: user.uid,
         imageUrl,
-        minutes: practiceMinutes ? parseInt(practiceMinutes, 10) : 0,
+        minutes,
         comment: comment.trim() || '',
         createdAt: serverTimestamp(),
         characterType: characterType || 'strategist',
@@ -194,7 +238,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
             },
             body: JSON.stringify({
               comment: comment.trim() || null,
-              practiceMinutes: practiceMinutes ? parseInt(practiceMinutes, 10) : null,
+              practiceMinutes: minutes || null,
               characterType: characterType || 'strategist',
             }),
           });
@@ -228,6 +272,11 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
 
       onSuccess?.();
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setError('通信がタイムアウトしました。通信状況を確認して再度お試しください。');
+        return;
+      }
+
       console.error('記録保存エラー:', error);
       setError('記録の保存に失敗しました。もう一度試してください。');
     } finally {

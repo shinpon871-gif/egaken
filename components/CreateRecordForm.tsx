@@ -290,7 +290,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
       {/* OGP設定（画像選択後に表示） */}
       {preview && (
         <div className="mb-6 border border-orange-200 bg-orange-50 rounded-lg p-4">
-          <h3 className="font-semibold text-gray-800 mb-3">🖼️ Twitter シェア画像設定</h3>
+          <h3 className="font-semibold text-gray-800 mb-3">🖼️ X（旧Twitter）シェア画像設定</h3>
           
           {/* OGP表示チェックボックス */}
           <div className="mb-3">
@@ -302,7 +302,7 @@ export function CreateRecordForm({ onSuccess }: CreateRecordFormProps) {
                 disabled={isLoading}
                 className="w-4 h-4"
               />
-              <span className="text-sm text-gray-700">Twitter で OGP画像を表示する</span>
+              <span className="text-sm text-gray-700">X（旧Twitter）で シェア画像を表示する</span>
             </label>
             <p className="text-xs text-gray-600 mt-1 ml-6">
               オフにするとテキストのみでシェアされます

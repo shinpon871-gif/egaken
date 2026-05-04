@@ -19,9 +19,54 @@ export function ImageUploadArea({
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isCompressing, setIsCompressing] = useState(false); // 圧縮中フラグ
 
-  // ファイル検証
-  const validateFile = (file: File): boolean => {
+  // 画像圧縮関数
+  const compressImage = async (file: File): Promise<File | null> => {
+    return new Promise((resolve) => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+      
+      img.onload = () => {
+        // サイズを計算（最大幅/高さを800pxに制限）
+        const maxDimension = 800;
+        let { width, height } = img;
+        if (width > height) {
+          if (width > maxDimension) {
+            height = (height * maxDimension) / width;
+            width = maxDimension;
+          }
+        } else {
+          if (height > maxDimension) {
+            width = (width * maxDimension) / height;
+            height = maxDimension;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        // 描画
+        ctx?.drawImage(img, 0, 0, width, height);
+        
+        // JPEGで圧縮（品質0.8）
+        canvas.toBlob((blob) => {
+          if (blob && blob.size <= 5 * 1024 * 1024) {
+            const compressedFile = new File([blob], file.name, { type: 'image/jpeg' });
+            resolve(compressedFile);
+          } else {
+            resolve(null); // 圧縮失敗
+          }
+        }, 'image/jpeg', 0.8);
+      };
+      
+      img.src = URL.createObjectURL(file);
+    });
+  };
+
+  // ファイル検証（圧縮対応）
+  const validateFile = async (file: File): Promise<boolean> => {
     const validTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
     
     if (!validTypes.includes(file.type)) {
@@ -31,8 +76,19 @@ export function ImageUploadArea({
 
     const maxSize = 5 * 1024 * 1024; // 5MB
     if (file.size > maxSize) {
-      setError('ファイルサイズは5MB以下にしてください');
-      return false;
+      setIsCompressing(true);
+      const compressedFile = await compressImage(file);
+      setIsCompressing(false);
+      
+      if (compressedFile) {
+        // 圧縮成功：圧縮ファイルを親コンポーネントに渡す
+        onFileSelect(compressedFile);
+        setError(null);
+        return true;
+      } else {
+        setError('ファイルサイズが大きすぎます。圧縮しても5MBを超えます。');
+        return false;
+      }
     }
 
     setError(null);
@@ -40,8 +96,8 @@ export function ImageUploadArea({
   };
 
   // ファイル処理の共通処理
-  const handleFile = (file: File) => {
-    if (validateFile(file)) {
+  const handleFile = async (file: File) => {
+    if (await validateFile(file)) {
       onFileSelect(file);
     }
   };
@@ -93,6 +149,12 @@ export function ImageUploadArea({
       {error && (
         <div className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
           {error}
+        </div>
+      )}
+      
+      {isCompressing && (
+        <div className="mb-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-700">
+          画像を圧縮中...
         </div>
       )}
 

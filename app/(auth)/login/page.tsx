@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { auth } from '@/lib/firebase';
-import { performPasswordReset, printDiagnosticChecklist } from '@/lib/passwordReset';
+import { performPasswordReset } from '@/lib/passwordReset';
 import {
   GoogleAuthProvider,
   signInWithPopup,

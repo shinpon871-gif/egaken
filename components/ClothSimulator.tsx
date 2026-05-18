@@ -11,8 +11,19 @@ const CHECKER_TEXTURE_SIZE = 256;
 
 type BodyRef = RefObject<THREE.Object3D>;
 type BodyApi = PublicApi;
-
+type HipPositionRef = { current: [number, number, number] };
 type ParticleCallback = (index: number, ref: BodyRef, api: BodyApi, position: [number, number, number]) => void;
+
+type DistanceConstraintProps = {
+  bodyA: BodyRef;
+  bodyB: BodyRef;
+  distance: number;
+};
+
+function DistanceConstraint({ bodyA, bodyB, distance }: DistanceConstraintProps) {
+  useDistanceConstraint(bodyA, bodyB, { distance });
+  return null;
+}
 
 function createCheckerTexture(colorA = '#caf0f8', colorB = '#9be7ff') {
   const canvas = document.createElement('canvas');
@@ -74,26 +85,58 @@ function StaticBox({ position, args }: { position: [number, number, number]; arg
   );
 }
 
-function Thigh({ side, isSitting }: { side: 'left' | 'right'; isSitting: boolean }) {
-  const offset = side === 'left' ? -0.35 : 0.35;
+function Hip({ isSitting, hipPositionRef }: { isSitting: boolean; hipPositionRef: HipPositionRef }) {
+  const [ref, api] = useBox<THREE.Object3D>(() => ({
+    type: 'Kinematic',
+    args: [0.85, 0.6, 0.78],
+    position: [0, 4.5, 0],
+  }));
+
+  const currentHeight = useRef(4.5);
+  const currentZ = useRef(0);
+
+  useFrame(() => {
+    const targetHeight = isSitting ? 3.2 : 4.5;
+    const targetZ = isSitting ? 0.1 : 0;
+    currentHeight.current += (targetHeight - currentHeight.current) * 0.08;
+    currentZ.current += (targetZ - currentZ.current) * 0.08;
+
+    api.position.set(0, currentHeight.current, currentZ.current);
+    hipPositionRef.current = [0, currentHeight.current, currentZ.current];
+  });
+
+  return (
+    <mesh ref={ref} castShadow receiveShadow>
+      <boxGeometry args={[0.85, 0.6, 0.78]} />
+      <meshStandardMaterial color="#f8b4d9" metalness={0.05} roughness={0.75} opacity={0.85} transparent />
+    </mesh>
+  );
+}
+
+function Thigh({ side, isSitting, hipPositionRef }: { side: 'left' | 'right'; isSitting: boolean; hipPositionRef: HipPositionRef }) {
+  const offsetX = side === 'left' ? -0.35 : 0.35;
   const targetAngle = isSitting ? Math.PI * 0.55 : 0;
-  const targetHeight = isSitting ? 3.25 : 3.65;
+  const targetZ = isSitting ? 0.16 : 0;
+  const targetHeight = isSitting ? 3.15 : 3.65;
 
   const [ref, api] = useCylinder<THREE.Object3D>(() => ({
     type: 'Kinematic',
     args: [0.22, 0.22, 0.9, 16],
-    position: [offset, 3.65, 0],
+    position: [offsetX, 3.65, 0],
   }));
 
   const currentAngle = useRef(0);
   const currentHeight = useRef(3.65);
+  const currentZ = useRef(0);
 
   useFrame(() => {
+    const hipPos = hipPositionRef.current;
     currentAngle.current += (targetAngle - currentAngle.current) * 0.08;
     currentHeight.current += (targetHeight - currentHeight.current) * 0.08;
+    currentZ.current += (targetZ - currentZ.current) * 0.08;
 
     api.rotation.set(currentAngle.current, 0, 0);
-    api.position.set(offset, currentHeight.current, 0);
+    api.position.set(offsetX, currentHeight.current, hipPos[2] + currentZ.current);
   });
 
   return (
@@ -104,44 +147,41 @@ function Thigh({ side, isSitting }: { side: 'left' | 'right'; isSitting: boolean
   );
 }
 
-function SeatAndThighs({ isSitting }: { isSitting: boolean }) {
+function SeatAndThighs({ isSitting, hipPositionRef }: { isSitting: boolean; hipPositionRef: HipPositionRef }) {
   return (
     <>
       <StaticBox position={[0, 3.1, 0.2]} args={[1.4, 0.24, 1.2]} />
-      <Thigh side="left" isSitting={isSitting} />
-      <Thigh side="right" isSitting={isSitting} />
+      <Hip isSitting={isSitting} hipPositionRef={hipPositionRef} />
+      <Thigh side="left" isSitting={isSitting} hipPositionRef={hipPositionRef} />
+      <Thigh side="right" isSitting={isSitting} hipPositionRef={hipPositionRef} />
     </>
   );
 }
 
-type ConstraintProps = {
-  bodyA?: BodyRef;
-  bodyB?: BodyRef;
-  distance: number;
+type ClothParticleProps = {
+  position: [number, number, number];
+  wireframe: boolean;
+  index: number;
+  onReady: ParticleCallback;
+  isWaist: boolean;
+  waistRadius: number;
+  waistAngle: number;
+  hipPositionRef: HipPositionRef;
 };
-
-function DistanceConstraint({ bodyA, bodyB, distance }: ConstraintProps) {
-  useDistanceConstraint(bodyA, bodyB, {
-    distance,
-    maxForce: 1e4,
-  });
-  return null;
-}
 
 function ClothParticle({
   position,
   wireframe,
   index,
   onReady,
-}: {
-  position: [number, number, number];
-  wireframe: boolean;
-  index: number;
-  onReady: ParticleCallback;
-}) {
+  isWaist,
+  waistRadius,
+  waistAngle,
+  hipPositionRef,
+}: ClothParticleProps) {
   const [ref, api] = useSphere<THREE.Object3D>(() => ({
-    type: 'Dynamic',
-    mass: position[1] === 4.8 ? 0 : 0.045,
+    type: isWaist ? 'Kinematic' : 'Dynamic',
+    mass: isWaist ? 0 : 0.045,
     args: [0.06],
     position,
     linearDamping: 0.96,
@@ -156,6 +196,16 @@ function ClothParticle({
     return unsubscribe;
   }, [index, onReady, position, ref, api]);
 
+  useFrame(() => {
+    if (isWaist) {
+      const [hipX, hipY, hipZ] = hipPositionRef.current;
+      const x = hipX + Math.cos(waistAngle) * waistRadius;
+      const z = hipZ + Math.sin(waistAngle) * waistRadius;
+      const y = hipY + 0.3;
+      api.position.set(x, y, z);
+    }
+  });
+
   return (
     <mesh ref={ref} castShadow visible={wireframe} scale={wireframe ? [1, 1, 1] : [0.001, 0.001, 0.001]}>
       <sphereGeometry args={[0.015, 8, 8]} />
@@ -164,7 +214,7 @@ function ClothParticle({
   );
 }
 
-function ClothGrid({ wireframe }: { wireframe: boolean }) {
+function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPositionRef: HipPositionRef }) {
   const radialSegments = 16;
   const heightSegments = 8;
   const topRadius = 0.64;
@@ -173,7 +223,7 @@ function ClothGrid({ wireframe }: { wireframe: boolean }) {
   const topY = 4.8;
   const angleStep = (Math.PI * 2) / radialSegments;
 
-  const startPositions = useMemo(
+  const gridPoints = useMemo(
     () =>
       Array.from({ length: radialSegments * heightSegments }, (_, index) => {
         const row = Math.floor(index / radialSegments);
@@ -182,13 +232,18 @@ function ClothGrid({ wireframe }: { wireframe: boolean }) {
         const radius = topRadius + (bottomRadius - topRadius) * t;
         const y = topY - t * skirtHeight;
         const angle = col * angleStep;
-        return [Math.cos(angle) * radius, y, Math.sin(angle) * radius] as [number, number, number];
+        return {
+          position: [Math.cos(angle) * radius, y, Math.sin(angle) * radius] as [number, number, number],
+          row,
+          angle,
+          radius,
+        };
       }),
     [angleStep, bottomRadius, heightSegments, radialSegments, topRadius, topY, skirtHeight]
   );
 
   const [particleRefsState, setParticleRefsState] = useState<BodyRef[]>([]);
-  const particlePositions = useRef<Array<[number, number, number]>>(startPositions.slice());
+  const particlePositions = useRef<Array<[number, number, number]>>(gridPoints.map((point) => point.position));
 
   const registerParticle = useCallback(
     (index: number, ref: BodyRef, api: BodyApi, position: [number, number, number]) => {
@@ -212,10 +267,10 @@ function ClothGrid({ wireframe }: { wireframe: boolean }) {
     const positions = new Float32Array(radialSegments * heightSegments * 3);
     const indices: number[] = [];
 
-    startPositions.forEach((pos, index) => {
-      positions[index * 3] = pos[0];
-      positions[index * 3 + 1] = pos[1];
-      positions[index * 3 + 2] = pos[2];
+    gridPoints.forEach((point, index) => {
+      positions[index * 3] = point.position[0];
+      positions[index * 3 + 1] = point.position[1];
+      positions[index * 3 + 2] = point.position[2];
     });
 
     for (let row = 0; row < heightSegments - 1; row += 1) {
@@ -234,7 +289,7 @@ function ClothGrid({ wireframe }: { wireframe: boolean }) {
     geo.setIndex(indices);
     geo.computeVertexNormals();
     return geo;
-  }, [heightSegments, radialSegments, startPositions]);
+  }, [gridPoints, heightSegments, radialSegments]);
 
   useFrame(() => {
     const position = clothGeometry.attributes.position as THREE.BufferAttribute;
@@ -256,9 +311,9 @@ function ClothGrid({ wireframe }: { wireframe: boolean }) {
           a: index,
           b: nextCol,
           distance: Math.hypot(
-            startPositions[index][0] - startPositions[nextCol][0],
-            startPositions[index][1] - startPositions[nextCol][1],
-            startPositions[index][2] - startPositions[nextCol][2]
+            gridPoints[index].position[0] - gridPoints[nextCol].position[0],
+            gridPoints[index].position[1] - gridPoints[nextCol].position[1],
+            gridPoints[index].position[2] - gridPoints[nextCol].position[2]
           ),
         });
 
@@ -269,35 +324,39 @@ function ClothGrid({ wireframe }: { wireframe: boolean }) {
             a: index,
             b: nextRow,
             distance: Math.hypot(
-              startPositions[index][0] - startPositions[nextRow][0],
-              startPositions[index][1] - startPositions[nextRow][1],
-              startPositions[index][2] - startPositions[nextRow][2]
+              gridPoints[index].position[0] - gridPoints[nextRow].position[0],
+              gridPoints[index].position[1] - gridPoints[nextRow].position[1],
+              gridPoints[index].position[2] - gridPoints[nextRow].position[2]
             ),
           });
           pairs.push({
             a: index,
             b: nextRowCol,
             distance: Math.hypot(
-              startPositions[index][0] - startPositions[nextRowCol][0],
-              startPositions[index][1] - startPositions[nextRowCol][1],
-              startPositions[index][2] - startPositions[nextRowCol][2]
+              gridPoints[index].position[0] - gridPoints[nextRowCol].position[0],
+              gridPoints[index].position[1] - gridPoints[nextRowCol].position[1],
+              gridPoints[index].position[2] - gridPoints[nextRowCol].position[2]
             ),
           });
         }
       }
     }
     return pairs;
-  }, [heightSegments, radialSegments, startPositions]);
+  }, [gridPoints, heightSegments, radialSegments]);
 
   return (
     <group>
-      {startPositions.map((position, index) => (
+      {gridPoints.map((point, index) => (
         <ClothParticle
           key={`particle-${index}`}
           index={index}
-          position={position}
+          position={point.position}
           wireframe={wireframe}
           onReady={registerParticle}
+          isWaist={point.row === 0}
+          waistRadius={topRadius}
+          waistAngle={point.angle}
+          hipPositionRef={hipPositionRef}
         />
       ))}
 
@@ -332,6 +391,7 @@ function ClothGrid({ wireframe }: { wireframe: boolean }) {
 export default function ClothSimulator() {
   const [wireframe, setWireframe] = useState(false);
   const [isSitting, setIsSitting] = useState(false);
+  const hipPositionRef = useRef<[number, number, number]>([0, 4.5, 0]);
 
   return (
     <div className="absolute inset-0">
@@ -341,8 +401,8 @@ export default function ClothSimulator() {
         <spotLight position={[-4, 6, 4]} intensity={0.6} penumbra={0.4} />
         <Physics gravity={[0, -9.8, 0]} iterations={12} broadphase="SAP">
           <BasePlane />
-          <SeatAndThighs isSitting={isSitting} />
-          <ClothGrid wireframe={wireframe} />
+          <SeatAndThighs isSitting={isSitting} hipPositionRef={hipPositionRef} />
+          <ClothGrid wireframe={wireframe} hipPositionRef={hipPositionRef} />
         </Physics>
         <OrbitControls makeDefault enablePan enableZoom enableRotate />
       </Canvas>
@@ -364,7 +424,7 @@ export default function ClothSimulator() {
             {isSitting ? '立つ' : '座る'}
           </button>
           <p className="mt-3 text-xs text-slate-200">
-            座ると太ももが前に倒れてスカートが椅子に広がる動きを表現します。
+            座ると腰が沈み、お尻が椅子に乗り、太ももが前に突き出る着座ポーズを表現します。
           </p>
         </div>
       </div>

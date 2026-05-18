@@ -105,43 +105,56 @@ function Hip({ isSitting, hipPositionRef }: { isSitting: boolean; hipPositionRef
     hipPositionRef.current = [0, currentHeight.current, currentZ.current];
   });
 
+  // Keep physics body as a box for stability, but render two squashed spheres
   return (
-    <mesh ref={ref} castShadow receiveShadow>
-      <boxGeometry args={[0.85, 0.6, 0.78]} />
-      <meshStandardMaterial color="#f8b4d9" metalness={0.05} roughness={0.75} opacity={0.85} transparent />
-    </mesh>
+    <group ref={ref} castShadow receiveShadow>
+      <mesh position={[-0.2, -0.05, -0.05]} scale={[0.42, 0.32, 0.38]}>
+        <sphereGeometry args={[1, 32, 32]} />
+        <meshStandardMaterial color="#f8b4d9" metalness={0.05} roughness={0.75} opacity={0.95} transparent />
+      </mesh>
+      <mesh position={[0.2, -0.05, -0.05]} scale={[0.42, 0.32, 0.38]}>
+        <sphereGeometry args={[1, 32, 32]} />
+        <meshStandardMaterial color="#f8b4d9" metalness={0.05} roughness={0.75} opacity={0.95} transparent />
+      </mesh>
+    </group>
   );
 }
 
 function Thigh({ side, isSitting, hipPositionRef }: { side: 'left' | 'right'; isSitting: boolean; hipPositionRef: HipPositionRef }) {
   const offsetX = side === 'left' ? -0.35 : 0.35;
-  const targetAngle = isSitting ? Math.PI * 0.55 : 0;
-  const targetZ = isSitting ? 0.16 : 0;
-  const targetHeight = isSitting ? 3.15 : 3.65;
+  // Pivot-aware thigh: rotate around hip joint so the thigh-root stays at the hip
+  const jointOffsetY = -0.1; // local joint Y offset from hip
+  const thighLength = 0.9;
+  const halfLength = thighLength / 2; // distance from joint to mesh center
+  const targetAngle = isSitting ? Math.PI * 0.5 : 0; // requested approx 90deg when sitting
 
   const [ref, api] = useCylinder<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.22, 0.22, 0.9, 16],
+    args: [0.22, 0.22, thighLength, 16],
     position: [offsetX, 3.65, 0],
   }));
 
   const currentAngle = useRef(0);
-  const currentHeight = useRef(3.65);
-  const currentZ = useRef(0);
 
   useFrame(() => {
     const hipPos = hipPositionRef.current;
+    // ease only the angle
     currentAngle.current += (targetAngle - currentAngle.current) * 0.08;
-    currentHeight.current += (targetHeight - currentHeight.current) * 0.08;
-    currentZ.current += (targetZ - currentZ.current) * 0.08;
+    const angle = currentAngle.current;
 
-    api.rotation.set(currentAngle.current, 0, 0);
-    api.position.set(offsetX, currentHeight.current, hipPos[2] + currentZ.current);
+    // Compute mesh center so that the joint (thigh top) stays fixed at hip + joint offset
+    const x = hipPos[0] + offsetX;
+    const y = (hipPos[1] + jointOffsetY) - halfLength * Math.cos(angle);
+    const z = hipPos[2] + halfLength * Math.sin(angle);
+
+    api.rotation.set(angle, 0, 0);
+    api.position.set(x, y, z);
   });
 
+  // Render as elongated rugby-ball shaped mesh while keeping cylinder physics
   return (
-    <mesh ref={ref} castShadow receiveShadow scale={[1, 1, 0.68]}>
-      <cylinderGeometry args={[0.22, 0.22, 0.9, 24]} />
+    <mesh ref={ref} castShadow receiveShadow scale={[0.22, 0.45, 0.22]}>
+      <sphereGeometry args={[1, 32, 32]} />
       <meshStandardMaterial color="#e2e8f0" metalness={0.05} roughness={0.75} />
     </mesh>
   );

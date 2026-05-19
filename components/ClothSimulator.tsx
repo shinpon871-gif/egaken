@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
-import { Physics, useBox, useSphere, useCylinder, useDistanceConstraint, type PublicApi } from '@react-three/cannon';
+import { OrbitControls, useGLTF, useAnimations } from '@react-three/drei';
+import { Physics, useBox, useSphere, useDistanceConstraint, type PublicApi } from '@react-three/cannon';
 import * as THREE from 'three';
 import { DoubleSide } from 'three';
 
@@ -85,102 +85,179 @@ function StaticBox({ position, args }: { position: [number, number, number]; arg
   );
 }
 
-function Hip({ isSitting, hipPositionRef }: { isSitting: boolean; hipPositionRef: HipPositionRef }) {
-  const [ref, api] = useBox<THREE.Object3D>(() => ({
+function HumanModel({
+  isSitting,
+  modelYOffset,
+  onPelvisPositionUpdate,
+  onDebugInfo,
+}: {
+  isSitting: boolean;
+  modelYOffset: number;
+  onPelvisPositionUpdate: (position: [number, number, number]) => void;
+  onDebugInfo?: (bones: string[], animations: string[]) => void;
+}) {
+  const gltf = useGLTF('/models/human.glb');
+  const { scene, animations } = gltf as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
+  const { actions } = useAnimations(animations, scene) as unknown as Record<string, THREE.AnimationAction>;
+  const modelRef = useRef<THREE.Group>(null);
+  const activeActionRef = useRef<THREE.AnimationAction | null>(null);
+  const pelvisBoneRef = useRef<THREE.Object3D | null>(null);
+  const leftThighBoneRef = useRef<THREE.Object3D | null>(null);
+  const rightThighBoneRef = useRef<THREE.Object3D | null>(null);
+
+  const [pelvisColliderRef, pelvisColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.85, 0.6, 0.78],
+    args: [0.4, 0.26, 0.3],
     position: [0, 4.5, 0],
   }));
+  const [leftThighColliderRef, leftThighColliderApi] = useBox<THREE.Object3D>(() => ({
+    type: 'Kinematic',
+    args: [0.25, 0.45, 0.25],
+    position: [-0.2, 3.1, 0.1],
+  }));
+  const [rightThighColliderRef, rightThighColliderApi] = useBox<THREE.Object3D>(() => ({
+    type: 'Kinematic',
+    args: [0.25, 0.45, 0.25],
+    position: [0.2, 3.1, 0.1],
+  }));
 
-  const currentHeight = useRef(4.5);
-  const currentZ = useRef(0);
+  const standAction = useMemo(() => {
+    if (!actions || typeof actions !== 'object') return undefined;
+    const a = actions as unknown as Record<string, THREE.AnimationAction>;
+    const actionList = Object.values(a);
+    return (
+      a['Stand'] ??
+      a['stand'] ??
+      a['Idle'] ??
+      a['idle'] ??
+      a['mixamo.com'] ??
+      a['Take 001'] ??
+      actionList[0]
+    );
+  }, [actions]);
+
+  const sitAction = useMemo(() => {
+    if (!actions || typeof actions !== 'object') return undefined;
+    const a = actions as unknown as Record<string, THREE.AnimationAction>;
+    const actionList = Object.values(a);
+    return (
+      a['Sit'] ??
+      a['sit'] ??
+      a['SitDown'] ??
+      a['sit_down'] ??
+      a['mixamo.com'] ??
+      a['Take 001'] ??
+      actionList[1] ??
+      actionList[0]
+    );
+  }, [actions]);
+
+  useEffect(() => {
+    if (!actions || !scene) return;
+
+    // Collect all bone names
+    const bones: string[] = [];
+    scene.traverse((obj) => {
+      if (obj !== scene && obj.name) {
+        bones.push(obj.name);
+      }
+    });
+    console.log('Bones found in model:', bones);
+
+    // Collect all animation names
+    const anims = Object.keys(actions);
+    console.log('Animations found:', anims);
+
+    // Call debug callback
+    if (onDebugInfo) {
+      onDebugInfo(bones, anims);
+    }
+
+    const findBone = (names: string[]) => {
+      for (const name of names) {
+        const bone = scene.getObjectByName(name);
+        if (bone) return bone;
+      }
+      return null;
+    };
+
+    pelvisBoneRef.current = findBone(['Pelvis', 'pelvis', 'Hips', 'hips', 'mixamorigHips', 'mixamorigHips_1']);
+    leftThighBoneRef.current = findBone(['LeftUpLeg', 'left_up_leg', 'LeftLeg', 'thigh_l', 'mixamorigLeftUpLeg', 'mixamorigLeftUpLeg_1']);
+    rightThighBoneRef.current = findBone(['RightUpLeg', 'right_up_leg', 'RightLeg', 'thigh_r', 'mixamorigRightUpLeg', 'mixamorigRightUpLeg_1']);
+
+    Object.values(actions).forEach((action: THREE.AnimationAction) => {
+      action.enabled = true;
+      action.setEffectiveWeight(0);
+      action.loop = THREE.LoopRepeat;
+      action.play();
+    });
+
+    if (standAction) {
+      standAction.reset().fadeIn(0.3).setEffectiveWeight(1).play();
+      activeActionRef.current = standAction;
+    }
+
+    return () => {
+      Object.values(actions).forEach((action: THREE.AnimationAction) => action.stop());
+    };
+  }, [actions, scene, standAction, onDebugInfo]);
+
+  useEffect(() => {
+    if (!standAction && !sitAction) return;
+    const target = isSitting ? sitAction : standAction;
+    const previous = activeActionRef.current;
+    if (target && previous !== target) {
+      previous?.fadeOut(0.2);
+      target.reset().fadeIn(0.2).setEffectiveWeight(1).play();
+      activeActionRef.current = target;
+    }
+  }, [isSitting, sitAction, standAction]);
 
   useFrame(() => {
-    const targetHeight = isSitting ? 3.2 : 4.5;
-    const targetZ = isSitting ? 0.1 : 0;
-    currentHeight.current += (targetHeight - currentHeight.current) * 0.08;
-    currentZ.current += (targetZ - currentZ.current) * 0.08;
+    if (modelRef.current) {
+      modelRef.current.position.y = modelYOffset;
+    }
 
-    api.position.set(0, currentHeight.current, currentZ.current);
-    hipPositionRef.current = [0, currentHeight.current, currentZ.current];
+    const updateBone = (bone: THREE.Object3D | null, api: PublicApi) => {
+      if (!bone) return;
+      const position = new THREE.Vector3();
+      bone.getWorldPosition(position);
+      api.position.set(position.x, position.y, position.z);
+      const quaternion = new THREE.Quaternion();
+      bone.getWorldQuaternion(quaternion);
+      const euler = new THREE.Euler().setFromQuaternion(quaternion);
+      api.rotation.set(euler.x, euler.y, euler.z);
+    };
+
+    updateBone(pelvisBoneRef.current, pelvisColliderApi);
+    updateBone(leftThighBoneRef.current, leftThighColliderApi);
+    updateBone(rightThighBoneRef.current, rightThighColliderApi);
+
+    if (pelvisBoneRef.current) {
+      const position = new THREE.Vector3();
+      pelvisBoneRef.current.getWorldPosition(position);
+      onPelvisPositionUpdate([position.x, position.y, position.z]);
+    }
   });
 
-  // Keep physics body as a box for stability, but render two squashed spheres
   return (
-    <group ref={ref} castShadow receiveShadow>
-      <mesh position={[-0.2, -0.05, -0.05]} scale={[0.42, 0.32, 0.38]}>
-        <sphereGeometry args={[1, 32, 32]} />
-        <meshStandardMaterial color="#f8b4d9" metalness={0.05} roughness={0.75} opacity={0.95} transparent />
+    <group>
+      <primitive object={scene} ref={modelRef} position={[0, modelYOffset, 0]} />
+      <mesh ref={pelvisColliderRef} visible={false}>
+        <boxGeometry args={[0.4, 0.26, 0.3]} />
+        <meshStandardMaterial transparent opacity={0} />
       </mesh>
-      <mesh position={[0.2, -0.05, -0.05]} scale={[0.42, 0.32, 0.38]}>
-        <sphereGeometry args={[1, 32, 32]} />
-        <meshStandardMaterial color="#f8b4d9" metalness={0.05} roughness={0.75} opacity={0.95} transparent />
+      <mesh ref={leftThighColliderRef} visible={false}>
+        <boxGeometry args={[0.25, 0.45, 0.25]} />
+        <meshStandardMaterial transparent opacity={0} />
+      </mesh>
+      <mesh ref={rightThighColliderRef} visible={false}>
+        <boxGeometry args={[0.25, 0.45, 0.25]} />
+        <meshStandardMaterial transparent opacity={0} />
       </mesh>
     </group>
   );
 }
-
-function Thigh({ side, isSitting, hipPositionRef }: { side: 'left' | 'right'; isSitting: boolean; hipPositionRef: HipPositionRef }) {
-  const offsetX = side === 'left' ? -0.35 : 0.35;
-  // Pivot-aware thigh: rotate around hip joint so the thigh-root stays at the hip
-  const jointOffsetY = -0.1; // local joint Y offset from hip
-  const thighLength = 0.9;
-  const halfLength = thighLength / 2; // distance from joint to mesh center
-  const targetAngle = isSitting ? Math.PI * 0.5 : 0; // requested approx 90deg when sitting
-
-  const [ref, api] = useCylinder<THREE.Object3D>(() => ({
-    type: 'Kinematic',
-    args: [0.22, 0.22, thighLength, 16],
-    position: [offsetX, 3.65, 0],
-  }));
-
-  const currentAngle = useRef(0);
-
-  useFrame(() => {
-    const hipPos = hipPositionRef.current;
-    // ease only the angle
-    currentAngle.current += (targetAngle - currentAngle.current) * 0.08;
-    const angle = currentAngle.current;
-
-    // Compute mesh center so that the joint (thigh top) stays fixed at hip + joint offset
-    const x = hipPos[0] + offsetX;
-    const y = (hipPos[1] + jointOffsetY) - halfLength * Math.cos(angle);
-    const z = hipPos[2] + halfLength * Math.sin(angle);
-
-    api.rotation.set(angle, 0, 0);
-    api.position.set(x, y, z);
-  });
-
-  // Render as elongated rugby-ball shaped mesh while keeping cylinder physics
-  return (
-    <mesh ref={ref} castShadow receiveShadow scale={[0.22, 0.45, 0.22]}>
-      <sphereGeometry args={[1, 32, 32]} />
-      <meshStandardMaterial color="#e2e8f0" metalness={0.05} roughness={0.75} />
-    </mesh>
-  );
-}
-
-function SeatAndThighs({ isSitting, hipPositionRef }: { isSitting: boolean; hipPositionRef: HipPositionRef }) {
-  return (
-    <>
-      <StaticBox position={[0, 3.1, 0.2]} args={[1.4, 0.24, 1.2]} />
-      <Hip isSitting={isSitting} hipPositionRef={hipPositionRef} />
-      <Thigh side="left" isSitting={isSitting} hipPositionRef={hipPositionRef} />
-      <Thigh side="right" isSitting={isSitting} hipPositionRef={hipPositionRef} />
-    </>
-  );
-}
-
-type ClothParticleProps = {
-  position: [number, number, number];
-  wireframe: boolean;
-  index: number;
-  onReady: ParticleCallback;
-  isWaist: boolean;
-  waistRadius: number;
-  waistAngle: number;
-  hipPositionRef: HipPositionRef;
-};
 
 function ClothParticle({
   position,
@@ -191,7 +268,16 @@ function ClothParticle({
   waistRadius,
   waistAngle,
   hipPositionRef,
-}: ClothParticleProps) {
+}: {
+  position: [number, number, number];
+  wireframe: boolean;
+  index: number;
+  onReady: ParticleCallback;
+  isWaist: boolean;
+  waistRadius: number;
+  waistAngle: number;
+  hipPositionRef: HipPositionRef;
+}) {
   const [ref, api] = useSphere<THREE.Object3D>(() => ({
     type: isWaist ? 'Kinematic' : 'Dynamic',
     mass: isWaist ? 0 : 0.045,
@@ -202,19 +288,28 @@ function ClothParticle({
   }));
 
   useEffect(() => {
-    const unsubscribe = api.position.subscribe((value) => {
+    const unsubscribe = api.position.subscribe((value: number[]) => {
       onReady(index, ref, api, [value[0], value[1], value[2]] as [number, number, number]);
     });
     onReady(index, ref, api, position);
     return unsubscribe;
   }, [index, onReady, position, ref, api]);
 
+  const lastPosRef = useRef<[number, number, number] | null>(null);
   useFrame(() => {
     if (isWaist) {
       const [hipX, hipY, hipZ] = hipPositionRef.current;
-      const x = hipX + Math.cos(waistAngle) * waistRadius;
-      const z = hipZ + Math.sin(waistAngle) * waistRadius;
-      const y = hipY + 0.3;
+      const targetX = hipX + Math.cos(waistAngle) * waistRadius;
+      const targetZ = hipZ + Math.sin(waistAngle) * waistRadius;
+      const targetY = hipY + 0.3;
+
+      const prev = lastPosRef.current || [targetX, targetY, targetZ];
+      const lerp = 0.6;
+      const x = prev[0] + (targetX - prev[0]) * lerp;
+      const y = prev[1] + (targetY - prev[1]) * lerp;
+      const z = prev[2] + (targetZ - prev[2]) * lerp;
+      lastPosRef.current = [x, y, z];
+
       api.position.set(x, y, z);
     }
   });
@@ -266,7 +361,7 @@ function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPosit
         return next;
       });
       particlePositions.current[index] = position;
-      const unsubscribe = api.position.subscribe((value) => {
+      const unsubscribe = api.position.subscribe((value: number[]) => {
         particlePositions.current[index] = [value[0], value[1], value[2]] as [number, number, number];
       });
       return unsubscribe;
@@ -351,6 +446,39 @@ function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPosit
               gridPoints[index].position[2] - gridPoints[nextRowCol].position[2]
             ),
           });
+          const nextRowPrev = (row + 1) * radialSegments + ((col - 1 + radialSegments) % radialSegments);
+          pairs.push({
+            a: index,
+            b: nextRowPrev,
+            distance: Math.hypot(
+              gridPoints[index].position[0] - gridPoints[nextRowPrev].position[0],
+              gridPoints[index].position[1] - gridPoints[nextRowPrev].position[1],
+              gridPoints[index].position[2] - gridPoints[nextRowPrev].position[2]
+            ),
+          });
+
+          const nextCol2 = row * radialSegments + ((col + 2) % radialSegments);
+          pairs.push({
+            a: index,
+            b: nextCol2,
+            distance: Math.hypot(
+              gridPoints[index].position[0] - gridPoints[nextCol2].position[0],
+              gridPoints[index].position[1] - gridPoints[nextCol2].position[1],
+              gridPoints[index].position[2] - gridPoints[nextCol2].position[2]
+            ),
+          });
+          if (row < heightSegments - 2) {
+            const nextRow2 = (row + 2) * radialSegments + col;
+            pairs.push({
+              a: index,
+              b: nextRow2,
+              distance: Math.hypot(
+                gridPoints[index].position[0] - gridPoints[nextRow2].position[0],
+                gridPoints[index].position[1] - gridPoints[nextRow2].position[1],
+                gridPoints[index].position[2] - gridPoints[nextRow2].position[2]
+              ),
+            });
+          }
         }
       }
     }
@@ -377,12 +505,7 @@ function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPosit
         const bodyA = particleRefsState[a];
         const bodyB = particleRefsState[b];
         return bodyA && bodyB ? (
-          <DistanceConstraint
-            key={`constraint-${index}`}
-            bodyA={bodyA}
-            bodyB={bodyB}
-            distance={distance}
-          />
+          <DistanceConstraint key={`constraint-${index}`} bodyA={bodyA} bodyB={bodyB} distance={distance} />
         ) : null;
       })}
 
@@ -404,7 +527,10 @@ function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPosit
 export default function ClothSimulator() {
   const [wireframe, setWireframe] = useState(false);
   const [isSitting, setIsSitting] = useState(false);
-  const hipPositionRef = useRef<[number, number, number]>([0, 4.5, 0]);
+  const [modelYOffset, setModelYOffset] = useState(0.0);
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<{ bones: string[]; animations: string[] }>({ bones: [], animations: [] });
+  const hipPositionRef = useRef<[number, number, number]>([0, 5.0, 0]);
 
   return (
     <div className="absolute inset-0">
@@ -414,7 +540,17 @@ export default function ClothSimulator() {
         <spotLight position={[-4, 6, 4]} intensity={0.6} penumbra={0.4} />
         <Physics gravity={[0, -9.8, 0]} iterations={12} broadphase="SAP">
           <BasePlane />
-          <SeatAndThighs isSitting={isSitting} hipPositionRef={hipPositionRef} />
+          <StaticBox position={[0, 3.1, 0.2]} args={[1.4, 0.24, 1.2]} />
+          <HumanModel
+            isSitting={isSitting}
+            modelYOffset={modelYOffset}
+            onPelvisPositionUpdate={(position) => {
+              hipPositionRef.current = position;
+            }}
+            onDebugInfo={(bones, animations) => {
+              setDebugInfo({ bones, animations });
+            }}
+          />
           <ClothGrid wireframe={wireframe} hipPositionRef={hipPositionRef} />
         </Physics>
         <OrbitControls makeDefault enablePan enableZoom enableRotate />
@@ -432,15 +568,77 @@ export default function ClothSimulator() {
           <button
             type="button"
             onClick={() => setIsSitting((value) => !value)}
-            className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            className="mb-3 w-full rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-300"
           >
             {isSitting ? '立つ' : '座る'}
           </button>
-          <p className="mt-3 text-xs text-slate-200">
-            座ると腰が沈み、お尻が椅子に乗り、太ももが前に突き出る着座ポーズを表現します。
+          <div className="mb-3">
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-300">モデルY調整</label>
+            <input
+              type="range"
+              min="-1"
+              max="1"
+              step="0.01"
+              value={modelYOffset}
+              onChange={(event) => setModelYOffset(Number(event.target.value))}
+              className="w-full"
+            />
+            <div className="mt-2 text-xs text-slate-200">Y Offset: {modelYOffset.toFixed(2)}</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowDebugPanel((value) => !value)}
+            className="mb-3 w-full rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-400"
+          >
+            {showDebugPanel ? 'デバッグ非表示' : '骨名/アニメーション確認'}
+          </button>
+          <p className="mt-1 text-xs text-slate-200">
+            GLBモデルのスタンド/シットアニメーションを再生し、モデルYオフセットで座面接地を調整できます。
           </p>
         </div>
       </div>
+
+      {showDebugPanel && (
+        <div className="pointer-events-auto absolute inset-0 flex items-start justify-start p-4">
+          <div className="rounded-2xl border border-slate-300/20 bg-slate-900/80 p-4 shadow-2xl backdrop-blur max-h-96 overflow-y-auto max-w-96">
+            <h3 className="mb-3 font-bold text-yellow-300">🔍 モデル構造情報</h3>
+            
+            <div className="mb-3">
+              <h4 className="mb-2 text-sm font-semibold text-sky-300">ボーン名 (Bones):</h4>
+              <div className="space-y-1">
+                {debugInfo.bones.length > 0 ? (
+                  debugInfo.bones.map((bone) => (
+                    <div key={bone} className="font-mono text-xs text-slate-300 break-all">
+                      • {bone}
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-xs text-slate-400">モデルロード中...</p>
+                )}
+              </div>
+            </div>
+
+            <div className="mb-3 border-t border-slate-600 pt-3">
+              <h4 className="mb-2 text-sm font-semibold text-emerald-300">アニメーション (Animations):</h4>
+              <div className="space-y-1">
+                {debugInfo.animations.length > 0 ? (
+                  debugInfo.animations.map((anim) => (
+                    <div key={anim} className="font-mono text-xs text-slate-300 break-all">
+                      • {anim}
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-xs text-slate-400">アニメーションなし</p>
+                )}
+              </div>
+            </div>
+
+            <p className="mt-3 text-xs text-slate-400">
+              💡 ブラウザコンソールに詳細ログが出力されています。
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

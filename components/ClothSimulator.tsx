@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, useGLTF, useAnimations } from '@react-three/drei';
+import { OrbitControls, useFBX } from '@react-three/drei';
 import { Physics, useBox, useSphere, useDistanceConstraint, type PublicApi } from '@react-three/cannon';
 import * as THREE from 'three';
 import { DoubleSide } from 'three';
+import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 const CHECKER_TEXTURE_SIZE = 256;
 const COLLISION_GROUP_GROUND = 1;
@@ -106,66 +107,86 @@ function HumanModel({
   onPelvisPositionUpdate: (position: [number, number, number]) => void;
   onDebugInfo?: (bones: string[], animations: string[]) => void;
 }) {
-  const gltf = useGLTF('/models/human.glb');
-  const { scene, animations } = gltf as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
+  const fbxScene = useFBX('/models/Stand To Sit.fbx') as THREE.Group & { animations?: THREE.AnimationClip[] };
+  const scene = useMemo(() => skeletonClone(fbxScene) as THREE.Group, [fbxScene]);
+  const animations = useMemo(() => fbxScene.animations ?? [], [fbxScene]);
   const modelRef = useRef<THREE.Group>(null);
-  const { actions, mixer } = useAnimations(animations, modelRef) as unknown as {
-    actions: Record<string, THREE.AnimationAction | undefined>;
-    mixer: THREE.AnimationMixer;
-  };
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  const animationRootRef = useRef<THREE.Object3D | null>(null);
+  const standActionRef = useRef<THREE.AnimationAction | null>(null);
   const activeActionRef = useRef<THREE.AnimationAction | null>(null);
+  const lastSittingStateRef = useRef<boolean | null>(null);
   const pelvisBoneRef = useRef<THREE.Object3D | null>(null);
   const leftThighBoneRef = useRef<THREE.Object3D | null>(null);
   const rightThighBoneRef = useRef<THREE.Object3D | null>(null);
+  const leftHandBoneRef = useRef<THREE.Object3D | null>(null);
+  const rightHandBoneRef = useRef<THREE.Object3D | null>(null);
+  const leftForeArmBoneRef = useRef<THREE.Object3D | null>(null);
+  const rightForeArmBoneRef = useRef<THREE.Object3D | null>(null);
 
   const [pelvisColliderRef, pelvisColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.22, 0.18, 0.2],
+    args: [0.28, 0.22, 0.24],
     position: [0, 1.0, 0],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
   const [leftThighColliderRef, leftThighColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.12, 0.35, 0.12],
+    args: [0.18, 0.45, 0.2],
     position: [-0.14, 0.65, 0.05],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
   const [rightThighColliderRef, rightThighColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.12, 0.35, 0.12],
+    args: [0.18, 0.45, 0.2],
     position: [0.14, 0.65, 0.05],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
+  const [leftHandColliderRef, leftHandColliderApi] = useSphere<THREE.Object3D>(() => ({
+    type: 'Kinematic',
+    args: [0.14],
+    position: [-0.28, 1.0, -0.25],
+    collisionFilterGroup: COLLISION_GROUP_HUMAN,
+    collisionFilterMask: COLLISION_GROUP_CLOTH,
+  }));
+  const [rightHandColliderRef, rightHandColliderApi] = useSphere<THREE.Object3D>(() => ({
+    type: 'Kinematic',
+    args: [0.14],
+    position: [0.28, 1.0, -0.25],
+    collisionFilterGroup: COLLISION_GROUP_HUMAN,
+    collisionFilterMask: COLLISION_GROUP_CLOTH,
+  }));
+  const [leftForeArmColliderRef, leftForeArmColliderApi] = useSphere<THREE.Object3D>(() => ({
+    type: 'Kinematic',
+    args: [0.12],
+    position: [-0.24, 1.2, -0.2],
+    collisionFilterGroup: COLLISION_GROUP_HUMAN,
+    collisionFilterMask: COLLISION_GROUP_CLOTH,
+  }));
+  const [rightForeArmColliderRef, rightForeArmColliderApi] = useSphere<THREE.Object3D>(() => ({
+    type: 'Kinematic',
+    args: [0.12],
+    position: [0.24, 1.2, -0.2],
+    collisionFilterGroup: COLLISION_GROUP_HUMAN,
+    collisionFilterMask: COLLISION_GROUP_CLOTH,
+  }));
 
-  const isUsableAction = useCallback((action?: THREE.AnimationAction) => {
-    if (!action) return false;
-    return action.getClip().tracks.length > 0;
+  const isUsableClip = useCallback((clip?: THREE.AnimationClip) => {
+    if (!clip) return false;
+    return clip.tracks.length > 0 && clip.duration > 0;
   }, []);
 
-  const standAction = useMemo(() => {
-    if (!actions || typeof actions !== 'object') return undefined;
-    const a = actions as Record<string, THREE.AnimationAction | undefined>;
-    const candidates = [a['mixamo.com'], a['Stand'], a['stand'], a['Idle'], a['idle'], a['Take 001']];
-    const named = candidates.find((action) => isUsableAction(action));
-    if (named) return named;
-    return Object.values(a).find((action) => isUsableAction(action));
-  }, [actions, isUsableAction]);
-
-  const sitAction = useMemo(() => {
-    if (!actions || typeof actions !== 'object') return undefined;
-    const a = actions as Record<string, THREE.AnimationAction | undefined>;
-    const candidates = [a['Take 001'], a['Sit'], a['sit'], a['SitDown'], a['sit_down']];
-    const named = candidates.find((action) => isUsableAction(action));
-    if (named) return named;
-
-    return Object.values(a).find((action) => isUsableAction(action) && action !== standAction);
-  }, [actions, standAction, isUsableAction]);
+  const standClip = useMemo(() => {
+    const byName = animations.find((clip) => clip.name === 'mixamo.com' && isUsableClip(clip));
+    if (byName) return byName;
+    return animations.find((clip) => isUsableClip(clip));
+  }, [animations, isUsableClip]);
 
   useEffect(() => {
-    if (!actions || !scene) return;
+    if (!scene) return;
 
     // Collect all bone names
     const bones: string[] = [];
@@ -177,7 +198,7 @@ function HumanModel({
     console.log('Bones found in model:', bones);
 
     // Collect all animation names
-    const anims = Object.keys(actions);
+    const anims = animations.map((clip) => clip.name);
     console.log('Animations found:', anims);
 
     // Call debug callback
@@ -185,106 +206,114 @@ function HumanModel({
       onDebugInfo(bones, anims);
     }
 
+    const skinnedMeshes: THREE.SkinnedMesh[] = [];
+    scene.traverse((obj) => {
+      const mesh = obj as THREE.SkinnedMesh;
+      if (mesh.isSkinnedMesh && mesh.skeleton?.bones?.length) {
+        skinnedMeshes.push(mesh);
+      }
+    });
+
+    const primarySkinnedMesh =
+      skinnedMeshes.find((mesh) => /surface/i.test(mesh.name)) ??
+      [...skinnedMeshes].sort((a, b) => (b.skeleton?.bones.length ?? 0) - (a.skeleton?.bones.length ?? 0))[0] ??
+      null;
+
+    const bonesByName = new Map<string, THREE.Bone>();
+    (primarySkinnedMesh?.skeleton?.bones ?? []).forEach((bone) => {
+      if (!bonesByName.has(bone.name)) {
+        bonesByName.set(bone.name, bone);
+      }
+    });
+
+    let skeletonRoot: THREE.Object3D | null = null;
+    if (primarySkinnedMesh?.skeleton?.bones?.length) {
+      const hipsCandidates = primarySkinnedMesh.skeleton.bones.filter((bone) => bone.name === 'mixamorigHips' || bone.name === 'Hips');
+      skeletonRoot =
+        hipsCandidates.sort((a, b) => b.children.length - a.children.length)[0] ??
+        primarySkinnedMesh.skeleton.bones[0] ??
+        primarySkinnedMesh;
+    }
+
     const findBone = (names: string[]) => {
       for (const name of names) {
-        const bone = scene.getObjectByName(name);
-        if (bone) return bone;
+        const b = bonesByName.get(name);
+        if (b) return b;
       }
       return null;
     };
 
-    pelvisBoneRef.current = findBone(['Pelvis', 'pelvis', 'Hips', 'hips', 'mixamorigHips', 'mixamorigHips_1']);
-    leftThighBoneRef.current = findBone(['LeftUpLeg', 'left_up_leg', 'LeftLeg', 'thigh_l', 'mixamorigLeftUpLeg', 'mixamorigLeftUpLeg_1']);
-    rightThighBoneRef.current = findBone(['RightUpLeg', 'right_up_leg', 'RightLeg', 'thigh_r', 'mixamorigRightUpLeg', 'mixamorigRightUpLeg_1']);
+    animationRootRef.current = skeletonRoot ?? scene;
+    pelvisBoneRef.current = findBone(['mixamorigHips', 'Hips', 'Pelvis', 'pelvis', 'hips']);
+    leftThighBoneRef.current = findBone(['mixamorigLeftUpLeg', 'LeftUpLeg', 'left_up_leg', 'LeftLeg', 'thigh_l']);
+    rightThighBoneRef.current = findBone(['mixamorigRightUpLeg', 'RightUpLeg', 'right_up_leg', 'RightLeg', 'thigh_r']);
+    leftHandBoneRef.current = findBone(['mixamorigLeftHand', 'LeftHand', 'left_hand']);
+    rightHandBoneRef.current = findBone(['mixamorigRightHand', 'RightHand', 'right_hand']);
+    leftForeArmBoneRef.current = findBone(['mixamorigLeftForeArm', 'LeftForeArm', 'left_fore_arm']);
+    rightForeArmBoneRef.current = findBone(['mixamorigRightForeArm', 'RightForeArm', 'right_fore_arm']);
 
-    Object.values(actions).forEach((action) => {
-      if (!action) return;
-      action.stop();
-      action.enabled = true;
-      action.setEffectiveWeight(0);
-      action.setEffectiveTimeScale(1);
-      action.loop = THREE.LoopRepeat;
-    });
+    const mixer = new THREE.AnimationMixer(scene);
+    mixerRef.current = mixer;
+
+    const standAction = standClip ? mixer.clipAction(standClip, animationRootRef.current ?? scene) : null;
+    standActionRef.current = standAction;
+    activeActionRef.current = null;
 
     if (standAction) {
-      standAction.reset().setEffectiveWeight(1).fadeIn(0.2).play();
-      if (!sitAction) {
-        const duration = standAction.getClip().duration;
-        standAction.setLoop(THREE.LoopOnce, 1);
-        standAction.setEffectiveTimeScale(0);
-        mixer.setTime(isSitting ? duration : 0);
-      } else {
-        standAction.setLoop(THREE.LoopRepeat, Infinity);
-        standAction.setEffectiveTimeScale(1);
-      }
+      standAction.reset();
+      standAction.enabled = true;
+      standAction.setEffectiveWeight(1);
+      standAction.setEffectiveTimeScale(1);
+      standAction.setLoop(THREE.LoopOnce, 1);
+      standAction.clampWhenFinished = true;
+      standAction.paused = true;
+      standAction.play();
+      standAction.time = 0;
       activeActionRef.current = standAction;
+      lastSittingStateRef.current = false;
     }
 
     return () => {
-      Object.values(actions).forEach((action) => {
-        action?.stop();
-      });
+      standAction?.stop();
+      mixer.stopAllAction();
+      mixerRef.current = null;
+      animationRootRef.current = null;
+      standActionRef.current = null;
+      activeActionRef.current = null;
+      lastSittingStateRef.current = null;
     };
-  }, [actions, scene, standAction, sitAction, isSitting, mixer, onDebugInfo]);
+  }, [scene, animations, standClip]);
 
   useEffect(() => {
-    if (!standAction && !sitAction) return;
+    const standAction = standActionRef.current;
+    if (!standAction) return;
 
-    // Fallback mode: only one usable clip exists (Take 001 is empty), so use forward/reverse playback.
-    if (!sitAction && standAction) {
-      const duration = standAction.getClip().duration;
-      standAction.stop();
-      standAction.reset().setEffectiveWeight(1).fadeIn(0.15);
-      standAction.setLoop(THREE.LoopOnce, 1);
+    standAction.paused = false;
+    const duration = standAction.getClip().duration;
+    const wasSitting = lastSittingStateRef.current;
 
-      if (isSitting) {
-        mixer.setTime(0);
-        standAction.setEffectiveTimeScale(1).play();
-      } else {
-        mixer.setTime(duration);
-        standAction.setEffectiveTimeScale(-1).play();
-      }
-
-      activeActionRef.current = standAction;
+    if (wasSitting === isSitting) {
       return;
     }
 
-    const target = isSitting ? sitAction : standAction;
-    const previous = activeActionRef.current;
-
-    if (!target) {
-      if (previous) {
-        previous.fadeOut(0.2);
-        previous.setEffectiveWeight(0);
+    if (isSitting) {
+      if (standAction.time <= 0.01 || standAction.time >= duration - 0.01) {
+        standAction.time = 0;
       }
-      activeActionRef.current = null;
-      return;
+      standAction.timeScale = 0.45;
+    } else {
+      if (standAction.time <= 0.01 || standAction.time >= duration - 0.01) {
+        standAction.time = duration;
+      }
+      standAction.timeScale = -0.45;
     }
 
-    if (target && previous !== target) {
-      if (previous) {
-        previous.fadeOut(0.2);
-        previous.setEffectiveWeight(0);
-      }
+    standAction.play();
+    activeActionRef.current = standAction;
+    lastSittingStateRef.current = isSitting;
+  }, [isSitting]);
 
-      if (target === sitAction) {
-        target.setLoop(THREE.LoopOnce, 1);
-      } else {
-        target.setLoop(THREE.LoopRepeat, Infinity);
-      }
-
-      target.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
-      activeActionRef.current = target;
-      return;
-    }
-
-    if (previous && previous === target) {
-      target.setEffectiveWeight(1);
-      target.play();
-    }
-  }, [isSitting, sitAction, standAction, mixer]);
-
-  useFrame(() => {
+  useFrame((_, delta) => {
     if (modelRef.current) {
       modelRef.current.position.set(
         modelBasePosition[0],
@@ -293,15 +322,41 @@ function HumanModel({
       );
     }
 
+    // Update world matrix first so bone transforms are always based on the latest animation/model transform.
     scene.updateMatrixWorld(true);
 
-    const updateBone = (bone: THREE.Object3D | null, api: PublicApi) => {
+    const mixer = mixerRef.current;
+    if (mixer) {
+      mixer.update(delta);
+      const action = standActionRef.current;
+      if (action) {
+        const duration = action.getClip().duration;
+        // アニメーションが端に到達したら停止するだけのシンプルな制御
+        if (action.timeScale > 0 && action.time >= duration - 0.001) {
+          action.time = duration;
+          action.paused = true;
+        } else if (action.timeScale < 0 && action.time <= 0.001) {
+          action.time = 0;
+          action.paused = true;
+        }
+      }
+    }
+
+    scene.updateMatrixWorld(true);
+
+    const updateBone = (bone: THREE.Object3D | null, api: PublicApi, localOffset?: THREE.Vector3) => {
       if (!bone) return;
       const position = new THREE.Vector3();
       bone.getWorldPosition(position);
-      api.position.set(position.x, position.y, position.z);
       const quaternion = new THREE.Quaternion();
       bone.getWorldQuaternion(quaternion);
+
+      if (localOffset) {
+        const worldOffset = localOffset.clone().applyQuaternion(quaternion);
+        position.add(worldOffset);
+      }
+
+      api.position.set(position.x, position.y, position.z);
       const euler = new THREE.Euler().setFromQuaternion(quaternion);
       api.rotation.set(euler.x, euler.y, euler.z);
     };
@@ -309,6 +364,10 @@ function HumanModel({
     updateBone(pelvisBoneRef.current, pelvisColliderApi);
     updateBone(leftThighBoneRef.current, leftThighColliderApi);
     updateBone(rightThighBoneRef.current, rightThighColliderApi);
+    updateBone(leftHandBoneRef.current, leftHandColliderApi, new THREE.Vector3(0.02, -0.01, 0.09));
+    updateBone(rightHandBoneRef.current, rightHandColliderApi, new THREE.Vector3(-0.02, -0.01, 0.09));
+    updateBone(leftForeArmBoneRef.current, leftForeArmColliderApi, new THREE.Vector3(0.01, 0.0, 0.08));
+    updateBone(rightForeArmBoneRef.current, rightForeArmColliderApi, new THREE.Vector3(-0.01, 0.0, 0.08));
 
     if (pelvisBoneRef.current) {
       const position = new THREE.Vector3();
@@ -319,21 +378,37 @@ function HumanModel({
       modelRef.current.getWorldPosition(fallback);
       onPelvisPositionUpdate([fallback.x, fallback.y + 1.0, fallback.z + 0.05]);
     }
-  });
+  }, -100);
 
   return (
     <group ref={modelRef} position={modelBasePosition}>
       <primitive object={scene} scale={[MODEL_SCALE, MODEL_SCALE, MODEL_SCALE]} />
       <mesh ref={pelvisColliderRef} visible={false}>
-        <boxGeometry args={[0.22, 0.18, 0.2]} />
+        <boxGeometry args={[0.28, 0.22, 0.24]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={leftThighColliderRef} visible={false}>
-        <boxGeometry args={[0.12, 0.35, 0.12]} />
+        <boxGeometry args={[0.18, 0.45, 0.2]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={rightThighColliderRef} visible={false}>
-        <boxGeometry args={[0.12, 0.35, 0.12]} />
+        <boxGeometry args={[0.18, 0.45, 0.2]} />
+        <meshStandardMaterial transparent opacity={0} />
+      </mesh>
+      <mesh ref={leftHandColliderRef} visible={false}>
+        <sphereGeometry args={[0.14, 8, 8]} />
+        <meshStandardMaterial transparent opacity={0} />
+      </mesh>
+      <mesh ref={rightHandColliderRef} visible={false}>
+        <sphereGeometry args={[0.14, 8, 8]} />
+        <meshStandardMaterial transparent opacity={0} />
+      </mesh>
+      <mesh ref={leftForeArmColliderRef} visible={false}>
+        <sphereGeometry args={[0.12, 8, 8]} />
+        <meshStandardMaterial transparent opacity={0} />
+      </mesh>
+      <mesh ref={rightForeArmColliderRef} visible={false}>
+        <sphereGeometry args={[0.12, 8, 8]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
     </group>
@@ -362,7 +437,7 @@ function ClothParticle({
   const [ref, api] = useSphere<THREE.Object3D>(() => ({
     type: isWaist ? 'Kinematic' : 'Dynamic',
     mass: isWaist ? 0 : 0.045,
-    args: [0.06],
+    args: [0.08],
     position,
     linearDamping: 0.96,
     angularDamping: 0.95,
@@ -384,7 +459,7 @@ function ClothParticle({
       const [hipX, hipY, hipZ] = hipPositionRef.current;
       const targetX = hipX + Math.cos(waistAngle) * waistRadius;
       const targetZ = hipZ + Math.sin(waistAngle) * waistRadius;
-      const targetY = hipY + 0.06;
+      const targetY = hipY + 0.02;
 
       const prev = lastPosRef.current || [targetX, targetY, targetZ];
       const lerp = 0.6;
@@ -408,15 +483,17 @@ function ClothParticle({
 function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPositionRef: HipPositionRef }) {
   const radialSegments = 16;
   const heightSegments = 8;
-  const topRadius = 0.18;
-  const bottomRadius = 0.38;
+  const topRadius = 0.14;
+  const bottomRadius = 0.34;
   const skirtHeight = 0.74;
-  const topY = 1.06;
+  const topY = 1.02;
   const angleStep = (Math.PI * 2) / radialSegments;
 
   const gridPoints = useMemo(
-    () =>
-      Array.from({ length: radialSegments * heightSegments }, (_, index) => {
+    () => {
+      const startX = hipPositionRef.current[0];
+      const startZ = hipPositionRef.current[2];
+      return Array.from({ length: radialSegments * heightSegments }, (_, index) => {
         const row = Math.floor(index / radialSegments);
         const col = index % radialSegments;
         const t = row / (heightSegments - 1);
@@ -424,13 +501,14 @@ function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPosit
         const y = topY - t * skirtHeight;
         const angle = col * angleStep;
         return {
-          position: [Math.cos(angle) * radius, y, Math.sin(angle) * radius] as [number, number, number],
+          position: [startX + Math.cos(angle) * radius, y, startZ + Math.sin(angle) * radius] as [number, number, number],
           row,
           angle,
           radius,
         };
-      }),
-    [angleStep, bottomRadius, heightSegments, radialSegments, topRadius, topY, skirtHeight]
+      });
+    },
+    [angleStep, bottomRadius, heightSegments, radialSegments, topRadius, topY, skirtHeight, hipPositionRef]
   );
 
   const [particleRefsState, setParticleRefsState] = useState<BodyRef[]>([]);
@@ -622,7 +700,7 @@ export default function ClothSimulator() {
         <ambientLight intensity={0.35} />
         <directionalLight position={[5, 8, 2]} intensity={1.1} castShadow shadow-mapSize-width={2048} shadow-mapSize-height={2048} />
         <spotLight position={[-4, 6, 4]} intensity={0.6} penumbra={0.4} />
-        <Physics gravity={[0, -9.8, 0]} iterations={12} broadphase="SAP">
+        <Physics gravity={[0, -9.8, 0]} iterations={24} broadphase="SAP">
           <BasePlane />
           <StaticBox position={[0, 0.55, -1.45]} args={[1.0, 0.12, 1.0]} />
           <HumanModel

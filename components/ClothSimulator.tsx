@@ -8,6 +8,9 @@ import * as THREE from 'three';
 import { DoubleSide } from 'three';
 
 const CHECKER_TEXTURE_SIZE = 256;
+const COLLISION_GROUP_GROUND = 1;
+const COLLISION_GROUP_CLOTH = 2;
+const COLLISION_GROUP_HUMAN = 4;
 
 type BodyRef = RefObject<THREE.Object3D>;
 type BodyApi = PublicApi;
@@ -60,6 +63,8 @@ function BasePlane() {
     type: 'Static',
     args: [20, 0.5, 20],
     position: [0, -0.25, 0],
+    collisionFilterGroup: COLLISION_GROUP_GROUND,
+    collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
 
   return (
@@ -75,6 +80,8 @@ function StaticBox({ position, args }: { position: [number, number, number]; arg
     type: 'Static',
     args,
     position,
+    collisionFilterGroup: COLLISION_GROUP_GROUND,
+    collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
 
   return (
@@ -107,18 +114,24 @@ function HumanModel({
 
   const [pelvisColliderRef, pelvisColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.4, 0.26, 0.3],
-    position: [0, 4.5, 0],
+    args: [0.22, 0.18, 0.2],
+    position: [0, 1.0, 0],
+    collisionFilterGroup: COLLISION_GROUP_HUMAN,
+    collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
   const [leftThighColliderRef, leftThighColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.25, 0.45, 0.25],
-    position: [-0.2, 3.1, 0.1],
+    args: [0.12, 0.35, 0.12],
+    position: [-0.14, 0.65, 0.05],
+    collisionFilterGroup: COLLISION_GROUP_HUMAN,
+    collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
   const [rightThighColliderRef, rightThighColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.25, 0.45, 0.25],
-    position: [0.2, 3.1, 0.1],
+    args: [0.12, 0.35, 0.12],
+    position: [0.14, 0.65, 0.05],
+    collisionFilterGroup: COLLISION_GROUP_HUMAN,
+    collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
 
   const standAction = useMemo(() => {
@@ -157,7 +170,7 @@ function HumanModel({
 
     // Collect all bone names
     const bones: string[] = [];
-    scene.traverse((obj) => {
+    scene.traverse((obj: THREE.Object3D) => {
       if (obj !== scene && obj.name) {
         bones.push(obj.name);
       }
@@ -193,7 +206,7 @@ function HumanModel({
     });
 
     if (standAction) {
-      standAction.reset().fadeIn(0.3).setEffectiveWeight(1).play();
+      standAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.3).play();
       activeActionRef.current = standAction;
     }
 
@@ -206,10 +219,30 @@ function HumanModel({
     if (!standAction && !sitAction) return;
     const target = isSitting ? sitAction : standAction;
     const previous = activeActionRef.current;
+
+    if (!target) {
+      if (previous) {
+        previous.fadeOut(0.2);
+        previous.setEffectiveWeight(0);
+      }
+      activeActionRef.current = null;
+      return;
+    }
+
     if (target && previous !== target) {
-      previous?.fadeOut(0.2);
-      target.reset().fadeIn(0.2).setEffectiveWeight(1).play();
+      if (previous) {
+        previous.fadeOut(0.2);
+        previous.setEffectiveWeight(0);
+      }
+
+      target.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
       activeActionRef.current = target;
+      return;
+    }
+
+    if (previous && previous === target) {
+      target.setEffectiveWeight(1);
+      target.play();
     }
   }, [isSitting, sitAction, standAction]);
 
@@ -217,6 +250,8 @@ function HumanModel({
     if (modelRef.current) {
       modelRef.current.position.y = modelYOffset;
     }
+
+    scene.updateMatrixWorld(true);
 
     const updateBone = (bone: THREE.Object3D | null, api: PublicApi) => {
       if (!bone) return;
@@ -237,22 +272,26 @@ function HumanModel({
       const position = new THREE.Vector3();
       pelvisBoneRef.current.getWorldPosition(position);
       onPelvisPositionUpdate([position.x, position.y, position.z]);
+    } else if (modelRef.current) {
+      const fallback = new THREE.Vector3();
+      modelRef.current.getWorldPosition(fallback);
+      onPelvisPositionUpdate([fallback.x, fallback.y + 1.0, fallback.z]);
     }
   });
 
   return (
     <group>
-      <primitive object={scene} ref={modelRef} position={[0, modelYOffset, 0]} />
+      <primitive object={scene} ref={modelRef} position={[0, modelYOffset, 0]} scale={[0.01, 0.01, 0.01]} />
       <mesh ref={pelvisColliderRef} visible={false}>
-        <boxGeometry args={[0.4, 0.26, 0.3]} />
+        <boxGeometry args={[0.22, 0.18, 0.2]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={leftThighColliderRef} visible={false}>
-        <boxGeometry args={[0.25, 0.45, 0.25]} />
+        <boxGeometry args={[0.12, 0.35, 0.12]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={rightThighColliderRef} visible={false}>
-        <boxGeometry args={[0.25, 0.45, 0.25]} />
+        <boxGeometry args={[0.12, 0.35, 0.12]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
     </group>
@@ -285,6 +324,8 @@ function ClothParticle({
     position,
     linearDamping: 0.96,
     angularDamping: 0.95,
+    collisionFilterGroup: COLLISION_GROUP_CLOTH,
+    collisionFilterMask: COLLISION_GROUP_GROUND | COLLISION_GROUP_HUMAN,
   }));
 
   useEffect(() => {
@@ -325,10 +366,10 @@ function ClothParticle({
 function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPositionRef: HipPositionRef }) {
   const radialSegments = 16;
   const heightSegments = 8;
-  const topRadius = 0.64;
-  const bottomRadius = 0.88;
-  const skirtHeight = 1.35;
-  const topY = 4.8;
+  const topRadius = 0.24;
+  const bottomRadius = 0.44;
+  const skirtHeight = 0.8;
+  const topY = 1.2;
   const angleStep = (Math.PI * 2) / radialSegments;
 
   const gridPoints = useMemo(
@@ -489,7 +530,7 @@ function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPosit
     <group>
       {gridPoints.map((point, index) => (
         <ClothParticle
-          key={`particle-${index}`}
+          key={'particle-' + index}
           index={index}
           position={point.position}
           wireframe={wireframe}
@@ -505,7 +546,7 @@ function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPosit
         const bodyA = particleRefsState[a];
         const bodyB = particleRefsState[b];
         return bodyA && bodyB ? (
-          <DistanceConstraint key={`constraint-${index}`} bodyA={bodyA} bodyB={bodyB} distance={distance} />
+          <DistanceConstraint key={'constraint-' + index} bodyA={bodyA} bodyB={bodyB} distance={distance} />
         ) : null;
       })}
 
@@ -530,17 +571,17 @@ export default function ClothSimulator() {
   const [modelYOffset, setModelYOffset] = useState(0.0);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
   const [debugInfo, setDebugInfo] = useState<{ bones: string[]; animations: string[] }>({ bones: [], animations: [] });
-  const hipPositionRef = useRef<[number, number, number]>([0, 5.0, 0]);
+  const hipPositionRef = useRef<[number, number, number]>([0, 1.0, 0]);
 
   return (
     <div className="absolute inset-0">
-      <Canvas shadows camera={{ position: [0, 4, 8], fov: 45 }} className="w-full h-full">
+      <Canvas shadows camera={{ position: [0, 1.9, 4.8], fov: 40 }} className="w-full h-full">
         <ambientLight intensity={0.35} />
         <directionalLight position={[5, 8, 2]} intensity={1.1} castShadow shadow-mapSize-width={2048} shadow-mapSize-height={2048} />
         <spotLight position={[-4, 6, 4]} intensity={0.6} penumbra={0.4} />
         <Physics gravity={[0, -9.8, 0]} iterations={12} broadphase="SAP">
           <BasePlane />
-          <StaticBox position={[0, 3.1, 0.2]} args={[1.4, 0.24, 1.2]} />
+          <StaticBox position={[0, 0.55, 0.2]} args={[1.0, 0.12, 1.0]} />
           <HumanModel
             isSitting={isSitting}
             modelYOffset={modelYOffset}
@@ -599,8 +640,8 @@ export default function ClothSimulator() {
       </div>
 
       {showDebugPanel && (
-        <div className="pointer-events-auto absolute inset-0 flex items-start justify-start p-4">
-          <div className="rounded-2xl border border-slate-300/20 bg-slate-900/80 p-4 shadow-2xl backdrop-blur max-h-96 overflow-y-auto max-w-96">
+        <div className="pointer-events-none absolute inset-0 flex items-start justify-start p-4">
+          <div className="pointer-events-auto rounded-2xl border border-slate-300/20 bg-slate-900/80 p-4 shadow-2xl backdrop-blur max-h-96 overflow-y-auto max-w-96">
             <h3 className="mb-3 font-bold text-yellow-300">🔍 モデル構造情報</h3>
             
             <div className="mb-3">

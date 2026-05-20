@@ -11,6 +11,7 @@ const CHECKER_TEXTURE_SIZE = 256;
 const COLLISION_GROUP_GROUND = 1;
 const COLLISION_GROUP_CLOTH = 2;
 const COLLISION_GROUP_HUMAN = 4;
+const MODEL_SCALE = 0.01;
 
 type BodyRef = RefObject<THREE.Object3D>;
 type BodyApi = PublicApi;
@@ -95,18 +96,23 @@ function StaticBox({ position, args }: { position: [number, number, number]; arg
 function HumanModel({
   isSitting,
   modelYOffset,
+  modelBasePosition,
   onPelvisPositionUpdate,
   onDebugInfo,
 }: {
   isSitting: boolean;
   modelYOffset: number;
+  modelBasePosition: [number, number, number];
   onPelvisPositionUpdate: (position: [number, number, number]) => void;
   onDebugInfo?: (bones: string[], animations: string[]) => void;
 }) {
   const gltf = useGLTF('/models/human.glb');
   const { scene, animations } = gltf as unknown as { scene: THREE.Group; animations: THREE.AnimationClip[] };
-  const { actions } = useAnimations(animations, scene) as unknown as Record<string, THREE.AnimationAction>;
   const modelRef = useRef<THREE.Group>(null);
+  const { actions, mixer } = useAnimations(animations, modelRef) as unknown as {
+    actions: Record<string, THREE.AnimationAction | undefined>;
+    mixer: THREE.AnimationMixer;
+  };
   const activeActionRef = useRef<THREE.AnimationAction | null>(null);
   const pelvisBoneRef = useRef<THREE.Object3D | null>(null);
   const leftThighBoneRef = useRef<THREE.Object3D | null>(null);
@@ -134,36 +140,29 @@ function HumanModel({
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
 
+  const isUsableAction = useCallback((action?: THREE.AnimationAction) => {
+    if (!action) return false;
+    return action.getClip().tracks.length > 0;
+  }, []);
+
   const standAction = useMemo(() => {
     if (!actions || typeof actions !== 'object') return undefined;
-    const a = actions as unknown as Record<string, THREE.AnimationAction>;
-    const actionList = Object.values(a);
-    return (
-      a['Stand'] ??
-      a['stand'] ??
-      a['Idle'] ??
-      a['idle'] ??
-      a['mixamo.com'] ??
-      a['Take 001'] ??
-      actionList[0]
-    );
-  }, [actions]);
+    const a = actions as Record<string, THREE.AnimationAction | undefined>;
+    const candidates = [a['mixamo.com'], a['Stand'], a['stand'], a['Idle'], a['idle'], a['Take 001']];
+    const named = candidates.find((action) => isUsableAction(action));
+    if (named) return named;
+    return Object.values(a).find((action) => isUsableAction(action));
+  }, [actions, isUsableAction]);
 
   const sitAction = useMemo(() => {
     if (!actions || typeof actions !== 'object') return undefined;
-    const a = actions as unknown as Record<string, THREE.AnimationAction>;
-    const actionList = Object.values(a);
-    return (
-      a['Sit'] ??
-      a['sit'] ??
-      a['SitDown'] ??
-      a['sit_down'] ??
-      a['mixamo.com'] ??
-      a['Take 001'] ??
-      actionList[1] ??
-      actionList[0]
-    );
-  }, [actions]);
+    const a = actions as Record<string, THREE.AnimationAction | undefined>;
+    const candidates = [a['Take 001'], a['Sit'], a['sit'], a['SitDown'], a['sit_down']];
+    const named = candidates.find((action) => isUsableAction(action));
+    if (named) return named;
+
+    return Object.values(a).find((action) => isUsableAction(action) && action !== standAction);
+  }, [actions, standAction, isUsableAction]);
 
   useEffect(() => {
     if (!actions || !scene) return;
@@ -198,25 +197,58 @@ function HumanModel({
     leftThighBoneRef.current = findBone(['LeftUpLeg', 'left_up_leg', 'LeftLeg', 'thigh_l', 'mixamorigLeftUpLeg', 'mixamorigLeftUpLeg_1']);
     rightThighBoneRef.current = findBone(['RightUpLeg', 'right_up_leg', 'RightLeg', 'thigh_r', 'mixamorigRightUpLeg', 'mixamorigRightUpLeg_1']);
 
-    Object.values(actions).forEach((action: THREE.AnimationAction) => {
+    Object.values(actions).forEach((action) => {
+      if (!action) return;
+      action.stop();
       action.enabled = true;
       action.setEffectiveWeight(0);
+      action.setEffectiveTimeScale(1);
       action.loop = THREE.LoopRepeat;
-      action.play();
     });
 
     if (standAction) {
-      standAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.3).play();
+      standAction.reset().setEffectiveWeight(1).fadeIn(0.2).play();
+      if (!sitAction) {
+        const duration = standAction.getClip().duration;
+        standAction.setLoop(THREE.LoopOnce, 1);
+        standAction.setEffectiveTimeScale(0);
+        mixer.setTime(isSitting ? duration : 0);
+      } else {
+        standAction.setLoop(THREE.LoopRepeat, Infinity);
+        standAction.setEffectiveTimeScale(1);
+      }
       activeActionRef.current = standAction;
     }
 
     return () => {
-      Object.values(actions).forEach((action: THREE.AnimationAction) => action.stop());
+      Object.values(actions).forEach((action) => {
+        action?.stop();
+      });
     };
-  }, [actions, scene, standAction, onDebugInfo]);
+  }, [actions, scene, standAction, sitAction, isSitting, mixer, onDebugInfo]);
 
   useEffect(() => {
     if (!standAction && !sitAction) return;
+
+    // Fallback mode: only one usable clip exists (Take 001 is empty), so use forward/reverse playback.
+    if (!sitAction && standAction) {
+      const duration = standAction.getClip().duration;
+      standAction.stop();
+      standAction.reset().setEffectiveWeight(1).fadeIn(0.15);
+      standAction.setLoop(THREE.LoopOnce, 1);
+
+      if (isSitting) {
+        mixer.setTime(0);
+        standAction.setEffectiveTimeScale(1).play();
+      } else {
+        mixer.setTime(duration);
+        standAction.setEffectiveTimeScale(-1).play();
+      }
+
+      activeActionRef.current = standAction;
+      return;
+    }
+
     const target = isSitting ? sitAction : standAction;
     const previous = activeActionRef.current;
 
@@ -235,6 +267,12 @@ function HumanModel({
         previous.setEffectiveWeight(0);
       }
 
+      if (target === sitAction) {
+        target.setLoop(THREE.LoopOnce, 1);
+      } else {
+        target.setLoop(THREE.LoopRepeat, Infinity);
+      }
+
       target.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
       activeActionRef.current = target;
       return;
@@ -244,11 +282,15 @@ function HumanModel({
       target.setEffectiveWeight(1);
       target.play();
     }
-  }, [isSitting, sitAction, standAction]);
+  }, [isSitting, sitAction, standAction, mixer]);
 
   useFrame(() => {
     if (modelRef.current) {
-      modelRef.current.position.y = modelYOffset;
+      modelRef.current.position.set(
+        modelBasePosition[0],
+        modelBasePosition[1] + modelYOffset,
+        modelBasePosition[2]
+      );
     }
 
     scene.updateMatrixWorld(true);
@@ -275,13 +317,13 @@ function HumanModel({
     } else if (modelRef.current) {
       const fallback = new THREE.Vector3();
       modelRef.current.getWorldPosition(fallback);
-      onPelvisPositionUpdate([fallback.x, fallback.y + 1.0, fallback.z]);
+      onPelvisPositionUpdate([fallback.x, fallback.y + 1.0, fallback.z + 0.05]);
     }
   });
 
   return (
-    <group>
-      <primitive object={scene} ref={modelRef} position={[0, modelYOffset, 0]} scale={[0.01, 0.01, 0.01]} />
+    <group ref={modelRef} position={modelBasePosition}>
+      <primitive object={scene} scale={[MODEL_SCALE, MODEL_SCALE, MODEL_SCALE]} />
       <mesh ref={pelvisColliderRef} visible={false}>
         <boxGeometry args={[0.22, 0.18, 0.2]} />
         <meshStandardMaterial transparent opacity={0} />
@@ -342,7 +384,7 @@ function ClothParticle({
       const [hipX, hipY, hipZ] = hipPositionRef.current;
       const targetX = hipX + Math.cos(waistAngle) * waistRadius;
       const targetZ = hipZ + Math.sin(waistAngle) * waistRadius;
-      const targetY = hipY + 0.3;
+      const targetY = hipY + 0.06;
 
       const prev = lastPosRef.current || [targetX, targetY, targetZ];
       const lerp = 0.6;
@@ -366,10 +408,10 @@ function ClothParticle({
 function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPositionRef: HipPositionRef }) {
   const radialSegments = 16;
   const heightSegments = 8;
-  const topRadius = 0.24;
-  const bottomRadius = 0.44;
-  const skirtHeight = 0.8;
-  const topY = 1.2;
+  const topRadius = 0.18;
+  const bottomRadius = 0.38;
+  const skirtHeight = 0.74;
+  const topY = 1.06;
   const angleStep = (Math.PI * 2) / radialSegments;
 
   const gridPoints = useMemo(
@@ -571,20 +613,22 @@ export default function ClothSimulator() {
   const [modelYOffset, setModelYOffset] = useState(0.0);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
   const [debugInfo, setDebugInfo] = useState<{ bones: string[]; animations: string[] }>({ bones: [], animations: [] });
-  const hipPositionRef = useRef<[number, number, number]>([0, 1.0, 0]);
+  const modelBasePosition: [number, number, number] = [0, 0, -0.55];
+  const hipPositionRef = useRef<[number, number, number]>([0, 1.0, -0.55]);
 
   return (
     <div className="absolute inset-0">
-      <Canvas shadows camera={{ position: [0, 1.9, 4.8], fov: 40 }} className="w-full h-full">
+      <Canvas shadows camera={{ position: [0, 1.9, 5.4], fov: 40 }} className="w-full h-full">
         <ambientLight intensity={0.35} />
         <directionalLight position={[5, 8, 2]} intensity={1.1} castShadow shadow-mapSize-width={2048} shadow-mapSize-height={2048} />
         <spotLight position={[-4, 6, 4]} intensity={0.6} penumbra={0.4} />
         <Physics gravity={[0, -9.8, 0]} iterations={12} broadphase="SAP">
           <BasePlane />
-          <StaticBox position={[0, 0.55, 0.2]} args={[1.0, 0.12, 1.0]} />
+          <StaticBox position={[0, 0.55, -1.45]} args={[1.0, 0.12, 1.0]} />
           <HumanModel
             isSitting={isSitting}
             modelYOffset={modelYOffset}
+            modelBasePosition={modelBasePosition}
             onPelvisPositionUpdate={(position) => {
               hipPositionRef.current = position;
             }}
@@ -613,19 +657,6 @@ export default function ClothSimulator() {
           >
             {isSitting ? '立つ' : '座る'}
           </button>
-          <div className="mb-3">
-            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-300">モデルY調整</label>
-            <input
-              type="range"
-              min="-1"
-              max="1"
-              step="0.01"
-              value={modelYOffset}
-              onChange={(event) => setModelYOffset(Number(event.target.value))}
-              className="w-full"
-            />
-            <div className="mt-2 text-xs text-slate-200">Y Offset: {modelYOffset.toFixed(2)}</div>
-          </div>
           <button
             type="button"
             onClick={() => setShowDebugPanel((value) => !value)}
@@ -674,8 +705,22 @@ export default function ClothSimulator() {
               </div>
             </div>
 
+            <div className="mb-3 border-t border-slate-600 pt-3">
+              <h4 className="mb-2 text-sm font-semibold text-amber-300">Y軸デバッグ調整:</h4>
+              <input
+                type="range"
+                min="-1"
+                max="1"
+                step="0.01"
+                value={modelYOffset}
+                onChange={(event) => setModelYOffset(Number(event.target.value))}
+                className="w-full"
+              />
+              <div className="mt-2 text-xs text-slate-200">Y Offset: {modelYOffset.toFixed(2)}</div>
+            </div>
+
             <p className="mt-3 text-xs text-slate-400">
-              💡 ブラウザコンソールに詳細ログが出力されています。
+              💡 通常運用ではY調整は不要です。必要時のみデバッグで使ってください。
             </p>
           </div>
         </div>

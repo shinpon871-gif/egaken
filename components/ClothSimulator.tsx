@@ -195,14 +195,14 @@ function HumanModel({
     args: [0.05],
     position: [-0.22, 1.05, 0.05],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
-    collisionFilterMask: COLLISION_GROUP_CLOTH,
+    collisionFilterMask: COLLISION_GROUP_GROUND,
   }));
   const [rightHandColliderRef, rightHandColliderApi] = useSphere<THREE.Object3D>(() => ({
     type: 'Kinematic',
     args: [0.05],
     position: [0.22, 1.05, 0.05],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
-    collisionFilterMask: COLLISION_GROUP_CLOTH,
+    collisionFilterMask: COLLISION_GROUP_GROUND,
   }));
 
   const leftKneeBoneRef = useRef<THREE.Object3D | null>(null);
@@ -515,8 +515,8 @@ function ClothParticle({
     mass: isWaist ? 0 : 0.5,
     args: [0.025],
     position,
-    linearDamping: 0.4,
-    angularDamping: 0.4,
+    linearDamping: 0.1,
+    angularDamping: 0.1,
     collisionFilterGroup: COLLISION_GROUP_CLOTH,
     collisionFilterMask: COLLISION_GROUP_GROUND | COLLISION_GROUP_HUMAN,
   }));
@@ -679,16 +679,6 @@ function ClothGrid({ wireframe, hipPositionRef, isSitting }: { wireframe: boolea
               gridPoints[index].position[0] - gridPoints[nextRow].position[0],
               gridPoints[index].position[1] - gridPoints[nextRow].position[1],
               gridPoints[index].position[2] - gridPoints[nextRow].position[2]
-            ),
-          });
-          const nextRowCol = (row + 1) * radialSegments + ((col + 1) % radialSegments);
-          pairs.push({
-            a: index,
-            b: nextRowCol,
-            distance: Math.hypot(
-              gridPoints[index].position[0] - gridPoints[nextRowCol].position[0],
-              gridPoints[index].position[1] - gridPoints[nextRowCol].position[1],
-              gridPoints[index].position[2] - gridPoints[nextRowCol].position[2]
             ),
           });
         }

@@ -15,6 +15,8 @@ const COLLISION_GROUP_HUMAN = 4;
 const MODEL_SCALE = 0.01;
 const SIT_AUTO_LIFT = 0.18;
 const STAND_RECOVER_LIFT = 0.15;
+const WAIST_Y_OFFSET_STAND = 0.035;
+const WAIST_Y_OFFSET_SIT = -0.02;
 
 type BodyRef = RefObject<THREE.Object3D>;
 type BodyApi = PublicApi;
@@ -121,10 +123,6 @@ function HumanModel({
   const pelvisBoneRef = useRef<THREE.Object3D | null>(null);
   const leftThighBoneRef = useRef<THREE.Object3D | null>(null);
   const rightThighBoneRef = useRef<THREE.Object3D | null>(null);
-  const leftHandBoneRef = useRef<THREE.Object3D | null>(null);
-  const rightHandBoneRef = useRef<THREE.Object3D | null>(null);
-  const leftForeArmBoneRef = useRef<THREE.Object3D | null>(null);
-  const rightForeArmBoneRef = useRef<THREE.Object3D | null>(null);
   const sitLiftRef = useRef(0);
 
   const [pelvisColliderRef, pelvisColliderApi] = useBox<THREE.Object3D>(() => ({
@@ -136,50 +134,45 @@ function HumanModel({
   }));
   const [leftThighColliderRef, leftThighColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.18, 0.45, 0.2],
+    args: [0.2, 0.52, 0.24],
     position: [-0.14, 0.65, 0.05],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
   const [rightThighColliderRef, rightThighColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.18, 0.45, 0.2],
+    args: [0.2, 0.52, 0.24],
     position: [0.14, 0.65, 0.05],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
+  // ① 股間コライダーのZオフセットを0に修正
   const [crotchColliderRef, crotchColliderApi] = useSphere<THREE.Object3D>(() => ({
     type: 'Kinematic',
     args: [0.15],
-    position: [0, 0.82, 0.08],
+    position: [0, 0.82, 0.0],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
-  const [leftHandColliderRef, leftHandColliderApi] = useSphere<THREE.Object3D>(() => ({
-    type: 'Kinematic',
-    args: [0.15],
-    position: [-0.28, 1.0, -0.25],
-    collisionFilterGroup: COLLISION_GROUP_HUMAN,
-    collisionFilterMask: COLLISION_GROUP_CLOTH,
-  }));
-  const [rightHandColliderRef, rightHandColliderApi] = useSphere<THREE.Object3D>(() => ({
-    type: 'Kinematic',
-    args: [0.15],
-    position: [0.28, 1.0, -0.25],
-    collisionFilterGroup: COLLISION_GROUP_HUMAN,
-    collisionFilterMask: COLLISION_GROUP_CLOTH,
-  }));
-  const [leftForeArmColliderRef, leftForeArmColliderApi] = useSphere<THREE.Object3D>(() => ({
+  const [hipBackColliderRef, hipBackColliderApi] = useSphere<THREE.Object3D>(() => ({
     type: 'Kinematic',
     args: [0.14],
-    position: [-0.24, 1.2, -0.2],
+    position: [0, 0.76, -0.16],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
-  const [rightForeArmColliderRef, rightForeArmColliderApi] = useSphere<THREE.Object3D>(() => ({
+
+  const [leftKneeColliderRef, leftKneeColliderApi] = useSphere<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.14],
-    position: [0.24, 1.2, -0.2],
+    args: [0.13],
+    position: [-0.14, 0.42, 0.16],
+    collisionFilterGroup: COLLISION_GROUP_HUMAN,
+    collisionFilterMask: COLLISION_GROUP_CLOTH,
+  }));
+  const [rightKneeColliderRef, rightKneeColliderApi] = useSphere<THREE.Object3D>(() => ({
+    type: 'Kinematic',
+    args: [0.13],
+    position: [0.14, 0.42, 0.16],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
@@ -257,10 +250,6 @@ function HumanModel({
     pelvisBoneRef.current = findBone(['mixamorigHips', 'Hips', 'Pelvis', 'pelvis', 'hips']);
     leftThighBoneRef.current = findBone(['mixamorigLeftUpLeg', 'LeftUpLeg', 'left_up_leg', 'LeftLeg', 'thigh_l']);
     rightThighBoneRef.current = findBone(['mixamorigRightUpLeg', 'RightUpLeg', 'right_up_leg', 'RightLeg', 'thigh_r']);
-    leftHandBoneRef.current = findBone(['mixamorigLeftHand', 'LeftHand', 'left_hand']);
-    rightHandBoneRef.current = findBone(['mixamorigRightHand', 'RightHand', 'right_hand']);
-    leftForeArmBoneRef.current = findBone(['mixamorigLeftForeArm', 'LeftForeArm', 'left_fore_arm']);
-    rightForeArmBoneRef.current = findBone(['mixamorigRightForeArm', 'RightForeArm', 'right_fore_arm']);
 
     const mixer = new THREE.AnimationMixer(scene);
     mixerRef.current = mixer;
@@ -375,12 +364,13 @@ function HumanModel({
     updateBone(pelvisBoneRef.current, pelvisColliderApi);
     updateBone(leftThighBoneRef.current, leftThighColliderApi);
     updateBone(rightThighBoneRef.current, rightThighColliderApi);
-    updateBone(pelvisBoneRef.current, crotchColliderApi, new THREE.Vector3(0.0, -0.28, 0.08));
-    if (!isSitting) {
-      updateBone(leftHandBoneRef.current, leftHandColliderApi, new THREE.Vector3(-0.045, -0.04, 0.06));
-      updateBone(rightHandBoneRef.current, rightHandColliderApi, new THREE.Vector3(0.045, -0.04, 0.06));
-      updateBone(leftForeArmBoneRef.current, leftForeArmColliderApi, new THREE.Vector3(-0.028, -0.025, 0.055));
-      updateBone(rightForeArmBoneRef.current, rightForeArmColliderApi, new THREE.Vector3(0.028, -0.025, 0.055));
+    updateBone(pelvisBoneRef.current, crotchColliderApi, new THREE.Vector3(0.0, -0.28, 0.0));
+    if (isSitting) {
+      updateBone(pelvisBoneRef.current, hipBackColliderApi, new THREE.Vector3(0.0, -0.18, -0.18));
+    }
+    if (isSitting) {
+      updateBone(leftThighBoneRef.current, leftKneeColliderApi, new THREE.Vector3(0, -0.33, 0.12));
+      updateBone(rightThighBoneRef.current, rightKneeColliderApi, new THREE.Vector3(0, -0.33, 0.12));
     }
 
     if (pelvisBoneRef.current) {
@@ -402,31 +392,27 @@ function HumanModel({
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={leftThighColliderRef} visible={false}>
-        <boxGeometry args={[0.18, 0.45, 0.2]} />
+        <boxGeometry args={[0.2, 0.52, 0.24]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={rightThighColliderRef} visible={false}>
-        <boxGeometry args={[0.18, 0.45, 0.2]} />
+        <boxGeometry args={[0.2, 0.52, 0.24]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={crotchColliderRef} visible={false}>
         <sphereGeometry args={[0.15, 8, 8]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
-      <mesh ref={leftHandColliderRef} visible={false}>
-        <sphereGeometry args={[0.15, 8, 8]} />
-        <meshStandardMaterial transparent opacity={0} />
-      </mesh>
-      <mesh ref={rightHandColliderRef} visible={false}>
-        <sphereGeometry args={[0.15, 8, 8]} />
-        <meshStandardMaterial transparent opacity={0} />
-      </mesh>
-      <mesh ref={leftForeArmColliderRef} visible={false}>
+      <mesh ref={hipBackColliderRef} visible={false}>
         <sphereGeometry args={[0.14, 8, 8]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
-      <mesh ref={rightForeArmColliderRef} visible={false}>
-        <sphereGeometry args={[0.14, 8, 8]} />
+      <mesh ref={leftKneeColliderRef} visible={false}>
+        <sphereGeometry args={[0.13, 8, 8]} />
+        <meshStandardMaterial transparent opacity={0} />
+      </mesh>
+      <mesh ref={rightKneeColliderRef} visible={false}>
+        <sphereGeometry args={[0.13, 8, 8]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
     </group>
@@ -439,6 +425,7 @@ function ClothParticle({
   index,
   onReady,
   isWaist,
+  isSitting,
   waistRadius,
   waistAngle,
   hipPositionRef,
@@ -448,27 +435,24 @@ function ClothParticle({
   index: number;
   onReady: ParticleCallback;
   isWaist: boolean;
+  isSitting: boolean;
   waistRadius: number;
   waistAngle: number;
   hipPositionRef: HipPositionRef;
 }) {
   const [ref, api] = useSphere<THREE.Object3D>(() => ({
     type: isWaist ? 'Kinematic' : 'Dynamic',
-    mass: isWaist ? 0 : 0.05,
+    mass: isWaist ? 0 : 0.045,
     args: [0.08],
     position,
-    linearDamping: 0.78,
-    angularDamping: 0.75,
+    linearDamping: 0.8,
+    angularDamping: 0.78,
     collisionFilterGroup: COLLISION_GROUP_CLOTH,
     collisionFilterMask: COLLISION_GROUP_GROUND | COLLISION_GROUP_HUMAN,
   }));
 
   useEffect(() => {
-    const unsubscribe = api.position.subscribe((value: number[]) => {
-      onReady(index, ref, api, [value[0], value[1], value[2]] as [number, number, number]);
-    });
     onReady(index, ref, api, position);
-    return unsubscribe;
   }, [index, onReady, position, ref, api]);
 
   useFrame(() => {
@@ -476,7 +460,7 @@ function ClothParticle({
       const [hipX, hipY, hipZ] = hipPositionRef.current;
       const targetX = hipX + Math.cos(waistAngle) * waistRadius;
       const targetZ = hipZ + Math.sin(waistAngle) * waistRadius;
-      const targetY = hipY;
+      const targetY = hipY + (isSitting ? WAIST_Y_OFFSET_SIT : WAIST_Y_OFFSET_STAND);
       api.position.set(targetX, targetY, targetZ);
     }
   });
@@ -489,13 +473,13 @@ function ClothParticle({
   );
 }
 
-function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPositionRef: HipPositionRef }) {
+function ClothGrid({ wireframe, hipPositionRef, isSitting }: { wireframe: boolean; hipPositionRef: HipPositionRef; isSitting: boolean }) {
   const radialSegments = 16;
   const heightSegments = 8;
-  const topRadius = 0.17;
-  const bottomRadius = 0.32;
-  const skirtHeight = 0.74;
-  const topY = 1.05;
+  const topRadius = 0.15;
+  const bottomRadius = 0.27;
+  const skirtHeight = 0.62;
+  const topY = hipPositionRef.current[1] + WAIST_Y_OFFSET_STAND;
   const angleStep = (Math.PI * 2) / radialSegments;
 
   const gridPoints = useMemo(
@@ -526,6 +510,9 @@ function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPosit
   const registerParticle = useCallback(
     (index: number, ref: BodyRef, api: BodyApi, position: [number, number, number]) => {
       setParticleRefsState((current) => {
+        if (current[index] === ref) {
+          return current;
+        }
         const next = [...current];
         next[index] = ref;
         return next;
@@ -665,6 +652,7 @@ function ClothGrid({ wireframe, hipPositionRef }: { wireframe: boolean; hipPosit
           wireframe={wireframe}
           onReady={registerParticle}
           isWaist={point.row === 0}
+          isSitting={isSitting}
           waistRadius={topRadius}
           waistAngle={point.angle}
           hipPositionRef={hipPositionRef}
@@ -724,7 +712,7 @@ export default function ClothSimulator() {
             }}
             onDebugInfo={handleDebugInfo}
           />
-          <ClothGrid wireframe={wireframe} hipPositionRef={hipPositionRef} />
+          <ClothGrid wireframe={wireframe} hipPositionRef={hipPositionRef} isSitting={isSitting} />
         </Physics>
         <OrbitControls makeDefault enablePan enableZoom enableRotate />
       </Canvas>
@@ -752,9 +740,6 @@ export default function ClothSimulator() {
           >
             {showDebugPanel ? 'デバッグ非表示' : '骨名/アニメーション確認'}
           </button>
-          <p className="mt-1 text-xs text-slate-200">
-            GLBモデルのスタンド/シットアニメーションを再生し、モデルYオフセットで座面接地を調整できます。
-          </p>
         </div>
       </div>
 

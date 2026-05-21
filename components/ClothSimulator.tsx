@@ -168,10 +168,10 @@ function HumanModel({
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
-  const [hipBackColliderRef, hipBackColliderApi] = useSphere<THREE.Object3D>(() => ({
+  const [hipBackColliderRef, hipBackColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.12],
-    position: [0, 0.76, -0.16],
+    args: [0.2, 0.1, 0.3], // 太もも裏の形状
+    position: [0, 0.4, -0.2], // 椅子との接触位置
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));

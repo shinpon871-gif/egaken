@@ -15,18 +15,24 @@ const COLLISION_GROUP_HUMAN = 4;
 const MODEL_SCALE = 0.01;
 const SIT_AUTO_LIFT = 0.18;
 const STAND_RECOVER_LIFT = 0.15;
-// Waist vertical offsets: raise these so the skirt sits closer to torso/waist
-const WAIST_Y_OFFSET_STAND = 0.12;
-const WAIST_Y_OFFSET_SIT = 0.06;
-const WAIST_FOLLOW_LERP = 0.08; // how fast waist particles follow target (slower to avoid snapping)
-const WAIST_SLACK = 0.03; // allow waist to hang slightly lower than pelvis
-const WAIST_MAX_RISE = 0.02; // max amount the waist can rise above the pelvis to avoid flipping up
-const WAIST_MAX_DROP = 0.25; // maximum allowed drop below pelvis
+const SIT_TIME_RATIO = 0.80;
+const WAIST_Y_OFFSET_STAND = 0.02;
+const WAIST_Y_OFFSET_SIT = -0.02;
+const WAIST_FOLLOW_LERP = 0.22;
+const WAIST_SLACK = 0.015;
+const WAIST_MAX_RISE = 0.01;
+const WAIST_MAX_DROP = 0.34;
+const CLOTH_PARTICLE_RADIUS = 0.034;
 
 type BodyRef = RefObject<THREE.Object3D>;
 type BodyApi = PublicApi;
 type HipPositionRef = { current: [number, number, number] };
 type ParticleCallback = (index: number, ref: BodyRef, api: BodyApi, position: [number, number, number]) => void;
+type SimulatorTuning = {
+  waistAnchorLift: number;
+  waistSlimness: number;
+  hemYOffset: number;
+};
 
 type DistanceConstraintProps = {
   bodyA: BodyRef;
@@ -35,7 +41,7 @@ type DistanceConstraintProps = {
 };
 
 function DistanceConstraint({ bodyA, bodyB, distance }: DistanceConstraintProps) {
-  useDistanceConstraint(bodyA, bodyB, { distance, maxForce: 1e4 });
+  useDistanceConstraint(bodyA, bodyB, { distance, maxForce: 2.4e3 });
   return null;
 }
 
@@ -108,12 +114,16 @@ function HumanModel({
   modelYOffset,
   modelBasePosition,
   onPelvisPositionUpdate,
+  tuning,
+  onStandRecoverComplete,
   onDebugInfo,
 }: {
   isSitting: boolean;
   modelYOffset: number;
   modelBasePosition: [number, number, number];
   onPelvisPositionUpdate: (position: [number, number, number]) => void;
+  tuning: SimulatorTuning;
+  onStandRecoverComplete?: () => void;
   onDebugInfo?: (bones: string[], animations: string[]) => void;
 }) {
   const fbxScene = useFBX('/models/Stand To Sit.fbx') as THREE.Group & { animations?: THREE.AnimationClip[] };
@@ -138,39 +148,31 @@ function HumanModel({
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
 
-  // pelvisColliderApi の位置を監視してヒップ位置を確実に更新する
-  useEffect(() => {
-    if (!pelvisColliderApi || !onPelvisPositionUpdate) return;
-    const unsub = pelvisColliderApi.position.subscribe((v: number[]) => {
-      onPelvisPositionUpdate([v[0], v[1], v[2]]);
-    });
-    return () => unsub();
-  }, [pelvisColliderApi, onPelvisPositionUpdate]);
   const [leftThighColliderRef, leftThighColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.18, 0.52, 0.24],
-    position: [-0.14, 0.65, 0.05],
+    args: [0.28, 0.56, 0.50],
+    position: [-0.14, 0.65, 0.10],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
   const [rightThighColliderRef, rightThighColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.18, 0.52, 0.24],
-    position: [0.14, 0.65, 0.05],
+    args: [0.28, 0.56, 0.50],
+    position: [0.14, 0.65, 0.10],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
   // ① 股間コライダーのZオフセットを0に修正
   const [crotchColliderRef, crotchColliderApi] = useSphere<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.08],
+    args: [0.10],
     position: [0, 0.82, 0.0],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
   const [hipBackColliderRef, hipBackColliderApi] = useBox<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.2, 0.1, 0.3], // 太もも裏の形状
+    args: [0.32, 0.16, 0.46], // お尻〜太もも裏の支持面
     position: [0, 0.4, -0.2], // 椅子との接触位置
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
@@ -190,16 +192,23 @@ function HumanModel({
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
+  const [lapFrontColliderRef, lapFrontColliderApi] = useBox<THREE.Object3D>(() => ({
+    type: 'Kinematic',
+    args: [0.58, 0.16, 0.50],
+    position: [0, 0.55, 0.16],
+    collisionFilterGroup: COLLISION_GROUP_HUMAN,
+    collisionFilterMask: COLLISION_GROUP_CLOTH,
+  }));
   const [leftHandColliderRef, leftHandColliderApi] = useSphere<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.05],
+    args: [0.045],
     position: [-0.22, 1.05, 0.05],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
   }));
   const [rightHandColliderRef, rightHandColliderApi] = useSphere<THREE.Object3D>(() => ({
     type: 'Kinematic',
-    args: [0.05],
+    args: [0.045],
     position: [0.22, 1.05, 0.05],
     collisionFilterGroup: COLLISION_GROUP_HUMAN,
     collisionFilterMask: COLLISION_GROUP_CLOTH,
@@ -209,6 +218,7 @@ function HumanModel({
   const rightKneeBoneRef = useRef<THREE.Object3D | null>(null);
   const leftHandBoneRef = useRef<THREE.Object3D | null>(null);
   const rightHandBoneRef = useRef<THREE.Object3D | null>(null);
+  const standRecoverNotifiedRef = useRef(false);
 
   const isUsableClip = useCallback((clip?: THREE.AnimationClip) => {
     if (!clip) return false;
@@ -345,13 +355,14 @@ function HumanModel({
       standAction.timeScale = 0.35;
     } else {
       if (standAction.time <= 0.01 || standAction.time >= duration - 0.01) {
-        standAction.time = duration;
+        standAction.time = duration * SIT_TIME_RATIO;
       }
       standAction.timeScale = -0.35;
     }
     standAction.play();
     activeActionRef.current = standAction;
     lastSittingStateRef.current = isSitting;
+    standRecoverNotifiedRef.current = false;
   }, [isSitting]);
 
   useFrame((_, delta) => {
@@ -375,14 +386,19 @@ function HumanModel({
       const action = standActionRef.current;
       if (action) {
         const duration = action.getClip().duration;
-        if (action.timeScale > 0 && action.time >= duration - 0.002) {
-          action.time = duration;
+        const sitStop = duration * SIT_TIME_RATIO;
+        if (action.timeScale > 0 && action.time >= sitStop - 0.002) {
+          action.time = sitStop;
           action.timeScale = 0;
           action.paused = true;
         } else if (action.timeScale < 0 && action.time <= 0.002) {
           action.time = 0;
           action.timeScale = 0;
           action.paused = true;
+          if (!standRecoverNotifiedRef.current) {
+            standRecoverNotifiedRef.current = true;
+            onStandRecoverComplete?.();
+          }
         }
       }
     }
@@ -407,14 +423,18 @@ function HumanModel({
     };
 
     updateBone(pelvisBoneRef.current, pelvisColliderApi);
-    updateBone(leftThighBoneRef.current, leftThighColliderApi);
-    updateBone(rightThighBoneRef.current, rightThighColliderApi);
-    updateBone(pelvisBoneRef.current, crotchColliderApi, new THREE.Vector3(0.0, -0.28, 0.0));
-    // 直立時は骨盤に近く小さく収め、座った時だけ後ろにせり出させる
     if (isSitting) {
-      updateBone(pelvisBoneRef.current, hipBackColliderApi, new THREE.Vector3(0.0, -0.12, -0.15));
+      updateBone(leftThighBoneRef.current, leftThighColliderApi, new THREE.Vector3(0, 0.08, 0.16));
+      updateBone(rightThighBoneRef.current, rightThighColliderApi, new THREE.Vector3(0, 0.08, 0.16));
     } else {
-      updateBone(pelvisBoneRef.current, hipBackColliderApi, new THREE.Vector3(0.0, -0.05, -0.08));
+      updateBone(leftThighBoneRef.current, leftThighColliderApi);
+      updateBone(rightThighBoneRef.current, rightThighColliderApi);
+    }
+    updateBone(pelvisBoneRef.current, crotchColliderApi, new THREE.Vector3(0.0, -0.28, 0.0));
+    if (isSitting) {
+      updateBone(pelvisBoneRef.current, hipBackColliderApi, new THREE.Vector3(0.0, -0.28, -0.14));
+    } else {
+      updateBone(pelvisBoneRef.current, hipBackColliderApi, new THREE.Vector3(0.0, -0.10, -0.05));
     }
     // Update knee colliders to follow actual knee bones if available, otherwise fall back to thigh+offset
     if (leftKneeBoneRef.current) {
@@ -429,16 +449,65 @@ function HumanModel({
     }
     // Update hand colliders to follow hand bones if available
     if (leftHandBoneRef.current) {
-      updateBone(leftHandBoneRef.current, leftHandColliderApi);
+      if (isSitting) {
+        updateBone(leftHandBoneRef.current, leftHandColliderApi, new THREE.Vector3(-0.09, 0.05, 0.10));
+      } else {
+        updateBone(leftHandBoneRef.current, leftHandColliderApi, new THREE.Vector3(-0.14, 0.04, 0.06));
+      }
     }
     if (rightHandBoneRef.current) {
-      updateBone(rightHandBoneRef.current, rightHandColliderApi);
+      if (isSitting) {
+        updateBone(rightHandBoneRef.current, rightHandColliderApi, new THREE.Vector3(0.09, 0.05, 0.10));
+      } else {
+        updateBone(rightHandBoneRef.current, rightHandColliderApi, new THREE.Vector3(0.14, 0.04, 0.06));
+      }
     }
+
+    const leftKneePos = new THREE.Vector3();
+    const rightKneePos = new THREE.Vector3();
+    if (leftKneeBoneRef.current) {
+      leftKneeBoneRef.current.getWorldPosition(leftKneePos);
+    } else if (leftThighBoneRef.current) {
+      leftThighBoneRef.current.getWorldPosition(leftKneePos);
+      leftKneePos.y -= 0.32;
+      leftKneePos.z += 0.16;
+    }
+    if (rightKneeBoneRef.current) {
+      rightKneeBoneRef.current.getWorldPosition(rightKneePos);
+    } else if (rightThighBoneRef.current) {
+      rightThighBoneRef.current.getWorldPosition(rightKneePos);
+      rightKneePos.y -= 0.32;
+      rightKneePos.z += 0.16;
+    }
+
+    // Add a front-lap blocker while sitting so the skirt front does not fall through thighs.
+    if (isSitting) {
+      const lapCenter = leftKneePos.clone().add(rightKneePos).multiplyScalar(0.5);
+      lapCenter.y += 0.11;
+      lapCenter.z += 0.14;
+      lapFrontColliderApi.position.set(lapCenter.x, lapCenter.y, lapCenter.z);
+      lapFrontColliderApi.rotation.set(-0.33, 0, 0);
+    } else {
+      lapFrontColliderApi.position.set(0, -5, 0);
+      lapFrontColliderApi.rotation.set(0, 0, 0);
+    }
+
+
 
     if (pelvisBoneRef.current) {
       const position = new THREE.Vector3();
       pelvisBoneRef.current.getWorldPosition(position);
-      onPelvisPositionUpdate([position.x, position.y, position.z]);
+      const waistAnchorLift = tuning.waistAnchorLift;
+      onPelvisPositionUpdate([position.x, position.y + waistAnchorLift, position.z + (isSitting ? -0.005 : 0)]);
+    } else if (leftThighBoneRef.current && rightThighBoneRef.current) {
+      const leftThighPosition = new THREE.Vector3();
+      const rightThighPosition = new THREE.Vector3();
+      leftThighBoneRef.current.getWorldPosition(leftThighPosition);
+      rightThighBoneRef.current.getWorldPosition(rightThighPosition);
+      const anchor = leftThighPosition.clone().add(rightThighPosition).multiplyScalar(0.5);
+      anchor.y += isSitting ? 0.07 : 0.13;
+      anchor.z += isSitting ? -0.01 : 0.0;
+      onPelvisPositionUpdate([anchor.x, anchor.y, anchor.z]);
     } else if (modelRef.current) {
       const fallback = new THREE.Vector3();
       modelRef.current.getWorldPosition(fallback);
@@ -454,19 +523,19 @@ function HumanModel({
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={leftThighColliderRef} visible={false}>
-        <boxGeometry args={[0.18, 0.52, 0.24]} />
+        <boxGeometry args={[0.28, 0.56, 0.50]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={rightThighColliderRef} visible={false}>
-        <boxGeometry args={[0.18, 0.52, 0.24]} />
+        <boxGeometry args={[0.28, 0.56, 0.50]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={crotchColliderRef} visible={false}>
-        <sphereGeometry args={[0.08, 8, 8]} />
+        <sphereGeometry args={[0.10, 8, 8]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={hipBackColliderRef} visible={false}>
-        <sphereGeometry args={[0.12, 8, 8]} />
+        <boxGeometry args={[0.32, 0.16, 0.46]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={leftKneeColliderRef} visible={false}>
@@ -477,12 +546,16 @@ function HumanModel({
         <sphereGeometry args={[0.12, 8, 8]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
+      <mesh ref={lapFrontColliderRef} visible={false}>
+        <boxGeometry args={[0.58, 0.16, 0.50]} />
+        <meshStandardMaterial transparent opacity={0} />
+      </mesh>
       <mesh ref={leftHandColliderRef} visible={false}>
-        <sphereGeometry args={[0.05, 8, 8]} />
+        <sphereGeometry args={[0.045, 8, 8]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
       <mesh ref={rightHandColliderRef} visible={false}>
-        <sphereGeometry args={[0.05, 8, 8]} />
+        <sphereGeometry args={[0.045, 8, 8]} />
         <meshStandardMaterial transparent opacity={0} />
       </mesh>
     </group>
@@ -513,10 +586,13 @@ function ClothParticle({
   const [ref, api] = useSphere<THREE.Object3D>(() => ({
     type: isWaist ? 'Kinematic' : 'Dynamic',
     mass: isWaist ? 0 : 0.5,
-    args: [0.025],
+    args: [CLOTH_PARTICLE_RADIUS],
     position,
-    linearDamping: 0.4,
-    angularDamping: 0.4,
+    linearDamping: isWaist ? 0.92 : 0.9,
+    angularDamping: isWaist ? 0.96 : 0.93,
+    allowSleep: true,
+    sleepSpeedLimit: 0.03,
+    sleepTimeLimit: 1.0,
     collisionFilterGroup: COLLISION_GROUP_CLOTH,
     collisionFilterMask: COLLISION_GROUP_GROUND | COLLISION_GROUP_HUMAN,
   }));
@@ -536,17 +612,16 @@ function ClothParticle({
       const [hipX, hipY, hipZ] = hipPositionRef.current;
       const targetX = hipX + Math.cos(waistAngle) * waistRadius;
       const targetZ = hipZ + Math.sin(waistAngle) * waistRadius;
-      // compute desired waist Y, apply small slack so skirt can hang lower than pelvis
-      let rawTargetY = hipY + (isSitting ? WAIST_Y_OFFSET_SIT : WAIST_Y_OFFSET_STAND) - WAIST_SLACK;
-      // Clamp to prevent the waist from rising unrealistically high (裏返り/首付近へ持ち上がる問題)
+      let targetY = hipY + (isSitting ? WAIST_Y_OFFSET_SIT : WAIST_Y_OFFSET_STAND) - WAIST_SLACK;
       const maxY = hipY + WAIST_MAX_RISE;
       const minY = hipY - WAIST_MAX_DROP;
-      if (rawTargetY > maxY) rawTargetY = maxY;
-      if (rawTargetY < minY) rawTargetY = minY;
+      if (targetY > maxY) targetY = maxY;
+      if (targetY < minY) targetY = minY;
+
       const current = currentPosRef.current ?? position;
       const lerp = WAIST_FOLLOW_LERP;
       const newX = THREE.MathUtils.lerp(current[0], targetX, lerp);
-      const newY = THREE.MathUtils.lerp(current[1], rawTargetY, lerp);
+      const newY = THREE.MathUtils.lerp(current[1], targetY, lerp);
       const newZ = THREE.MathUtils.lerp(current[2], targetZ, lerp);
       api.position.set(newX, newY, newZ);
     }
@@ -560,24 +635,38 @@ function ClothParticle({
   );
 }
 
-function ClothGrid({ wireframe, hipPositionRef, isSitting }: { wireframe: boolean; hipPositionRef: HipPositionRef; isSitting: boolean }) {
+function ClothGrid({
+  wireframe,
+  hipPositionRef,
+  isSitting,
+  tuning,
+}: {
+  wireframe: boolean;
+  hipPositionRef: HipPositionRef;
+  isSitting: boolean;
+  tuning: SimulatorTuning;
+}) {
   const radialSegments = 20;
   const heightSegments = 10;
-  const topRadius = 0.16;
-  const bottomRadius = 0.25;
-  const skirtHeight = 0.55;
-  const topY = hipPositionRef.current[1] + (isSitting ? WAIST_Y_OFFSET_SIT : WAIST_Y_OFFSET_STAND);
+  const baseTopRadius = 0.18;
+  const bottomRadius = 0.30;
+  const skirtHeight = 0.68;
+  const waistRadius = THREE.MathUtils.clamp(baseTopRadius - tuning.waistSlimness * 0.6, 0.12, 0.22);
+  const hipX = hipPositionRef.current[0];
+  const hipY = hipPositionRef.current[1];
+  const hipZ = hipPositionRef.current[2];
+  const topY = hipY + (isSitting ? WAIST_Y_OFFSET_SIT : WAIST_Y_OFFSET_STAND);
   const angleStep = (Math.PI * 2) / radialSegments;
 
   const gridPoints = useMemo(
     () => {
-      const startX = hipPositionRef.current[0];
-      const startZ = hipPositionRef.current[2];
+      const startX = hipX;
+      const startZ = hipZ;
       return Array.from({ length: radialSegments * heightSegments }, (_, index) => {
         const row = Math.floor(index / radialSegments);
         const col = index % radialSegments;
         const t = row / (heightSegments - 1);
-        const radius = topRadius + (bottomRadius - topRadius) * t;
+        const radius = baseTopRadius + (bottomRadius - baseTopRadius) * t;
         const y = topY - t * skirtHeight;
         const angle = col * angleStep;
         return {
@@ -589,10 +678,11 @@ function ClothGrid({ wireframe, hipPositionRef, isSitting }: { wireframe: boolea
       });
     },
     // Recompute when hip position or sitting state changes so the top row follows the pelvis correctly
-    [angleStep, bottomRadius, heightSegments, radialSegments, topRadius, topY, skirtHeight, hipPositionRef.current[0], hipPositionRef.current[1], hipPositionRef.current[2], isSitting]
+    [angleStep, bottomRadius, heightSegments, radialSegments, baseTopRadius, topY, skirtHeight, hipX, hipZ]
   );
 
   const [particleRefsState, setParticleRefsState] = useState<BodyRef[]>([]);
+  const particleApisRef = useRef<Array<BodyApi | undefined>>([]);
   const particlePositions = useRef<Array<[number, number, number]>>(gridPoints.map((point) => point.position));
 
   const registerParticle = useCallback(
@@ -605,6 +695,7 @@ function ClothGrid({ wireframe, hipPositionRef, isSitting }: { wireframe: boolea
         next[index] = ref;
         return next;
       });
+      particleApisRef.current[index] = api;
       particlePositions.current[index] = position;
       const unsubscribe = api.position.subscribe((value: number[]) => {
         particlePositions.current[index] = [value[0], value[1], value[2]] as [number, number, number];
@@ -647,6 +738,63 @@ function ClothGrid({ wireframe, hipPositionRef, isSitting }: { wireframe: boolea
   useFrame(() => {
     const position = clothGeometry.attributes.position as THREE.BufferAttribute;
     particlePositions.current.forEach((value, index) => {
+      const point = gridPoints[index];
+      const api = particleApisRef.current[index];
+      if (point && api && point.row > 0) {
+        const rowRatio = point.row / (heightSegments - 1);
+
+        // Waist slider: pull upper rows toward fitted silhouette without rebuilding constraints.
+        if (tuning.waistSlimness > 0.0005 && rowRatio < 0.24) {
+          const dx = value[0] - hipPositionRef.current[0];
+          const dz = value[2] - hipPositionRef.current[2];
+          const currentR = Math.hypot(dx, dz);
+          if (currentR > 1e-5) {
+            const baseR = THREE.MathUtils.lerp(baseTopRadius, bottomRadius, rowRatio);
+            const targetR = Math.max(0.12, baseR - tuning.waistSlimness * (1 - rowRatio) * 0.52);
+            const scale = THREE.MathUtils.clamp(targetR / currentR, 0.94, 1.01);
+            const correctedX = hipPositionRef.current[0] + dx * scale;
+            const correctedZ = hipPositionRef.current[2] + dz * scale;
+            api.position.set(correctedX, value[1], correctedZ);
+            value = [correctedX, value[1], correctedZ];
+            particlePositions.current[index] = value;
+          }
+        }
+
+        if (Math.abs(tuning.hemYOffset) > 0.001) {
+          // Hem slider: converge to target height (non-accumulating) to avoid runaway/bucket shape.
+          const targetHemY =
+            hipPositionRef.current[1] +
+            (isSitting ? WAIST_Y_OFFSET_SIT : WAIST_Y_OFFSET_STAND) -
+            WAIST_SLACK -
+            rowRatio * skirtHeight +
+            rowRatio * tuning.hemYOffset * 0.55;
+          const yError = targetHemY - value[1];
+          if (Math.abs(yError) > 0.008) {
+            const correctedY = value[1] + THREE.MathUtils.clamp(yError * 0.07, -0.005, 0.005);
+            api.position.set(value[0], correctedY, value[2]);
+            value = [value[0], correctedY, value[2]];
+            particlePositions.current[index] = value;
+          }
+        }
+      }
+
+      if (isSitting) {
+        if (point && api && point.row > Math.floor(heightSegments * 0.55)) {
+          const rowRatio = point.row / (heightSegments - 1);
+          const backFactor = Math.max(0, -Math.sin(point.angle));
+          if (backFactor > 0.2) {
+            const targetBackY = hipPositionRef.current[1] - 0.27 - rowRatio * 0.38;
+            const backError = value[1] - targetBackY;
+            if (backError > 0.003) {
+              const correctedY = value[1] - Math.min(0.015, backError * 0.2);
+              api.position.set(value[0], correctedY, value[2]);
+              api.velocity.set(0, -0.18, 0);
+              value = [value[0], correctedY, value[2]];
+              particlePositions.current[index] = value;
+            }
+          }
+        }
+      }
       position.setXYZ(index, value[0], value[1], value[2]);
     });
     // eslint-disable-next-line react-hooks/immutability
@@ -708,7 +856,7 @@ function ClothGrid({ wireframe, hipPositionRef, isSitting }: { wireframe: boolea
           onReady={registerParticle}
           isWaist={point.row === 0}
           isSitting={isSitting}
-          waistRadius={topRadius}
+          waistRadius={waistRadius}
           waistAngle={point.angle}
           hipPositionRef={hipPositionRef}
         />
@@ -717,9 +865,7 @@ function ClothGrid({ wireframe, hipPositionRef, isSitting }: { wireframe: boolea
       {constraintPairs.map(({ a, b, distance }, index) => {
         const bodyA = particleRefsState[a];
         const bodyB = particleRefsState[b];
-        return bodyA && bodyB ? (
-          <DistanceConstraint key={'constraint-' + index} bodyA={bodyA} bodyB={bodyB} distance={distance} />
-        ) : null;
+        return bodyA && bodyB ? <DistanceConstraint key={'constraint-' + index} bodyA={bodyA} bodyB={bodyB} distance={distance} /> : null;
       })}
 
       <mesh geometry={clothGeometry} castShadow receiveShadow>
@@ -743,8 +889,20 @@ export default function ClothSimulator() {
   const [modelYOffset, setModelYOffset] = useState(0.0);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
   const [debugInfo, setDebugInfo] = useState<{ bones: string[]; animations: string[] }>({ bones: [], animations: [] });
+  const [waistAnchorLift, setWaistAnchorLift] = useState(0.02);
+  const [waistSlimness, setWaistSlimness] = useState(0.0);
+  const [hemYOffset, setHemYOffset] = useState(0.0);
+  const [sliderLocked, setSliderLocked] = useState(false);
   const modelBasePosition: [number, number, number] = [0, 0, -0.55];
   const hipPositionRef = useRef<[number, number, number]>([0, 1.0, -0.55]);
+  const tuning = useMemo<SimulatorTuning>(
+    () => ({
+      waistAnchorLift,
+      waistSlimness,
+      hemYOffset,
+    }),
+    [waistAnchorLift, waistSlimness, hemYOffset]
+  );
   const handleDebugInfo = useCallback((bones: string[], animations: string[]) => {
     setDebugInfo({ bones, animations });
   }, []);
@@ -755,19 +913,29 @@ export default function ClothSimulator() {
         <ambientLight intensity={0.35} />
         <directionalLight position={[5, 8, 2]} intensity={1.1} castShadow shadow-mapSize-width={2048} shadow-mapSize-height={2048} />
         <spotLight position={[-4, 6, 4]} intensity={0.6} penumbra={0.4} />
-        <Physics gravity={[0, -9.8, 0]} iterations={48} broadphase="SAP">
+        <Physics
+          gravity={[0, -9.8, 0]}
+          iterations={72}
+          broadphase="SAP"
+          allowSleep
+          defaultContactMaterial={{ friction: 0.95, restitution: 0 }}
+        >
           <BasePlane />
           <StaticBox position={[0, 0.55, -1.45]} args={[1.0, 0.12, 1.0]} />
           <HumanModel
             isSitting={isSitting}
             modelYOffset={modelYOffset}
             modelBasePosition={modelBasePosition}
+            tuning={tuning}
+            onStandRecoverComplete={() => {
+              setSliderLocked(false);
+            }}
             onPelvisPositionUpdate={(position) => {
               hipPositionRef.current = position;
             }}
             onDebugInfo={handleDebugInfo}
           />
-          <ClothGrid wireframe={wireframe} hipPositionRef={hipPositionRef} isSitting={isSitting} />
+          <ClothGrid wireframe={wireframe} hipPositionRef={hipPositionRef} isSitting={isSitting} tuning={tuning} />
         </Physics>
         <OrbitControls makeDefault enablePan enableZoom enableRotate />
       </Canvas>
@@ -783,7 +951,15 @@ export default function ClothSimulator() {
           </button>
           <button
             type="button"
-            onClick={() => setIsSitting((value) => !value)}
+            onClick={() => {
+              setIsSitting((value) => {
+                const next = !value;
+                if (next) {
+                  setSliderLocked(true);
+                }
+                return next;
+              });
+            }}
             className="mb-3 w-full rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-300"
           >
             {isSitting ? '立つ' : '座る'}
@@ -795,6 +971,47 @@ export default function ClothSimulator() {
           >
             {showDebugPanel ? 'デバッグ非表示' : '骨名/アニメーション確認'}
           </button>
+
+          <div className="mb-1 border-t border-slate-600 pt-3 text-slate-200">
+            <h4 className="mb-2 text-sm font-semibold text-emerald-300">腰/裾のリアルタイム調整</h4>
+            <p className="mb-2 text-[11px] text-slate-400">座る実行後は、立ち動作完了までスライダーはロックされます。</p>
+
+            <label className="mb-1 block text-xs">腰アンカー高さ: {waistAnchorLift.toFixed(2)}</label>
+            <input
+              type="range"
+              min="-0.02"
+              max="0.16"
+              step="0.005"
+              value={waistAnchorLift}
+              onChange={(event) => setWaistAnchorLift(Number(event.target.value))}
+              disabled={sliderLocked}
+              className="mb-2 w-full"
+            />
+
+            <label className="mb-1 block text-xs">腰細さ: {waistSlimness.toFixed(2)}</label>
+            <input
+              type="range"
+              min="0"
+              max="0.14"
+              step="0.005"
+              value={waistSlimness}
+              onChange={(event) => setWaistSlimness(Number(event.target.value))}
+              disabled={sliderLocked}
+              className="mb-2 w-full"
+            />
+
+            <label className="mb-1 block text-xs">裾高さ調整: {hemYOffset.toFixed(2)}</label>
+            <input
+              type="range"
+              min="-0.20"
+              max="0.20"
+              step="0.005"
+              value={hemYOffset}
+              onChange={(event) => setHemYOffset(Number(event.target.value))}
+              disabled={sliderLocked}
+              className="w-full"
+            />
+          </div>
         </div>
       </div>
 

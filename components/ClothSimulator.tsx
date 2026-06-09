@@ -6,6 +6,43 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, useFBX } from '@react-three/drei';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils';
 
+
+const SUPPRESSED_CONSOLE_PATTERNS = [
+  'THREE.Clock: This module has been deprecated. Please use THREE.Timer instead.',
+  'THREE.WebGLShadowMap: PCFSoftShadowMap has been deprecated. Using PCFShadowMap instead.',
+  'THREE.FBXLoader: Vertex has more than 4 skinning weights assigned to vertex. Deleting additional weights.',
+  'Download the React DevTools for a better development experience',
+  '[Fast Refresh] rebuilding',
+  '[Fast Refresh] done in',
+];
+
+const __clothConsolePatchKey = '__clothSimulatorConsolePatched_v2';
+if (typeof globalThis !== 'undefined' && !(globalThis as Record<string, unknown>)[__clothConsolePatchKey]) {
+  (globalThis as Record<string, unknown>)[__clothConsolePatchKey] = true;
+
+  const shouldSuppressConsoleMessage = (args: unknown[]): boolean => {
+    const first = typeof args[0] === 'string' ? args[0] : '';
+    return SUPPRESSED_CONSOLE_PATTERNS.some((msg) => first.includes(msg));
+  };
+
+  const originalWarn = console.warn.bind(console);
+  const originalLog = console.log.bind(console);
+  const originalInfo = console.info.bind(console);
+
+  console.warn = (...args: unknown[]) => {
+    if (shouldSuppressConsoleMessage(args)) return;
+    originalWarn(...args);
+  };
+  console.log = (...args: unknown[]) => {
+    if (shouldSuppressConsoleMessage(args)) return;
+    originalLog(...args);
+  };
+  console.info = (...args: unknown[]) => {
+    if (shouldSuppressConsoleMessage(args)) return;
+    originalInfo(...args);
+  };
+}
+
 // メッシュごとのカスタム色割り当て用の型定義
 interface MeshColorMapping {
   [meshId: string]: 'clothing' | 'body' | 'default';
@@ -52,6 +89,673 @@ function isArmPoseBoneName(name: string): boolean {
   return /mixamorig(left|right)(arm|forearm|hand)|left(upper)?arm|right(upper)?arm|leftforearm|rightforearm|lefthand|righthand/i.test(name);
 }
 
+
+type LegCloseBones = {
+  hips: THREE.Object3D | null;
+  leftThigh: THREE.Object3D | null;
+  rightThigh: THREE.Object3D | null;
+  leftKnee: THREE.Object3D | null;
+  rightKnee: THREE.Object3D | null;
+  leftFoot: THREE.Object3D | null;
+  rightFoot: THREE.Object3D | null;
+};
+
+type LegAdductionCalibration = {
+  leftAxis: THREE.Vector3 | null;
+  rightAxis: THREE.Vector3 | null;
+};
+
+type ResolvedLegAdductionCalibration = {
+  leftAxis: THREE.Vector3;
+  rightAxis: THREE.Vector3;
+};
+
+const THIGH_CLOSE_START_PROGRESS = 0.12;
+const THIGH_CLOSE_FULL_PROGRESS = 0.58;
+
+// Tight seated adduction. Goal: "股間が見えない" (crotch not visible) with ぴったり閉じた thighs.
+// Previous bugs: over-close penalty prevented aggressive closure, MAX_THIGH_ADDUCTION_LOCAL_ANGLE=22° caused leg crossing,
+// HARD_MIN=0.08 was impossible (required cross-leg). New: reduce rotation to 14°, raise hard-min to 0.20, 
+// remove over-close penalty, prioritize aggressive scales.
+const INNER_THIGH_SAMPLE_T = 0.34;
+const TARGET_INNER_THIGH_GAP_RATIO_AT_FULL_CLOSE = 0.015;
+const TARGET_KNEE_GAP_RATIO_AT_FULL_CLOSE = 0.08;
+const TARGET_ANKLE_GAP_RATIO_AT_FULL_CLOSE = 0.42;
+const HARD_MIN_INNER_THIGH_GAP_RATIO_FROM_SIT_POSE = 0.012;
+const HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE = 0.05;
+const HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE = 0.22;
+
+// Tight closure requires stronger guidance than the previous local-angle-only approach,
+// but still needs hard safety limits to avoid leg crossing.
+const MAX_THIGH_ADDUCTION_LOCAL_ANGLE = THREE.MathUtils.degToRad(16.0);
+const MAX_WORLD_KNEE_ALIGN_ANGLE = THREE.MathUtils.degToRad(4.0);
+const CALIBRATION_TEST_ANGLE = THREE.MathUtils.degToRad(2.5);
+const LEG_ADDUCTION_DEBUG_MAX_LOGS = 0;
+const LEG_ADDUCTION_AXIS_RECOVERY_MAX_LOGS = 0;
+const LEG_ADDUCTION_TRACE = false;
+const LEG_ADDUCTION_TRACE_MAX_LOGS = 0;
+
+type SeatedLegReference = {
+  leftThighLocal: THREE.Vector3;
+  rightThighLocal: THREE.Vector3;
+  leftInnerThighLocal: THREE.Vector3;
+  rightInnerThighLocal: THREE.Vector3;
+  leftKneeLocal: THREE.Vector3;
+  rightKneeLocal: THREE.Vector3;
+  leftAnkleLocal: THREE.Vector3;
+  rightAnkleLocal: THREE.Vector3;
+  lateralAxisLocal: THREE.Vector3;
+  thighGap: number;
+  innerThighGap: number;
+  kneeGap: number;
+  ankleGap: number;
+  hasAnkleReference: boolean;
+};
+
+let legAdductionDebugCount = 0;
+let legAdductionAxisRecoveryDebugCount = 0;
+let legAdductionTraceCount = 0;
+let legAdductionSkipBeforeWindowCount = 0;
+
+function logLegAdduction(
+  event: string,
+  payload: Record<string, unknown>,
+  level: 'log' | 'warn' = 'log'
+): void {
+  if (!LEG_ADDUCTION_TRACE) return;
+  if (legAdductionTraceCount >= LEG_ADDUCTION_TRACE_MAX_LOGS) return;
+
+  legAdductionTraceCount += 1;
+  const label = `[LegAdductionTrace] ${event}`;
+  if (level === 'warn') {
+    console.warn(label, payload);
+    return;
+  }
+  console.log(label, payload);
+}
+
+function createAdductionAxisCandidates(): THREE.Vector3[] {
+  const primary: THREE.Vector3[] = [
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(0, -1, 0),
+    new THREE.Vector3(0, 0, 1),
+    new THREE.Vector3(0, 0, -1),
+  ];
+  const diagonal: THREE.Vector3[] = [];
+  for (let x = -1; x <= 1; x += 1) {
+    for (let y = -1; y <= 1; y += 1) {
+      for (let z = -1; z <= 1; z += 1) {
+        if (x === 0 && y === 0 && z === 0) continue;
+        const nonZero = Math.abs(x) + Math.abs(y) + Math.abs(z);
+        if (nonZero === 1) continue; // already covered by primary axes
+        diagonal.push(new THREE.Vector3(x, y, z).normalize());
+      }
+    }
+  }
+  return [...primary, ...diagonal];
+}
+
+const ADDUCTION_AXIS_CANDIDATES = createAdductionAxisCandidates();
+
+function findBoneByNamePattern(root: THREE.Object3D, patterns: RegExp[]): THREE.Object3D | null {
+  let found: THREE.Object3D | null = null;
+  root.traverse((obj) => {
+    if (found || !obj.name) return;
+    if (patterns.some((pattern) => pattern.test(obj.name))) {
+      found = obj;
+    }
+  });
+  return found;
+}
+
+function collectLegCloseBones(root: THREE.Object3D): LegCloseBones {
+  return {
+    hips: findBoneByNamePattern(root, [/^mixamorigHips$/i, /^Hips$/i, /pelvis/i]),
+    leftThigh: findBoneByNamePattern(root, [/^mixamorigLeftUpLeg$/i, /^LeftUpLeg$/i, /left.*up.*leg/i, /left.*thigh/i]),
+    rightThigh: findBoneByNamePattern(root, [/^mixamorigRightUpLeg$/i, /^RightUpLeg$/i, /right.*up.*leg/i, /right.*thigh/i]),
+    leftKnee: findBoneByNamePattern(root, [/^mixamorigLeftLeg$/i, /^LeftLeg$/i, /left(?!.*up).*leg/i, /left.*knee/i]),
+    rightKnee: findBoneByNamePattern(root, [/^mixamorigRightLeg$/i, /^RightLeg$/i, /right(?!.*up).*leg/i, /right.*knee/i]),
+    leftFoot: findBoneByNamePattern(root, [/^mixamorigLeftFoot$/i, /^LeftFoot$/i, /left.*foot/i, /left.*ankle/i]),
+    rightFoot: findBoneByNamePattern(root, [/^mixamorigRightFoot$/i, /^RightFoot$/i, /right.*foot/i, /right.*ankle/i]),
+  };
+}
+
+function smoothstep01(value: number): number {
+  const t = THREE.MathUtils.clamp(value, 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function getLocalPositionFromBone(
+  hips: THREE.Object3D,
+  bone: THREE.Object3D,
+  out: THREE.Vector3,
+  hipInv: THREE.Matrix4
+): THREE.Vector3 {
+  bone.getWorldPosition(out);
+  return out.applyMatrix4(hipInv);
+}
+
+function getInnerThighLocalSample(
+  hips: THREE.Object3D,
+  thigh: THREE.Object3D,
+  knee: THREE.Object3D,
+  out: THREE.Vector3,
+  hipInv: THREE.Matrix4
+): THREE.Vector3 {
+  const thighWorld = thigh.getWorldPosition(new THREE.Vector3());
+  const kneeWorld = knee.getWorldPosition(new THREE.Vector3());
+  out.copy(thighWorld).lerp(kneeWorld, INNER_THIGH_SAMPLE_T);
+  return out.applyMatrix4(hipInv);
+}
+
+function getSignedLateralValue(localPos: THREE.Vector3, lateralAxisLocal: THREE.Vector3): number {
+  return localPos.dot(lateralAxisLocal);
+}
+
+function resolveLateralAxisLocal(
+  hips: THREE.Object3D,
+  leftCandidate: THREE.Vector3,
+  rightCandidate: THREE.Vector3,
+  fallbackBoneLeft: THREE.Object3D | null,
+  fallbackBoneRight: THREE.Object3D | null,
+  hipInv: THREE.Matrix4
+): THREE.Vector3 {
+  const axis = new THREE.Vector3().subVectors(rightCandidate, leftCandidate);
+
+  if (axis.lengthSq() < 1e-8 && fallbackBoneLeft && fallbackBoneRight) {
+    const leftThighLocal = getLocalPositionFromBone(hips, fallbackBoneLeft, new THREE.Vector3(), hipInv);
+    const rightThighLocal = getLocalPositionFromBone(hips, fallbackBoneRight, new THREE.Vector3(), hipInv);
+    axis.copy(rightThighLocal.sub(leftThighLocal));
+  }
+
+  if (axis.lengthSq() < 1e-8) {
+    axis.set(1, 0, 0);
+  } else {
+    axis.normalize();
+  }
+
+  return axis;
+}
+
+function captureSeatedLegReference(root: THREE.Object3D, bones: LegCloseBones): SeatedLegReference | null {
+  if (!bones.hips || !bones.leftThigh || !bones.rightThigh || !bones.leftKnee || !bones.rightKnee) return null;
+
+  root.updateMatrixWorld(true);
+  const hipInv = new THREE.Matrix4().copy(bones.hips.matrixWorld).invert();
+
+  const leftThighLocal = getLocalPositionFromBone(bones.hips, bones.leftThigh, new THREE.Vector3(), hipInv);
+  const rightThighLocal = getLocalPositionFromBone(bones.hips, bones.rightThigh, new THREE.Vector3(), hipInv);
+  const leftInnerThighLocal = getInnerThighLocalSample(bones.hips, bones.leftThigh, bones.leftKnee, new THREE.Vector3(), hipInv);
+  const rightInnerThighLocal = getInnerThighLocalSample(bones.hips, bones.rightThigh, bones.rightKnee, new THREE.Vector3(), hipInv);
+  const leftKneeLocal = getLocalPositionFromBone(bones.hips, bones.leftKnee, new THREE.Vector3(), hipInv);
+  const rightKneeLocal = getLocalPositionFromBone(bones.hips, bones.rightKnee, new THREE.Vector3(), hipInv);
+
+  const hasAnkles = Boolean(bones.leftFoot && bones.rightFoot);
+  const leftAnkleLocal = hasAnkles
+    ? getLocalPositionFromBone(bones.hips, bones.leftFoot as THREE.Object3D, new THREE.Vector3(), hipInv)
+    : leftKneeLocal.clone();
+  const rightAnkleLocal = hasAnkles
+    ? getLocalPositionFromBone(bones.hips, bones.rightFoot as THREE.Object3D, new THREE.Vector3(), hipInv)
+    : rightKneeLocal.clone();
+
+  const lateralAxisLocal = resolveLateralAxisLocal(
+    bones.hips,
+    leftKneeLocal,
+    rightKneeLocal,
+    bones.leftThigh,
+    bones.rightThigh,
+    hipInv
+  );
+
+  const leftThighLateral = getSignedLateralValue(leftThighLocal, lateralAxisLocal);
+  const rightThighLateral = getSignedLateralValue(rightThighLocal, lateralAxisLocal);
+  const leftInnerThighLateral = getSignedLateralValue(leftInnerThighLocal, lateralAxisLocal);
+  const rightInnerThighLateral = getSignedLateralValue(rightInnerThighLocal, lateralAxisLocal);
+  const leftKneeLateral = getSignedLateralValue(leftKneeLocal, lateralAxisLocal);
+  const rightKneeLateral = getSignedLateralValue(rightKneeLocal, lateralAxisLocal);
+  const leftAnkleLateral = getSignedLateralValue(leftAnkleLocal, lateralAxisLocal);
+  const rightAnkleLateral = getSignedLateralValue(rightAnkleLocal, lateralAxisLocal);
+
+  return {
+    leftThighLocal,
+    rightThighLocal,
+    leftInnerThighLocal,
+    rightInnerThighLocal,
+    leftKneeLocal,
+    rightKneeLocal,
+    leftAnkleLocal,
+    rightAnkleLocal,
+    lateralAxisLocal,
+    thighGap: Math.max(0.001, rightThighLateral - leftThighLateral),
+    innerThighGap: Math.max(0.001, rightInnerThighLateral - leftInnerThighLateral),
+    kneeGap: Math.max(0.001, rightKneeLateral - leftKneeLateral),
+    ankleGap: Math.max(0.001, rightAnkleLateral - leftAnkleLateral),
+    hasAnkleReference: hasAnkles,
+  };
+}
+
+function measureLegGaps(
+  hips: THREE.Object3D,
+  bones: LegCloseBones,
+  seatedRef: SeatedLegReference
+): {
+  leftThighLocal: THREE.Vector3;
+  rightThighLocal: THREE.Vector3;
+  leftInnerThighLocal: THREE.Vector3;
+  rightInnerThighLocal: THREE.Vector3;
+  leftKneeLocal: THREE.Vector3;
+  rightKneeLocal: THREE.Vector3;
+  leftAnkleLocal: THREE.Vector3;
+  rightAnkleLocal: THREE.Vector3;
+  lateralAxisLocal: THREE.Vector3;
+  thighGap: number;
+  innerThighGap: number;
+  kneeGap: number;
+  ankleGap: number;
+} {
+  const hipInv = new THREE.Matrix4().copy(hips.matrixWorld).invert();
+  const leftThighLocal = getLocalPositionFromBone(hips, bones.leftThigh as THREE.Object3D, new THREE.Vector3(), hipInv);
+  const rightThighLocal = getLocalPositionFromBone(hips, bones.rightThigh as THREE.Object3D, new THREE.Vector3(), hipInv);
+  const leftInnerThighLocal = getInnerThighLocalSample(hips, bones.leftThigh as THREE.Object3D, bones.leftKnee as THREE.Object3D, new THREE.Vector3(), hipInv);
+  const rightInnerThighLocal = getInnerThighLocalSample(hips, bones.rightThigh as THREE.Object3D, bones.rightKnee as THREE.Object3D, new THREE.Vector3(), hipInv);
+  const leftKneeLocal = getLocalPositionFromBone(hips, bones.leftKnee as THREE.Object3D, new THREE.Vector3(), hipInv);
+  const rightKneeLocal = getLocalPositionFromBone(hips, bones.rightKnee as THREE.Object3D, new THREE.Vector3(), hipInv);
+  const leftAnkleLocal = seatedRef.hasAnkleReference && bones.leftFoot
+    ? getLocalPositionFromBone(hips, bones.leftFoot, new THREE.Vector3(), hipInv)
+    : leftKneeLocal.clone();
+  const rightAnkleLocal = seatedRef.hasAnkleReference && bones.rightFoot
+    ? getLocalPositionFromBone(hips, bones.rightFoot, new THREE.Vector3(), hipInv)
+    : rightKneeLocal.clone();
+
+  return {
+    leftThighLocal,
+    rightThighLocal,
+    leftInnerThighLocal,
+    rightInnerThighLocal,
+    leftKneeLocal,
+    rightKneeLocal,
+    leftAnkleLocal,
+    rightAnkleLocal,
+    lateralAxisLocal: seatedRef.lateralAxisLocal,
+    thighGap: Math.max(
+      0.001,
+      getSignedLateralValue(rightThighLocal, seatedRef.lateralAxisLocal) - getSignedLateralValue(leftThighLocal, seatedRef.lateralAxisLocal)
+    ),
+    innerThighGap: Math.max(
+      0.001,
+      getSignedLateralValue(rightInnerThighLocal, seatedRef.lateralAxisLocal) - getSignedLateralValue(leftInnerThighLocal, seatedRef.lateralAxisLocal)
+    ),
+    kneeGap: Math.max(
+      0.001,
+      getSignedLateralValue(rightKneeLocal, seatedRef.lateralAxisLocal) - getSignedLateralValue(leftKneeLocal, seatedRef.lateralAxisLocal)
+    ),
+    ankleGap: Math.max(
+      0.001,
+      getSignedLateralValue(rightAnkleLocal, seatedRef.lateralAxisLocal) - getSignedLateralValue(leftAnkleLocal, seatedRef.lateralAxisLocal)
+    ),
+  };
+}
+
+function evaluateThighAdductionAxis(
+  root: THREE.Object3D,
+  bones: LegCloseBones,
+  thigh: THREE.Object3D | null,
+  knee: THREE.Object3D | null,
+  foot: THREE.Object3D | null,
+  side: 'left' | 'right'
+): THREE.Vector3 | null {
+  if (!bones.hips || !thigh || !knee) return null;
+
+  const originalQ = thigh.quaternion.clone();
+  root.updateMatrixWorld(true);
+  const baseHipInv = new THREE.Matrix4().copy(bones.hips.matrixWorld).invert();
+  const baseLeftKnee = getLocalPositionFromBone(bones.hips, bones.leftKnee as THREE.Object3D, new THREE.Vector3(), baseHipInv);
+  const baseRightKnee = getLocalPositionFromBone(bones.hips, bones.rightKnee as THREE.Object3D, new THREE.Vector3(), baseHipInv);
+  const lateralAxis = resolveLateralAxisLocal(
+    bones.hips,
+    baseLeftKnee,
+    baseRightKnee,
+    bones.leftThigh,
+    bones.rightThigh,
+    baseHipInv
+  );
+  const baseKnee = side === 'left' ? baseLeftKnee : baseRightKnee;
+  const baseFoot = foot
+    ? getLocalPositionFromBone(bones.hips, foot, new THREE.Vector3(), baseHipInv)
+    : baseKnee.clone();
+
+  let bestStrictAxis: THREE.Vector3 | null = null;
+  let bestStrictScore = -Infinity;
+  let bestLooseAxis: THREE.Vector3 | null = null;
+  let bestLooseScore = -Infinity;
+
+  for (let i = 0; i < ADDUCTION_AXIS_CANDIDATES.length; i += 1) {
+    const candidate = ADDUCTION_AXIS_CANDIDATES[i];
+    for (let signIndex = 0; signIndex < 2; signIndex += 1) {
+      const signedAxis = candidate.clone().multiplyScalar(signIndex === 0 ? 1 : -1);
+      thigh.quaternion.copy(originalQ);
+      thigh.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(signedAxis, CALIBRATION_TEST_ANGLE));
+      root.updateMatrixWorld(true);
+
+      const hipInv = new THREE.Matrix4().copy(bones.hips.matrixWorld).invert();
+      const kneeLocal = getLocalPositionFromBone(bones.hips, knee, new THREE.Vector3(), hipInv);
+      const footLocal = foot
+        ? getLocalPositionFromBone(bones.hips, foot, new THREE.Vector3(), hipInv)
+        : kneeLocal;
+
+      const kneeLateral = getSignedLateralValue(kneeLocal, lateralAxis);
+      const baseKneeLateral = getSignedLateralValue(baseKnee, lateralAxis);
+      const footLateral = getSignedLateralValue(footLocal, lateralAxis);
+      const baseFootLateral = getSignedLateralValue(baseFoot, lateralAxis);
+      const xImprovement = side === 'left' ? kneeLateral - baseKneeLateral : baseKneeLateral - kneeLateral;
+      const keepsSide = side === 'left' ? kneeLateral < -0.001 : kneeLateral > 0.001;
+      const footKeepsSide = !foot || (side === 'left' ? footLateral < -0.001 : footLateral > 0.001);
+      const yPenalty = Math.abs(kneeLocal.y - baseKnee.y) * 0.25;
+      const zPenalty = Math.abs(kneeLocal.z - baseKnee.z) * 0.25;
+      const footPenalty = foot ? Math.abs(footLateral - baseFootLateral) * 0.12 : 0.0;
+      const strictScore = xImprovement - yPenalty - zPenalty - footPenalty;
+      const sidePenalty = keepsSide && footKeepsSide ? 0 : 0.4;
+      const looseScore = xImprovement - yPenalty - zPenalty - footPenalty - sidePenalty;
+
+      if (keepsSide && footKeepsSide && strictScore > bestStrictScore) {
+        bestStrictScore = strictScore;
+        bestStrictAxis = signedAxis.clone();
+      }
+
+      if (looseScore > bestLooseScore) {
+        bestLooseScore = looseScore;
+        bestLooseAxis = signedAxis.clone();
+      }
+    }
+  }
+
+  thigh.quaternion.copy(originalQ);
+  root.updateMatrixWorld(true);
+
+  if (bestStrictAxis && bestStrictScore > -0.05) return bestStrictAxis;
+  if (bestLooseAxis && bestLooseScore > -0.05) return bestLooseAxis;
+  return null;
+}
+
+function fallbackAdductionAxisFromSide(side: 'left' | 'right'): THREE.Vector3 {
+  // Yaw around hip local Y is the most stable emergency fallback when FBX axis calibration fails.
+  return side === 'left' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, -1, 0);
+}
+
+function captureLegAdductionCalibration(root: THREE.Object3D, bones: LegCloseBones): LegAdductionCalibration {
+  return {
+    leftAxis: evaluateThighAdductionAxis(root, bones, bones.leftThigh, bones.leftKnee, bones.leftFoot, 'left'),
+    rightAxis: evaluateThighAdductionAxis(root, bones, bones.rightThigh, bones.rightKnee, bones.rightFoot, 'right'),
+  };
+}
+
+function resolveLegAdductionCalibration(
+  root: THREE.Object3D,
+  bones: LegCloseBones,
+  calibration: LegAdductionCalibration | null
+): ResolvedLegAdductionCalibration | null {
+  if (!calibration) return null;
+
+  const hadLeftAxis = Boolean(calibration.leftAxis);
+  const hadRightAxis = Boolean(calibration.rightAxis);
+
+  if (!calibration.leftAxis) {
+    calibration.leftAxis = evaluateThighAdductionAxis(root, bones, bones.leftThigh, bones.leftKnee, bones.leftFoot, 'left');
+  }
+  if (!calibration.rightAxis) {
+    calibration.rightAxis = evaluateThighAdductionAxis(root, bones, bones.rightThigh, bones.rightKnee, bones.rightFoot, 'right');
+  }
+
+  if (!calibration.leftAxis) {
+    calibration.leftAxis = fallbackAdductionAxisFromSide('left');
+    logLegAdduction('axis_fallback_forced', {
+      side: 'left',
+      reason: 'calibration_failed',
+      axis: calibration.leftAxis.toArray(),
+    }, 'warn');
+  }
+  if (!calibration.rightAxis) {
+    calibration.rightAxis = fallbackAdductionAxisFromSide('right');
+    logLegAdduction('axis_fallback_forced', {
+      side: 'right',
+      reason: 'calibration_failed',
+      axis: calibration.rightAxis.toArray(),
+    }, 'warn');
+  }
+
+  if (legAdductionAxisRecoveryDebugCount < LEG_ADDUCTION_AXIS_RECOVERY_MAX_LOGS) {
+    legAdductionAxisRecoveryDebugCount += 1;
+    logLegAdduction('axis_calibration', {
+      hadLeftAxis,
+      hadRightAxis,
+      hasLeftAxis: Boolean(calibration.leftAxis),
+      hasRightAxis: Boolean(calibration.rightAxis),
+      leftAxis: calibration.leftAxis?.toArray() ?? null,
+      rightAxis: calibration.rightAxis?.toArray() ?? null,
+    });
+  }
+
+  return {
+    leftAxis: calibration.leftAxis as THREE.Vector3,
+    rightAxis: calibration.rightAxis as THREE.Vector3,
+  };
+}
+
+
+function applySeatedLegAdductionWithGapLimit(
+  root: THREE.Object3D,
+  bones: LegCloseBones,
+  seatedRef: SeatedLegReference | null,
+  calibration: LegAdductionCalibration | null,
+  uiProgress: number
+): void {
+  if (
+    !seatedRef ||
+    !calibration ||
+    !bones.hips ||
+    !bones.leftThigh ||
+    !bones.rightThigh ||
+    !bones.leftKnee ||
+    !bones.rightKnee
+  ) {
+    return;
+  }
+
+  const resolvedCalibration = resolveLegAdductionCalibration(root, bones, calibration);
+  if (!resolvedCalibration) return;
+
+  const normalized = THREE.MathUtils.clamp(
+    (uiProgress - THIGH_CLOSE_START_PROGRESS) / (THIGH_CLOSE_FULL_PROGRESS - THIGH_CLOSE_START_PROGRESS),
+    0,
+    1
+  );
+  const t = smoothstep01(normalized);
+  if (t <= 0.0001) return;
+
+  const seatedReference = seatedRef;
+  const hips = bones.hips;
+  const leftThigh = bones.leftThigh;
+  const rightThigh = bones.rightThigh;
+  const lateralAxisLocal = seatedReference.lateralAxisLocal.clone().normalize();
+
+  const current = measureLegGaps(hips, bones, seatedReference);
+  const hardMinInnerThighGap = Math.max(0.001, seatedReference.innerThighGap * HARD_MIN_INNER_THIGH_GAP_RATIO_FROM_SIT_POSE);
+  const hardMinKneeGap = Math.max(0.001, seatedReference.kneeGap * HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE);
+  const hardMinAnkleGap = Math.max(0.001, seatedReference.ankleGap * HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE);
+
+  const desiredInnerThighGap = Math.max(
+    current.innerThighGap * THREE.MathUtils.lerp(1.0, TARGET_INNER_THIGH_GAP_RATIO_AT_FULL_CLOSE, t),
+    hardMinInnerThighGap
+  );
+  const desiredKneeGap = Math.max(
+    current.kneeGap * THREE.MathUtils.lerp(1.0, TARGET_KNEE_GAP_RATIO_AT_FULL_CLOSE, t),
+    hardMinKneeGap
+  );
+  const desiredAnkleGap = Math.max(
+    current.ankleGap * THREE.MathUtils.lerp(1.0, TARGET_ANKLE_GAP_RATIO_AT_FULL_CLOSE, t),
+    hardMinAnkleGap
+  );
+
+  const originalLeftQ = leftThigh.quaternion.clone();
+  const originalRightQ = rightThigh.quaternion.clone();
+
+  let bestLeftQ = originalLeftQ.clone();
+  let bestRightQ = originalRightQ.clone();
+  let bestScore = Number.POSITIVE_INFINITY;
+  let foundValid = false;
+
+  const getLaterals = (state: ReturnType<typeof measureLegGaps>) => ({
+    leftInner: getSignedLateralValue(state.leftInnerThighLocal, lateralAxisLocal),
+    rightInner: getSignedLateralValue(state.rightInnerThighLocal, lateralAxisLocal),
+    leftKnee: getSignedLateralValue(state.leftKneeLocal, lateralAxisLocal),
+    rightKnee: getSignedLateralValue(state.rightKneeLocal, lateralAxisLocal),
+    leftAnkle: getSignedLateralValue(state.leftAnkleLocal, lateralAxisLocal),
+    rightAnkle: getSignedLateralValue(state.rightAnkleLocal, lateralAxisLocal),
+  });
+
+  const isValidState = (state: ReturnType<typeof measureLegGaps>) => {
+    const l = getLaterals(state);
+    const keepsSides =
+      l.leftInner < -0.001 &&
+      l.rightInner > 0.001 &&
+      l.leftKnee < -0.001 &&
+      l.rightKnee > 0.001 &&
+      (!seatedReference.hasAnkleReference || (l.leftAnkle < -0.001 && l.rightAnkle > 0.001));
+
+    return (
+      keepsSides &&
+      state.innerThighGap >= hardMinInnerThighGap &&
+      state.kneeGap >= hardMinKneeGap &&
+      state.ankleGap >= hardMinAnkleGap
+    );
+  };
+
+  const baseScales = [2.20, 2.00, 1.80, 1.60, 1.40, 1.20, 1.00, 0.80, 0.60, 0.40, 0.20];
+  const asymOffsets = [0.0, -0.12, 0.12, -0.22, 0.22];
+
+  for (const baseScale of baseScales) {
+    for (const offset of asymOffsets) {
+      const leftScale = Math.max(0, baseScale + offset);
+      const rightScale = Math.max(0, baseScale - offset);
+
+      leftThigh.quaternion.copy(originalLeftQ);
+      rightThigh.quaternion.copy(originalRightQ);
+
+      const leftAngle = MAX_THIGH_ADDUCTION_LOCAL_ANGLE * t * leftScale;
+      const rightAngle = MAX_THIGH_ADDUCTION_LOCAL_ANGLE * t * rightScale;
+
+      leftThigh.quaternion.multiply(
+        new THREE.Quaternion().setFromAxisAngle(resolvedCalibration.leftAxis, leftAngle)
+      ).normalize();
+      rightThigh.quaternion.multiply(
+        new THREE.Quaternion().setFromAxisAngle(resolvedCalibration.rightAxis, rightAngle)
+      ).normalize();
+      root.updateMatrixWorld(true);
+
+      let state = measureLegGaps(hips, bones, seatedReference);
+
+      if (state.innerThighGap > desiredInnerThighGap + 0.002 || state.kneeGap > desiredKneeGap + 0.01) {
+        const applyWorldRotationToBone = (bone: THREE.Object3D, deltaWorld: THREE.Quaternion) => {
+          const parentWorldQ = bone.parent
+            ? bone.parent.getWorldQuaternion(new THREE.Quaternion())
+            : new THREE.Quaternion();
+          const parentWorldInv = parentWorldQ.clone().invert();
+          const deltaLocal = parentWorldInv.multiply(deltaWorld.clone()).multiply(parentWorldQ);
+          bone.quaternion.premultiply(deltaLocal).normalize();
+        };
+
+        const localToWorld = (localPoint: THREE.Vector3) => localPoint.clone().applyMatrix4(hips.matrixWorld);
+        const pointToward = (
+          thigh: THREE.Object3D,
+          currentLocal: THREE.Vector3,
+          desiredLocal: THREE.Vector3,
+          fallbackAxisLocal: THREE.Vector3
+        ) => {
+          const thighWorld = thigh.getWorldPosition(new THREE.Vector3());
+          const currentWorld = localToWorld(currentLocal);
+          const desiredWorld = localToWorld(desiredLocal);
+          const currentDir = currentWorld.sub(thighWorld).normalize();
+          const desiredDir = desiredWorld.sub(thighWorld).normalize();
+          const axis = new THREE.Vector3().crossVectors(currentDir, desiredDir);
+          const angle = currentDir.angleTo(desiredDir);
+          if (!Number.isFinite(angle) || angle <= 1e-5) return;
+          const axisWorld = axis.lengthSq() > 1e-8
+            ? axis.normalize()
+            : fallbackAxisLocal.clone().applyQuaternion(thigh.getWorldQuaternion(new THREE.Quaternion())).normalize();
+          const delta = new THREE.Quaternion().setFromAxisAngle(axisWorld, Math.min(angle, MAX_WORLD_KNEE_ALIGN_ANGLE * t));
+          applyWorldRotationToBone(thigh, delta);
+        };
+
+        const l = getLaterals(state);
+        const innerCenter = (l.leftInner + l.rightInner) * 0.5;
+        const kneeCenter = (l.leftKnee + l.rightKnee) * 0.5;
+        const desiredInnerHalf = desiredInnerThighGap * 0.5;
+        const desiredKneeHalf = desiredKneeGap * 0.5;
+
+        const desiredLeftInnerLocal = state.leftInnerThighLocal.clone().add(
+          lateralAxisLocal.clone().multiplyScalar(Math.min(innerCenter - desiredInnerHalf, -0.001) - l.leftInner)
+        );
+        const desiredRightInnerLocal = state.rightInnerThighLocal.clone().add(
+          lateralAxisLocal.clone().multiplyScalar(Math.max(innerCenter + desiredInnerHalf, 0.001) - l.rightInner)
+        );
+        const desiredLeftKneeLocal = state.leftKneeLocal.clone().add(
+          lateralAxisLocal.clone().multiplyScalar(Math.min(kneeCenter - desiredKneeHalf, -0.001) - l.leftKnee)
+        );
+        const desiredRightKneeLocal = state.rightKneeLocal.clone().add(
+          lateralAxisLocal.clone().multiplyScalar(Math.max(kneeCenter + desiredKneeHalf, 0.001) - l.rightKnee)
+        );
+
+        pointToward(leftThigh, state.leftInnerThighLocal, desiredLeftInnerLocal, resolvedCalibration.leftAxis);
+        pointToward(rightThigh, state.rightInnerThighLocal, desiredRightInnerLocal, resolvedCalibration.rightAxis);
+        root.updateMatrixWorld(true);
+        state = measureLegGaps(hips, bones, seatedReference);
+        pointToward(leftThigh, state.leftKneeLocal, desiredLeftKneeLocal, resolvedCalibration.leftAxis);
+        pointToward(rightThigh, state.rightKneeLocal, desiredRightKneeLocal, resolvedCalibration.rightAxis);
+        root.updateMatrixWorld(true);
+        state = measureLegGaps(hips, bones, seatedReference);
+      }
+
+      if (!isValidState(state)) {
+        continue;
+      }
+
+      const innerPenalty = Math.max(0, state.innerThighGap - desiredInnerThighGap);
+      const kneePenalty = Math.max(0, state.kneeGap - desiredKneeGap);
+      const ankleBonus = state.ankleGap - desiredAnkleGap;
+      const asymPenalty = Math.abs(leftScale - rightScale) * 0.15;
+      const score = state.innerThighGap * 1000 + innerPenalty * 400 + state.kneeGap * 40 + kneePenalty * 12 - ankleBonus * 0.5 + asymPenalty;
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestLeftQ = leftThigh.quaternion.clone();
+        bestRightQ = rightThigh.quaternion.clone();
+        foundValid = true;
+      }
+
+      if (state.innerThighGap <= desiredInnerThighGap + 0.0015 && state.kneeGap <= desiredKneeGap + 0.004) {
+        bestLeftQ = leftThigh.quaternion.clone();
+        bestRightQ = rightThigh.quaternion.clone();
+        foundValid = true;
+        break;
+      }
+    }
+    if (foundValid && bestScore < desiredInnerThighGap * 1000 + desiredKneeGap * 40 + 2.0) {
+      break;
+    }
+  }
+
+  if (foundValid) {
+    leftThigh.quaternion.copy(bestLeftQ);
+    rightThigh.quaternion.copy(bestRightQ);
+  } else {
+    leftThigh.quaternion.copy(originalLeftQ);
+    rightThigh.quaternion.copy(originalRightQ);
+  }
+  root.updateMatrixWorld(true);
+}
+
 /**
  * モデル内の全メッシュに対してマテリアルを強制上書き適用する関数
  */
@@ -64,7 +768,6 @@ function applyCustomMaterials(
   onDiscoverMeshes?: (meshes: { id: string; name: string; current: 'clothing' | 'body' | 'default' }[]) => void
 ) {
   if (!root) return;
-  console.log('[ClothSimulator] applyCustomMaterials colors:', { clothingColorHex, skinColorHex });
 
   const createOrUpdateMaterial = (mesh: THREE.Mesh, hexColor: string) => {
     // Always create new material to ensure color changes are reflected immediately.
@@ -132,9 +835,6 @@ function applyCustomMaterials(
       } else if (type === 'body') {
         hexColor = skinColorHex;
       }
-
-      console.log(`[applyCustomMaterials] mesh=${meshName}, type=${type}, color=${hexColor}`);
-
       createOrUpdateMaterial(mesh, hexColor);
     }
   });
@@ -174,18 +874,14 @@ function SceneWithFBX({
   const uiProgressToClipProgress = useCallback((uiProgress: number) => {
     const clamped = Math.min(Math.max(uiProgress, 0), 1);
     return clamped * SIT_CLIP_PROGRESS;
-  }, []);
+  }, [SIT_CLIP_PROGRESS]);
 
   const fbx = useFBX(fbxPath) as THREE.Group & { animations?: THREE.AnimationClip[] };
   
   // スケルトンのクローンを作成
   const cloned = useMemo(() => {
-    if (!fbx) {
-      console.log('[SceneWithFBX] FBX not loaded yet');
-      return null;
-    }
+    if (!fbx) return null;
     const clonedGroup = skeletonClone(fbx) as THREE.Group;
-    console.log('[SceneWithFBX] Cloned FBX skeleton', { meshCount: clonedGroup.children.length });
     return clonedGroup;
   }, [fbx]);
 
@@ -193,6 +889,17 @@ function SceneWithFBX({
   const actionRef = useRef<THREE.AnimationAction | null>(null);
   const progressRef = useRef(progress);
   const armRestPoseRef = useRef<Array<{ bone: THREE.Object3D; quaternion: THREE.Quaternion }>>([]);
+  const legCloseBonesRef = useRef<LegCloseBones>({
+    hips: null,
+    leftThigh: null,
+    rightThigh: null,
+    leftKnee: null,
+    rightKnee: null,
+    leftFoot: null,
+    rightFoot: null,
+  });
+  const seatedLegReferenceRef = useRef<SeatedLegReference | null>(null);
+  const legAdductionCalibrationRef = useRef<LegAdductionCalibration | null>(null);
   const TARGET_EPSILON = 1e-4;
 
   useEffect(() => {
@@ -228,18 +935,21 @@ function SceneWithFBX({
         });
         cloned.updateMatrixWorld(true);
       }
+
+      applySeatedLegAdductionWithGapLimit(
+        cloned,
+        legCloseBonesRef.current,
+        seatedLegReferenceRef.current,
+        legAdductionCalibrationRef.current,
+        uiProgress
+      );
     },
     [cloned, mixer, selectedClip, uiProgressToClipProgress]
   );
 
   // マテリアルの適用とメッシュ検出
   useEffect(() => {
-    console.log('[SceneWithFBX] useEffect - Material application', { cloned: !!cloned, wireframe, clothingColorHex, skinColorHex });
-    if (!cloned) {
-      console.warn('[SceneWithFBX] cloned is null/undefined - skipping material application');
-      return;
-    }
-    console.log('[SceneWithFBX] Applying materials to cloned object');
+    if (!cloned) return;
     applyCustomMaterials(cloned, wireframe, customMapping, clothingColorHex, skinColorHex, onDiscoverMeshes);
   }, [cloned, wireframe, customMapping, clothingColorHex, skinColorHex, onDiscoverMeshes]);
 
@@ -263,14 +973,81 @@ function SceneWithFBX({
       }
     });
     armRestPoseRef.current = armBones;
+    legCloseBonesRef.current = collectLegCloseBones(cloned);
+    legAdductionDebugCount = 0;
+    legAdductionAxisRecoveryDebugCount = 0;
+    legAdductionTraceCount = 0;
+    legAdductionSkipBeforeWindowCount = 0;
+
+    // Capture seated reference at SAFE_SIT_CLIP_PROGRESS in hip local space.
+    mixer.setTime(SIT_CLIP_PROGRESS * (selectedClip.duration || 1));
+    mixer.update(0);
+    seatedLegReferenceRef.current = captureSeatedLegReference(cloned, legCloseBonesRef.current);
+    legAdductionCalibrationRef.current = captureLegAdductionCalibration(cloned, legCloseBonesRef.current);
+
+    if (seatedLegReferenceRef.current) {
+      logLegAdduction('seated_reference_captured', {
+        innerThighGap: seatedLegReferenceRef.current.innerThighGap,
+        kneeGap: seatedLegReferenceRef.current.kneeGap,
+        ankleGap: seatedLegReferenceRef.current.ankleGap,
+        lateralAxisLocal: seatedLegReferenceRef.current.lateralAxisLocal.toArray(),
+        hasAnkleReference: seatedLegReferenceRef.current.hasAnkleReference,
+        leftAxis: legAdductionCalibrationRef.current?.leftAxis?.toArray() ?? null,
+        rightAxis: legAdductionCalibrationRef.current?.rightAxis?.toArray() ?? null,
+        bones: {
+          hips: legCloseBonesRef.current.hips?.name ?? null,
+          leftThigh: legCloseBonesRef.current.leftThigh?.name ?? null,
+          rightThigh: legCloseBonesRef.current.rightThigh?.name ?? null,
+          leftKnee: legCloseBonesRef.current.leftKnee?.name ?? null,
+          rightKnee: legCloseBonesRef.current.rightKnee?.name ?? null,
+          leftFoot: legCloseBonesRef.current.leftFoot?.name ?? null,
+          rightFoot: legCloseBonesRef.current.rightFoot?.name ?? null,
+        },
+      });
+    } else {
+      logLegAdduction('seated_reference_missing', {
+        bones: {
+          hips: legCloseBonesRef.current.hips?.name ?? null,
+          leftThigh: legCloseBonesRef.current.leftThigh?.name ?? null,
+          rightThigh: legCloseBonesRef.current.rightThigh?.name ?? null,
+          leftKnee: legCloseBonesRef.current.leftKnee?.name ?? null,
+          rightKnee: legCloseBonesRef.current.rightKnee?.name ?? null,
+          leftFoot: legCloseBonesRef.current.leftFoot?.name ?? null,
+          rightFoot: legCloseBonesRef.current.rightFoot?.name ?? null,
+        },
+      }, 'warn');
+    }
+
+    if (!legAdductionCalibrationRef.current?.leftAxis || !legAdductionCalibrationRef.current?.rightAxis) {
+      logLegAdduction('initial_axis_calibration_incomplete', {
+        leftAxis: legAdductionCalibrationRef.current?.leftAxis?.toArray() ?? null,
+        rightAxis: legAdductionCalibrationRef.current?.rightAxis?.toArray() ?? null,
+      });
+    }
+
+    // Return to stand frame so downstream progress-driven pose sampling remains unchanged.
+    mixer.setTime(0);
+    mixer.update(0);
+
     cloned.updateMatrixWorld(true);
 
     return () => {
       mixer.stopAllAction();
       actionRef.current = null;
       armRestPoseRef.current = [];
+      seatedLegReferenceRef.current = null;
+      legAdductionCalibrationRef.current = null;
+      legCloseBonesRef.current = {
+        hips: null,
+        leftThigh: null,
+        rightThigh: null,
+        leftKnee: null,
+        rightKnee: null,
+        leftFoot: null,
+        rightFoot: null,
+      };
     };
-  }, [mixer, cloned, selectedClip]);
+  }, [SIT_CLIP_PROGRESS, mixer, cloned, selectedClip]);
 
   // 初期ポーズ適用および progress が外部から変わったときに即時反映する
   useEffect(() => {
@@ -343,12 +1120,9 @@ function SceneWithFBX({
       // これにより progress はロック状態となる（setProgress が呼ばれない限り変わらない）
       const distToTarget = Math.abs(nextProgress - playTarget);
       if (distToTarget <= TARGET_EPSILON) {
-        console.log('[SceneWithFBX useFrame] Reached playTarget - calling onFinished', { nextProgress, playTarget, distToTarget });
         // ここで playTarget を null にして、フレーム毎の動きを止める
         // ただし progress 自体は保持されるので、座り状態が続く
         onFinished();
-      } else {
-        console.log('[SceneWithFBX useFrame] Moving towards target', { currentProgress, nextProgress, playTarget, distToTarget });
       }
     } else {
       // スライダー（Poseバー）の手動操作時、または目標到達後
@@ -380,12 +1154,6 @@ export default function ClothSimulator() {
   // 服色パレットインデックス（0:黒,1:赤,2:青,3:黄,4:白）
   const [clothingIndex, setClothingIndex] = useState(2);
 
-  // Color changes debug
-  useEffect(() => {
-    console.log('[ClothSimulator] Skin tone or clothing index changed', { skinTone, clothingIndex });
-  }, [skinTone, clothingIndex]);
-  
-
   const modelBasePosition: [number, number, number] = [0, 0, 0];
   const fbxPath = '/models/StandToSit.fbx';
 
@@ -398,15 +1166,10 @@ export default function ClothSimulator() {
   const skinColorHex = useMemo(() => {
     const c = new THREE.Color();
     c.lerpColors(skinLight, skinDark, Math.min(Math.max(skinTone, 0), 1));
-    const hex = `#${c.getHexString()}`;
-    console.log('[ClothSimulator] skinColorHex computed', { skinTone, hex });
-    return hex;
+    return `#${c.getHexString()}`;
   }, [skinTone, skinLight, skinDark]);
 
   const clothingColorHex = clothingPalette[Math.max(0, Math.min(clothingIndex, clothingPalette.length - 1))];
-  useEffect(() => {
-    console.log('[ClothSimulator] Color changed', { skinColorHex, clothingColorHex });
-  }, [skinColorHex, clothingColorHex]);
 
   // no-op discover handler (we don't expose per-mesh controls anymore)
   const handleDiscoverMeshes = useCallback(() => {}, []);
@@ -426,7 +1189,16 @@ export default function ClothSimulator() {
   return (
     <div className="absolute inset-0 w-full h-full bg-[#0f172a] overflow-hidden select-none">
       {/* 3D キャンバス領域 */}
-      <Canvas key={canvasResetKey} shadows camera={{ position: [0, 0, 4.5], fov: 32 }} className="w-full h-full" gl={{ alpha: false }}>
+      <Canvas
+        key={canvasResetKey}
+        shadows
+        camera={{ position: [0, 0, 4.5], fov: 32 }}
+        className="w-full h-full"
+        gl={{ alpha: false }}
+        onCreated={({ gl }) => {
+          gl.shadowMap.type = THREE.PCFShadowMap;
+        }}
+      >
         <color attach="background" args={["#0f172a"]} />
         <hemisphereLight args={["#ffffff", "#334155", 0.7]} />
         <ambientLight intensity={0.5} />
@@ -437,16 +1209,10 @@ export default function ClothSimulator() {
           fbxPath={fbxPath}
           modelBasePosition={modelBasePosition}
           progress={progress}
-          onProgressChange={(newProgress) => {
-            console.log('[ClothSimulator] onProgressChange called', { newProgress });
-            setProgress(newProgress);
-          }}
+          onProgressChange={setProgress}
           wireframe={wireframe}
           playTarget={playTarget}
-          onFinished={() => {
-            console.log('[ClothSimulator] onFinished called - setPlayTarget(null)');
-            setPlayTarget(null);
-          }}
+          onFinished={() => setPlayTarget(null)}
           customMapping={{}}
           clothingColorHex={clothingColorHex}
           skinColorHex={skinColorHex}
@@ -462,7 +1228,7 @@ export default function ClothSimulator() {
         <div className="pointer-events-auto rounded-2xl border border-slate-700/40 bg-slate-900/90 p-4 shadow-2xl backdrop-blur-md style-panel" style={{ width: 340 }}>
           <div className="text-sm font-bold text-slate-100 mb-3 flex items-center justify-between border-b border-slate-700/50 pb-2">
             <span>Pose & Color Controller</span>
-            <span className="text-[11px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-mono">v4.1-SafePose</span>
+            <span className="text-[11px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-mono">v4.4-ClosedLegsTightV5</span>
           </div>
 
           {/* 1. Reload ボタン：完全に初期状態（起立して停止）へリセットする */}

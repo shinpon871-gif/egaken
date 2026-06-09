@@ -50,7 +50,7 @@ interface MeshColorMapping {
 
 type MeshType = 'clothing' | 'body' | 'default';
 
-const SAFE_SIT_CLIP_PROGRESS = 0.85; // 100%のSitポーズはFBX上で体が不自然に折れ曲がるため、85%程度までで止める
+const SAFE_SIT_CLIP_PROGRESS = 0.85; // 100%の座位ポーズはモデル上で体が不自然に折れ曲がるため85%程度までで止める
 
 function inferMeshType(
   meshName: string,
@@ -64,10 +64,9 @@ function inferMeshType(
   const meshOnly = meshName.toLowerCase();
   const searchStr = `${meshName} ${parentName} ${matName} ${texName}`.toLowerCase();
 
-  // The current FBX has a body mesh named like
-  // `female_avartarZBrush_defualt_group`. The previous classifier did not
-  // include female/avatar/zbrush/defualt, so it fell through to clothing and
-  // the skin color slider was overwritten by the clothing color.
+  // 現在のモデルには特定命名のボディメッシュが含まれる
+  // 以前の分類器はその命名規則を拾えず服カテゴリ側に落ちていたため
+  // 肌色スライダーの結果が服色で上書きされる問題が起きていた
   const knownBodyMesh =
     /female[_-]?avartar|female[_-]?avatar|avartar|avatar|zbrush|defualt_group|default_group/.test(meshOnly);
   const knownClothingMesh =
@@ -89,6 +88,22 @@ function isArmPoseBoneName(name: string): boolean {
   return /mixamorig(left|right)(arm|forearm|hand)|left(upper)?arm|right(upper)?arm|leftforearm|rightforearm|lefthand|righthand/i.test(name);
 }
 
+type ArmSpreadBones = {
+  hips: THREE.Object3D | null;
+  leftUpperArm: THREE.Object3D | null;
+  rightUpperArm: THREE.Object3D | null;
+  leftForearm: THREE.Object3D | null;
+  rightForearm: THREE.Object3D | null;
+};
+
+// 立位区間でのみ腕広げ補正を有効化する終了進捗（これを超えると補正しない）
+const STANDING_ARM_SPREAD_END_PROGRESS = 0.18;
+// 現在腕方向を目標方向へ寄せる補間率（大きいほど強く目標へ寄る）
+const STANDING_ARM_OUTWARD_BLEND = 0.38;
+// 目標腕方向を作る際の左右成分の重み（大きいほど外側へ開く）
+const STANDING_ARM_OUTWARD_LATERAL_WEIGHT = 0.34;
+// 1フレームあたりの最大回転角（正値）回転軸側で向きを決める
+const STANDING_ARM_OUTWARD_MAX_ANGLE = THREE.MathUtils.degToRad(4);
 
 type LegCloseBones = {
   hips: THREE.Object3D | null;
@@ -262,7 +277,7 @@ function createAdductionAxisCandidates(): THREE.Vector3[] {
       for (let z = -1; z <= 1; z += 1) {
         if (x === 0 && y === 0 && z === 0) continue;
         const nonZero = Math.abs(x) + Math.abs(y) + Math.abs(z);
-        if (nonZero === 1) continue; // already covered by primary axes
+        if (nonZero === 1) continue; // 単軸方向は基本候補側で既に列挙済み
         diagonal.push(new THREE.Vector3(x, y, z).normalize());
       }
     }
@@ -281,6 +296,16 @@ function findBoneByNamePattern(root: THREE.Object3D, patterns: RegExp[]): THREE.
     }
   });
   return found;
+}
+
+function collectArmSpreadBones(root: THREE.Object3D): ArmSpreadBones {
+  return {
+    hips: findBoneByNamePattern(root, [/^mixamorigHips$/i, /^Hips$/i, /pelvis/i]),
+    leftUpperArm: findBoneByNamePattern(root, [/^mixamorigLeftArm$/i, /^LeftArm$/i, /left.*upper.*arm/i, /left.*arm/i]),
+    rightUpperArm: findBoneByNamePattern(root, [/^mixamorigRightArm$/i, /^RightArm$/i, /right.*upper.*arm/i, /right.*arm/i]),
+    leftForearm: findBoneByNamePattern(root, [/^mixamorigLeftForeArm$/i, /^LeftForeArm$/i, /left.*forearm/i]),
+    rightForearm: findBoneByNamePattern(root, [/^mixamorigRightForeArm$/i, /^RightForeArm$/i, /right.*forearm/i]),
+  };
 }
 
 function collectLegCloseBones(root: THREE.Object3D): LegCloseBones {
@@ -553,7 +578,7 @@ function evaluateThighAdductionAxis(
 }
 
 function fallbackAdductionAxisFromSide(side: 'left' | 'right'): THREE.Vector3 {
-  // Yaw around hip local Y is the most stable emergency fallback when FBX axis calibration fails.
+  // 軸キャリブレーション失敗時は股関節ローカルの左右回頭方向を緊急代替として使う
   return side === 'left' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, -1, 0);
 }
 
@@ -835,6 +860,75 @@ function applySeatedLegAdductionWithGapLimit(
   root.updateMatrixWorld(true);
 }
 
+function applyStandingUpperArmSpread(
+  root: THREE.Object3D,
+  bones: ArmSpreadBones,
+  uiProgress: number
+): void {
+  if (!bones.hips || !bones.leftUpperArm || !bones.rightUpperArm || !bones.leftForearm || !bones.rightForearm) {
+    return;
+  }
+
+  const standT = 1 - smoothstep01(uiProgress / STANDING_ARM_SPREAD_END_PROGRESS);
+  if (standT <= 1e-4) return;
+
+  const hipsWorldQ = bones.hips.getWorldQuaternion(new THREE.Quaternion());
+  const worldDown = new THREE.Vector3(0, -1, 0).applyQuaternion(hipsWorldQ).normalize();
+
+  const applyToSide = (
+    upperArm: THREE.Object3D,
+    forearm: THREE.Object3D,
+    side: 'left' | 'right'
+  ) => {
+    root.updateMatrixWorld(true);
+
+    const upperWorldPos = upperArm.getWorldPosition(new THREE.Vector3());
+    const foreWorldPos = forearm.getWorldPosition(new THREE.Vector3());
+    const currentDir = foreWorldPos.sub(upperWorldPos).normalize();
+
+    const lateralWorld = new THREE.Vector3(side === 'left' ? -1 : 1, 0, 0)
+      .applyQuaternion(hipsWorldQ)
+      .normalize();
+
+    const desiredBaseDir = worldDown.clone().addScaledVector(
+      lateralWorld,
+      STANDING_ARM_OUTWARD_LATERAL_WEIGHT
+    ).normalize();
+
+    const desiredDir = currentDir.clone().lerp(
+      desiredBaseDir,
+      STANDING_ARM_OUTWARD_BLEND * standT
+    ).normalize();
+
+    // 正角度で外開きになるように回転軸の向きをここで決める
+    const axisWorld = new THREE.Vector3().crossVectors(desiredDir, currentDir);
+    const axisLenSq = axisWorld.lengthSq();
+    const angle = currentDir.angleTo(desiredDir);
+
+    if (!Number.isFinite(angle) || angle <= 1e-5) return;
+
+    const safeAxisWorld =
+      axisLenSq > 1e-8
+        ? axisWorld.normalize()
+        : worldDown.clone().cross(lateralWorld).normalize();
+
+    const clampedAngle = Math.min(angle, STANDING_ARM_OUTWARD_MAX_ANGLE * standT);
+    const deltaWorld = new THREE.Quaternion().setFromAxisAngle(safeAxisWorld, clampedAngle);
+
+    const parentWorldQ = upperArm.parent
+      ? upperArm.parent.getWorldQuaternion(new THREE.Quaternion())
+      : new THREE.Quaternion();
+    const parentWorldInv = parentWorldQ.clone().invert();
+    const deltaLocal = parentWorldInv.multiply(deltaWorld.clone()).multiply(parentWorldQ);
+
+    upperArm.quaternion.premultiply(deltaLocal).normalize();
+  };
+
+  applyToSide(bones.leftUpperArm, bones.leftForearm, 'left');
+  applyToSide(bones.rightUpperArm, bones.rightForearm, 'right');
+  root.updateMatrixWorld(true);
+}
+
 /**
  * モデル内の全メッシュに対してマテリアルを強制上書き適用する関数
  */
@@ -849,8 +943,8 @@ function applyCustomMaterials(
   if (!root) return;
 
   const createOrUpdateMaterial = (mesh: THREE.Mesh, hexColor: string) => {
-    // Always create new material to ensure color changes are reflected immediately.
-    // Do not reuse to avoid stale color state.
+    // 色変更を確実に即時反映させるため毎回新しいマテリアルを生成する
+    // 使い回すと古い色状態が残ることがあるため再利用しない
 
     const newMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(hexColor),
@@ -863,7 +957,7 @@ function applyCustomMaterials(
       emissive: new THREE.Color(0x000000),
     });
 
-    // Keep skinning enabled for SkinnedMesh so pose animation remains valid after material override.
+    // スキンメッシュではスキニングを有効化し差し替え後もポーズ変形を維持する
     if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
       (newMat as THREE.MeshStandardMaterial & { skinning?: boolean }).skinning = true;
     }
@@ -895,8 +989,8 @@ function applyCustomMaterials(
         .join(' ');
       const parentName = mesh.parent?.name || "";
 
-      // 毎回再分類（userData 蓄積を避ける）UUID は clone/reload で変わるため、
-      // customMapping は uuid と meshName の両方を許可する
+      // 毎回再分類（ユーザーデータ蓄積を避ける）識別子は複製/再読込で変わるため
+      // カスタム割り当ては識別子とメッシュ名の両方を許可する
       const type = inferMeshType(
         meshName,
         parentName,
@@ -918,7 +1012,7 @@ function applyCustomMaterials(
     }
   });
 
-  // メッシュ一覧をUI側にフィードバック（一度だけ、あるいは変更時のみ走るよう親で制御）
+  // メッシュ一覧をUI側へ通知（一度だけまたは変更時のみ走るよう親で制御）
   if (onDiscoverMeshes) {
     onDiscoverMeshes(discovered);
   }
@@ -968,6 +1062,13 @@ function SceneWithFBX({
   const actionRef = useRef<THREE.AnimationAction | null>(null);
   const progressRef = useRef(progress);
   const armRestPoseRef = useRef<Array<{ bone: THREE.Object3D; quaternion: THREE.Quaternion }>>([]);
+  const armSpreadBonesRef = useRef<ArmSpreadBones>({
+    hips: null,
+    leftUpperArm: null,
+    rightUpperArm: null,
+    leftForearm: null,
+    rightForearm: null,
+  });
   const legCloseBonesRef = useRef<LegCloseBones>({
     hips: null,
     leftThigh: null,
@@ -985,7 +1086,7 @@ function SceneWithFBX({
     progressRef.current = progress;
   }, [progress]);
 
-  // 【原因解決①】dreiのuseAnimationsを完全に廃止し、自前でAnimationMixerを完全管理
+  // 【原因解決①】外部のアニメーション補助を廃止し独自管理へ統一
   const mixer = useMemo(() => {
     if (!cloned) return null;
     return new THREE.AnimationMixer(cloned);
@@ -994,7 +1095,7 @@ function SceneWithFBX({
   // アニメーションクリップの選択と初期化
   const selectedClip = useMemo(() => {
     if (!fbx?.animations || fbx.animations.length === 0) return null;
-    // mixamoまたは一般的なテイク名からクリップを探索
+    // 一般的なテイク名を含むクリップを優先して探索
     return fbx.animations.find((clip) => /mixamo.com|Take|take/i.test(clip.name)) || fbx.animations[0];
   }, [fbx]);
 
@@ -1005,14 +1106,14 @@ function SceneWithFBX({
       mixer.setTime(uiProgressToClipProgress(uiProgress) * duration);
       mixer.update(0);
 
-      // The Sit clip bends the torso and brings the hands into the thighs near
-      // the old end frame. Keep the neutral arm pose captured at standing frame
-      // while legs/hips continue to use the sampled Sit animation.
-      if (uiProgress > 0.02 && armRestPoseRef.current.length > 0) {
+      // 立位時の腕基準ポーズを安定して維持しつつ立位区間だけ上腕を少し外側へ開いて
+      // 手が衣装へ食い込まないようにする
+      if (armRestPoseRef.current.length > 0) {
         armRestPoseRef.current.forEach(({ bone, quaternion }) => {
           bone.quaternion.copy(quaternion);
         });
         cloned.updateMatrixWorld(true);
+        applyStandingUpperArmSpread(cloned, armSpreadBonesRef.current, uiProgress);
       }
 
       applySeatedLegAdductionWithGapLimit(
@@ -1041,8 +1142,8 @@ function SceneWithFBX({
     action.play();
     actionRef.current = action;
 
-    // Capture the standing arm pose once. We restore only arm bones after
-    // sampling the Sit clip so the 100% pose does not push both hands into the thighs.
+    // 立位の腕ポーズを一度だけ記録する座位側のサンプリング後に腕ボーンのみ復元し
+    // 100%ポーズで両手が太ももへ押し込まれるのを防ぐ
     mixer.setTime(0);
     mixer.update(0);
     const armBones: Array<{ bone: THREE.Object3D; quaternion: THREE.Quaternion }> = [];
@@ -1052,13 +1153,14 @@ function SceneWithFBX({
       }
     });
     armRestPoseRef.current = armBones;
+    armSpreadBonesRef.current = collectArmSpreadBones(cloned);
     legCloseBonesRef.current = collectLegCloseBones(cloned);
     legAdductionDebugCount = 0;
     legAdductionAxisRecoveryDebugCount = 0;
     legAdductionTraceCount = 0;
     legAdductionSkipBeforeWindowCount = 0;
 
-    // Capture seated reference at SAFE_SIT_CLIP_PROGRESS in hip local space.
+    // 座位基準進捗時点の参照姿勢を股関節ローカル空間で取得する
     mixer.setTime(SIT_CLIP_PROGRESS * (selectedClip.duration || 1));
     mixer.update(0);
     seatedLegReferenceRef.current = captureSeatedLegReference(cloned, legCloseBonesRef.current);
@@ -1104,7 +1206,7 @@ function SceneWithFBX({
       });
     }
 
-    // Return to stand frame so downstream progress-driven pose sampling remains unchanged.
+    // 以降の進捗ベース姿勢サンプリングが変わらないよう最後に立位フレームへ戻す
     mixer.setTime(0);
     mixer.update(0);
 
@@ -1114,6 +1216,13 @@ function SceneWithFBX({
       mixer.stopAllAction();
       actionRef.current = null;
       armRestPoseRef.current = [];
+      armSpreadBonesRef.current = {
+        hips: null,
+        leftUpperArm: null,
+        rightUpperArm: null,
+        leftForearm: null,
+        rightForearm: null,
+      };
       seatedLegReferenceRef.current = null;
       legAdductionCalibrationRef.current = null;
       legCloseBonesRef.current = {
@@ -1128,7 +1237,7 @@ function SceneWithFBX({
     };
   }, [SIT_CLIP_PROGRESS, mixer, cloned, selectedClip]);
 
-  // 初期ポーズ適用および progress が外部から変わったときに即時反映する
+  // 初期ポーズ適用と外部変更時の即時反映
   useEffect(() => {
     applyPoseAtProgress(progress);
   }, [applyPoseAtProgress, progress]);
@@ -1165,15 +1274,15 @@ function SceneWithFBX({
     return { objectScale: scale, modelOffsetY: offsetY };
   }, [cloned, camera, modelBasePosition]);
 
-  // 【原因解決②】ボタン操作およびスライダーによるポーズの変更をボーンへリアルタイム強制反映
-  // playTarget に到達したら progress をロックして、勝手に戻ってこないようにする
+  // 【原因解決②】ボタン操作およびスライダーによるポーズ変更をボーンへリアルタイム反映
+  // 目標到達後は姿勢値を固定し勝手に戻らないようにする
   useFrame((_, delta) => {
     if (!mixer || !actionRef.current || !selectedClip) return;
 
     const currentProgress = progressRef.current;
 
     if (playTarget !== null) {
-      // Sit / Stand ボタンが押されている時の滑らかな自動シーク
+      // 立つ/座るボタン押下時の滑らかな自動シーク
       const speed = 1.2; // アニメーションの再生速度倍率
       let nextProgress = currentProgress;
 
@@ -1183,7 +1292,7 @@ function SceneWithFBX({
         nextProgress = Math.max(currentProgress - delta * speed, playTarget);
       }
 
-      // 目標に非常に接近したら、スナップして確定させる
+      // 目標に非常に接近したらスナップして確定させる
       if (Math.abs(nextProgress - playTarget) <= TARGET_EPSILON) {
         nextProgress = playTarget;
       }
@@ -1195,16 +1304,16 @@ function SceneWithFBX({
 
       applyPoseAtProgress(nextProgress); // デルタ0で即時ポーズをメッシュに反映
 
-      // 目標に到達したら、playTarget を null にしてアニメーション停止
-      // これにより progress はロック状態となる（setProgress が呼ばれない限り変わらない）
+      // 目標に到達したら目標値を空にしてアニメーション停止
+      // これにより姿勢値は固定される（外部更新がない限り変わらない）
       const distToTarget = Math.abs(nextProgress - playTarget);
       if (distToTarget <= TARGET_EPSILON) {
-        // ここで playTarget を null にして、フレーム毎の動きを止める
-        // ただし progress 自体は保持されるので、座り状態が続く
+        // ここで目標値を空にしてフレーム毎の動きを止める
+        // ただし姿勢値自体は保持されるので座り状態が続く
         onFinished();
       }
     } else {
-      // スライダー（Poseバー）の手動操作時、または目標到達後
+      // スライダー（ポーズバー）の手動操作時または目標到達後
       applyPoseAtProgress(currentProgress); // 即時ボーン反映
     }
   });
@@ -1224,7 +1333,7 @@ function SceneWithFBX({
 
 export default function ClothSimulator() {
   const [wireframe, setWireframe] = useState(false);
-  const [progress, setProgress] = useState(0); // 0: Stand(立), 1: Sit(座)
+  const [progress, setProgress] = useState(0); // 0: 立位, 1: 座位
   const [playTarget, setPlayTarget] = useState<number | null>(null);
   const [fbxReloadKey, setFbxReloadKey] = useState(0);
   const [canvasResetKey, setCanvasResetKey] = useState(0);
@@ -1250,11 +1359,11 @@ export default function ClothSimulator() {
 
   const clothingColorHex = clothingPalette[Math.max(0, Math.min(clothingIndex, clothingPalette.length - 1))];
 
-  // no-op discover handler (we don't expose per-mesh controls anymore)
+  // メッシュ検出コールバックは現状UI未使用のため空関数とする
   const handleDiscoverMeshes = useCallback(() => {}, []);
 
   const handleReload = useCallback(() => {
-    // 姿勢・視点・表示は初期化するが、色は保持する
+    // 姿勢・視点・表示は初期化するが色は保持する
     setPlayTarget(null);
     setProgress(0);
     setWireframe(false);
@@ -1263,11 +1372,11 @@ export default function ClothSimulator() {
   }, []);
 
   // パーツのタイプ（服・肌・その他）を手動で切り替えるトグル関数
-  // ※ 救済UIを統合したため、個別トグルは廃止
+  // ※ 救済UIを統合したため個別トグルは廃止
 
   return (
     <div className="absolute inset-0 w-full h-full bg-[#0f172a] overflow-hidden select-none">
-      {/* 3D キャンバス領域 */}
+      {/* 3次元キャンバス領域 */}
       <Canvas
         key={canvasResetKey}
         shadows
@@ -1310,7 +1419,7 @@ export default function ClothSimulator() {
             <span className="text-[11px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-mono">v4.6-KneeGapTightenV1</span>
           </div>
 
-          {/* 1. Reload ボタン：完全に初期状態（起立して停止）へリセットする */}
+          {/* 1. 再読込ボタン：完全に初期状態（起立して停止）へリセットする */}
           <div className="mb-4">
             <button
               className="w-full py-2 rounded-lg bg-rose-600/90 hover:bg-rose-600 text-sm font-semibold text-white transition-all shadow-md shadow-rose-900/20 active:scale-[0.98]"
@@ -1320,11 +1429,11 @@ export default function ClothSimulator() {
             </button>
           </div>
 
-          {/* 2. Sit / Stand アニメーションボタン */}
+          {/* 2. 座る/立つアニメーションボタン */}
           <div className="mb-4 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800">
             <div className="text-xs font-medium text-slate-400 mb-2">Animation Triggers</div>
             <div className="flex items-center gap-2">
-              {/* Stand ボタン：0（立ち状態）に向けてアニメーション停止まで移行 */}
+              {/* 立位ボタン：0（立ち状態）へ向けてアニメーション停止まで移行 */}
               <button
                 className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all border ${
                   progress <= 0.001
@@ -1336,7 +1445,7 @@ export default function ClothSimulator() {
                 🧍 Stand (立)
               </button>
               
-              {/* Sit ボタン：1（座り状態）に向けてアニメーション停止まで移行 */}
+              {/* 座位ボタン：1（座り状態）へ向けてアニメーション停止まで移行 */}
               <button
                 className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all border ${
                   progress >= 0.999
@@ -1357,7 +1466,7 @@ export default function ClothSimulator() {
             </div>
           </div>
 
-          {/* 3. Poseバー（タイムラインスライダー） */}
+          {/* 3. ポーズバー（タイムラインスライダー） */}
           <div className="mb-4 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800">
             <div className="flex items-center justify-between text-xs font-medium text-slate-400 mb-1.5">
               <span>Pose バー (Manual Seek)</span>

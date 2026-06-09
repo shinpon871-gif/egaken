@@ -113,23 +113,96 @@ type ResolvedLegAdductionCalibration = {
 const THIGH_CLOSE_START_PROGRESS = 0.12;
 const THIGH_CLOSE_FULL_PROGRESS = 0.58;
 
-// Tight seated adduction. Goal: "股間が見えない" (crotch not visible) with ぴったり閉じた thighs.
-// Previous bugs: over-close penalty prevented aggressive closure, MAX_THIGH_ADDUCTION_LOCAL_ANGLE=22° caused leg crossing,
-// HARD_MIN=0.08 was impossible (required cross-leg). New: reduce rotation to 14°, raise hard-min to 0.20, 
-// remove over-close penalty, prioritize aggressive scales.
-const INNER_THIGH_SAMPLE_T = 0.34;
-const TARGET_INNER_THIGH_GAP_RATIO_AT_FULL_CLOSE = 0.015;
-const TARGET_KNEE_GAP_RATIO_AT_FULL_CLOSE = 0.08;
-const TARGET_ANKLE_GAP_RATIO_AT_FULL_CLOSE = 0.42;
-const HARD_MIN_INNER_THIGH_GAP_RATIO_FROM_SIT_POSE = 0.012;
-const HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE = 0.05;
-const HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE = 0.22;
+// ★座位時の脚閉じ密着化定義（目標は股間が見えないほどぴったり太もも同士を閉じた状態）
 
-// Tight closure requires stronger guidance than the previous local-angle-only approach,
-// but still needs hard safety limits to avoid leg crossing.
-const MAX_THIGH_ADDUCTION_LOCAL_ANGLE = THREE.MathUtils.degToRad(16.0);
+//【座位脚閉じ関連の各パラメータ定義】
+// 内腿サンプリング位置の補間係数（太ももから膝へのパス上での相対位置: 0.0=太もも, 1.0=膝）
+const INNER_THIGH_SAMPLE_T = 0.34;
+// ターゲット時の内腿間隔の比率（基本座位ポーズの内腿ギャップに対する縮小目標）
+const TARGET_INNER_THIGH_GAP_RATIO_AT_FULL_CLOSE = 0.010;
+// ターゲット時の膝間隔の比率（基本座位ポーズの膝ギャップに対する縮小目標）
+const TARGET_KNEE_GAP_RATIO_AT_FULL_CLOSE = 0.07;
+// ターゲット時の足首間隔の比率（基本座位ポーズの足首ギャップに対する縮小目標）
+const TARGET_ANKLE_GAP_RATIO_AT_FULL_CLOSE = 0.42;
+// 内腿ギャップの厳格な下限（これ以上閉じるとメッシュが破綻する安全限界）
+const HARD_MIN_INNER_THIGH_GAP_RATIO_FROM_SIT_POSE = 0.010;
+// 膝ギャップの厳格な下限（脚交差を防ぐ安全限界）
+const HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE = 0.05;
+// 足首ギャップの厳格な下限（足首の不自然な動きを防ぐ安全限界）
+const HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE = 0.22;
+// 太もも内転の最大回転角（脚交差を防ぐため過度に上げない）
+const MAX_THIGH_ADDUCTION_LOCAL_ANGLE = THREE.MathUtils.degToRad(17.5);
+// 膝の世界座標調整の最大回転角（内転後の膝微調整に使用）
 const MAX_WORLD_KNEE_ALIGN_ANGLE = THREE.MathUtils.degToRad(4.0);
+// 軸キャリブレーション時のテスト回転角度
 const CALIBRATION_TEST_ANGLE = THREE.MathUtils.degToRad(2.5);
+
+//【脚閉じ探索で使用する数値的な閾値】
+// ギャップ値の下限（比率計算の退化を防止）
+const GAP_EPSILON_MIN = 0.001;
+// 左右脚が元の側に留まる判定用閾値（脚交差を防止）
+const LEG_SIDE_KEEP_EPSILON = 0.001;
+// 脚閉じ進行度がほぼゼロと見なす閾値（微小値判定に使用）
+const LEG_CLOSE_PROGRESS_ACTIVE_EPSILON = 0.0001;
+// ベクトル外積の長さ二乗の下限（軸代替判定に使用）
+const CROSS_AXIS_MIN_LENGTH_SQ = 1e-8;
+// 方向ベクトル間の角度の下限（微小差分を無視して数値ノイズを低減）
+const DIRECTION_ALIGNMENT_MIN_ANGLE = 1e-5;
+
+//【軸キャリブレーション評価における重み係数】
+// 膝の上下ずれペナルティ重み（大きいほど膝の上下動を抑制）
+const AXIS_CALIBRATION_Y_PENALTY_WEIGHT = 0.25;
+// 膝の前後ずれペナルティ重み（大きいほど膝の前後動を抑制）
+const AXIS_CALIBRATION_Z_PENALTY_WEIGHT = 0.25;
+// 足首の側方ずれペナルティ重み（足首の不自然な動きを抑制）
+const AXIS_CALIBRATION_FOOT_LATERAL_PENALTY_WEIGHT = 0.12;
+// 脚交差検出時のペナルティ（脚交差を強く抑止）
+const AXIS_CALIBRATION_SIDE_BREAK_PENALTY = 0.4;
+// 軸キャリブレーション時の最小受け入れスコア（これ以下は不採用）
+const AXIS_CALIBRATION_MIN_ACCEPTABLE_SCORE = -0.05;
+// 軸の方向パターン数（左右各軸について正逆2方向を評価）
+const AXIS_SIGN_VARIANTS = 2;
+
+//【ターゲット値の微調整を開始・終了する判定用マージン】
+// 内腜ギャップがターゲット超過時の許容値（超過で微調整開始）
+const REFINE_TRIGGER_INNER_GAP_MARGIN = 0.002;
+// 膝ギャップがターゲット超過時の許容値（超過で膝微調整開始）
+const REFINE_TRIGGER_KNEE_GAP_MARGIN = 0.01;
+// 脚が交差しないよう制限する値（ハード下限として機能）
+const TARGET_SIDE_CLAMP_EPSILON = 0.001;
+
+//【脚閉じ探索時の対称・非対称な内転スケール候補】
+// 太もも内転の回転スケール候補（大きいほど内転が強い）
+const LEG_CLOSE_BASE_SCALES = [2.40, 2.20, 2.00, 1.80, 1.60, 1.40, 1.20, 1.00, 0.80, 0.60, 0.40, 0.20];
+// 左右非対称な内転を試す際のオフセット（左右異なる強度での閉じを可能にする）
+const LEG_CLOSE_ASYMMETRY_OFFSETS = [0.0, -0.12, 0.12, -0.22, 0.22];
+
+//【スコア計算における重み係数（内腜密着→膝密着→足首自然さの優先順）】
+// 内腜ギャップの小ささ重視重み（大きいほど密着を優先）
+const SCORE_INNER_GAP_WEIGHT = 1400;
+// 内腿ギャップがターゲット超過時のペナルティ重み制御の強さ
+const SCORE_INNER_EXCESS_WEIGHT = 600;
+// 膝ギャップの小ささ重視重み（大きいほど膝を寄せるポーズを優先）
+const SCORE_KNEE_GAP_WEIGHT = 55;
+// 膝ギャップがターゲット超過時のペナルティ重み（過度な開きを抑制）
+const SCORE_KNEE_EXCESS_WEIGHT = 20;
+// 足首ギャップがターゲット以下の場合のボーナス重み（過度な密着を防止）
+const SCORE_ANKLE_BONUS_WEIGHT = 0.5;
+// 左右内転スケール差異のペナルティ重み（歪んだ座り方を避ける）
+const SCORE_ASYMMETRY_WEIGHT = 0.15;
+
+//【探索の早期終了判定用品質閾値】
+// 内腿ギャップがターゲット以下となる許容値（充分な密着度）
+const EARLY_ACCEPT_INNER_GAP_MARGIN = 0.0015;
+// 膝ギャップがターゲット以下となる許容値（充分な膝の寄せ度）
+const EARLY_ACCEPT_KNEE_GAP_MARGIN = 0.004;
+// 探索早期終了判定時のスコア計算における内腿重み指数
+const EARLY_BREAK_INNER_WEIGHT = 1000;
+// 探索早期終了判定時のスコア計算における膝重み指数
+const EARLY_BREAK_KNEE_WEIGHT = 40;
+// 探索早期終了判定時のスコアベースオフセット（判定感度の調整値）
+const EARLY_BREAK_SCORE_BIAS = 2.0;
+
 const LEG_ADDUCTION_DEBUG_MAX_LOGS = 0;
 const LEG_ADDUCTION_AXIS_RECOVERY_MAX_LOGS = 0;
 const LEG_ADDUCTION_TRACE = false;
@@ -433,7 +506,7 @@ function evaluateThighAdductionAxis(
 
   for (let i = 0; i < ADDUCTION_AXIS_CANDIDATES.length; i += 1) {
     const candidate = ADDUCTION_AXIS_CANDIDATES[i];
-    for (let signIndex = 0; signIndex < 2; signIndex += 1) {
+    for (let signIndex = 0; signIndex < AXIS_SIGN_VARIANTS; signIndex += 1) {
       const signedAxis = candidate.clone().multiplyScalar(signIndex === 0 ? 1 : -1);
       thigh.quaternion.copy(originalQ);
       thigh.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(signedAxis, CALIBRATION_TEST_ANGLE));
@@ -450,13 +523,13 @@ function evaluateThighAdductionAxis(
       const footLateral = getSignedLateralValue(footLocal, lateralAxis);
       const baseFootLateral = getSignedLateralValue(baseFoot, lateralAxis);
       const xImprovement = side === 'left' ? kneeLateral - baseKneeLateral : baseKneeLateral - kneeLateral;
-      const keepsSide = side === 'left' ? kneeLateral < -0.001 : kneeLateral > 0.001;
-      const footKeepsSide = !foot || (side === 'left' ? footLateral < -0.001 : footLateral > 0.001);
-      const yPenalty = Math.abs(kneeLocal.y - baseKnee.y) * 0.25;
-      const zPenalty = Math.abs(kneeLocal.z - baseKnee.z) * 0.25;
-      const footPenalty = foot ? Math.abs(footLateral - baseFootLateral) * 0.12 : 0.0;
+      const keepsSide = side === 'left' ? kneeLateral < -LEG_SIDE_KEEP_EPSILON : kneeLateral > LEG_SIDE_KEEP_EPSILON;
+      const footKeepsSide = !foot || (side === 'left' ? footLateral < -LEG_SIDE_KEEP_EPSILON : footLateral > LEG_SIDE_KEEP_EPSILON);
+      const yPenalty = Math.abs(kneeLocal.y - baseKnee.y) * AXIS_CALIBRATION_Y_PENALTY_WEIGHT;
+      const zPenalty = Math.abs(kneeLocal.z - baseKnee.z) * AXIS_CALIBRATION_Z_PENALTY_WEIGHT;
+      const footPenalty = foot ? Math.abs(footLateral - baseFootLateral) * AXIS_CALIBRATION_FOOT_LATERAL_PENALTY_WEIGHT : 0.0;
       const strictScore = xImprovement - yPenalty - zPenalty - footPenalty;
-      const sidePenalty = keepsSide && footKeepsSide ? 0 : 0.4;
+      const sidePenalty = keepsSide && footKeepsSide ? 0 : AXIS_CALIBRATION_SIDE_BREAK_PENALTY;
       const looseScore = xImprovement - yPenalty - zPenalty - footPenalty - sidePenalty;
 
       if (keepsSide && footKeepsSide && strictScore > bestStrictScore) {
@@ -474,8 +547,8 @@ function evaluateThighAdductionAxis(
   thigh.quaternion.copy(originalQ);
   root.updateMatrixWorld(true);
 
-  if (bestStrictAxis && bestStrictScore > -0.05) return bestStrictAxis;
-  if (bestLooseAxis && bestLooseScore > -0.05) return bestLooseAxis;
+  if (bestStrictAxis && bestStrictScore > AXIS_CALIBRATION_MIN_ACCEPTABLE_SCORE) return bestStrictAxis;
+  if (bestLooseAxis && bestLooseScore > AXIS_CALIBRATION_MIN_ACCEPTABLE_SCORE) return bestLooseAxis;
   return null;
 }
 
@@ -572,7 +645,7 @@ function applySeatedLegAdductionWithGapLimit(
     1
   );
   const t = smoothstep01(normalized);
-  if (t <= 0.0001) return;
+  if (t <= LEG_CLOSE_PROGRESS_ACTIVE_EPSILON) return;
 
   const seatedReference = seatedRef;
   const hips = bones.hips;
@@ -581,9 +654,9 @@ function applySeatedLegAdductionWithGapLimit(
   const lateralAxisLocal = seatedReference.lateralAxisLocal.clone().normalize();
 
   const current = measureLegGaps(hips, bones, seatedReference);
-  const hardMinInnerThighGap = Math.max(0.001, seatedReference.innerThighGap * HARD_MIN_INNER_THIGH_GAP_RATIO_FROM_SIT_POSE);
-  const hardMinKneeGap = Math.max(0.001, seatedReference.kneeGap * HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE);
-  const hardMinAnkleGap = Math.max(0.001, seatedReference.ankleGap * HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE);
+  const hardMinInnerThighGap = Math.max(GAP_EPSILON_MIN, seatedReference.innerThighGap * HARD_MIN_INNER_THIGH_GAP_RATIO_FROM_SIT_POSE);
+  const hardMinKneeGap = Math.max(GAP_EPSILON_MIN, seatedReference.kneeGap * HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE);
+  const hardMinAnkleGap = Math.max(GAP_EPSILON_MIN, seatedReference.ankleGap * HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE);
 
   const desiredInnerThighGap = Math.max(
     current.innerThighGap * THREE.MathUtils.lerp(1.0, TARGET_INNER_THIGH_GAP_RATIO_AT_FULL_CLOSE, t),
@@ -618,11 +691,11 @@ function applySeatedLegAdductionWithGapLimit(
   const isValidState = (state: ReturnType<typeof measureLegGaps>) => {
     const l = getLaterals(state);
     const keepsSides =
-      l.leftInner < -0.001 &&
-      l.rightInner > 0.001 &&
-      l.leftKnee < -0.001 &&
-      l.rightKnee > 0.001 &&
-      (!seatedReference.hasAnkleReference || (l.leftAnkle < -0.001 && l.rightAnkle > 0.001));
+      l.leftInner < -LEG_SIDE_KEEP_EPSILON &&
+      l.rightInner > LEG_SIDE_KEEP_EPSILON &&
+      l.leftKnee < -LEG_SIDE_KEEP_EPSILON &&
+      l.rightKnee > LEG_SIDE_KEEP_EPSILON &&
+      (!seatedReference.hasAnkleReference || (l.leftAnkle < -LEG_SIDE_KEEP_EPSILON && l.rightAnkle > LEG_SIDE_KEEP_EPSILON));
 
     return (
       keepsSides &&
@@ -632,8 +705,8 @@ function applySeatedLegAdductionWithGapLimit(
     );
   };
 
-  const baseScales = [2.20, 2.00, 1.80, 1.60, 1.40, 1.20, 1.00, 0.80, 0.60, 0.40, 0.20];
-  const asymOffsets = [0.0, -0.12, 0.12, -0.22, 0.22];
+  const baseScales = LEG_CLOSE_BASE_SCALES;
+  const asymOffsets = LEG_CLOSE_ASYMMETRY_OFFSETS;
 
   for (const baseScale of baseScales) {
     for (const offset of asymOffsets) {
@@ -656,7 +729,7 @@ function applySeatedLegAdductionWithGapLimit(
 
       let state = measureLegGaps(hips, bones, seatedReference);
 
-      if (state.innerThighGap > desiredInnerThighGap + 0.002 || state.kneeGap > desiredKneeGap + 0.01) {
+      if (state.innerThighGap > desiredInnerThighGap + REFINE_TRIGGER_INNER_GAP_MARGIN || state.kneeGap > desiredKneeGap + REFINE_TRIGGER_KNEE_GAP_MARGIN) {
         const applyWorldRotationToBone = (bone: THREE.Object3D, deltaWorld: THREE.Quaternion) => {
           const parentWorldQ = bone.parent
             ? bone.parent.getWorldQuaternion(new THREE.Quaternion())
@@ -680,8 +753,8 @@ function applySeatedLegAdductionWithGapLimit(
           const desiredDir = desiredWorld.sub(thighWorld).normalize();
           const axis = new THREE.Vector3().crossVectors(currentDir, desiredDir);
           const angle = currentDir.angleTo(desiredDir);
-          if (!Number.isFinite(angle) || angle <= 1e-5) return;
-          const axisWorld = axis.lengthSq() > 1e-8
+          if (!Number.isFinite(angle) || angle <= DIRECTION_ALIGNMENT_MIN_ANGLE) return;
+          const axisWorld = axis.lengthSq() > CROSS_AXIS_MIN_LENGTH_SQ
             ? axis.normalize()
             : fallbackAxisLocal.clone().applyQuaternion(thigh.getWorldQuaternion(new THREE.Quaternion())).normalize();
           const delta = new THREE.Quaternion().setFromAxisAngle(axisWorld, Math.min(angle, MAX_WORLD_KNEE_ALIGN_ANGLE * t));
@@ -695,16 +768,16 @@ function applySeatedLegAdductionWithGapLimit(
         const desiredKneeHalf = desiredKneeGap * 0.5;
 
         const desiredLeftInnerLocal = state.leftInnerThighLocal.clone().add(
-          lateralAxisLocal.clone().multiplyScalar(Math.min(innerCenter - desiredInnerHalf, -0.001) - l.leftInner)
+          lateralAxisLocal.clone().multiplyScalar(Math.min(innerCenter - desiredInnerHalf, -TARGET_SIDE_CLAMP_EPSILON) - l.leftInner)
         );
         const desiredRightInnerLocal = state.rightInnerThighLocal.clone().add(
-          lateralAxisLocal.clone().multiplyScalar(Math.max(innerCenter + desiredInnerHalf, 0.001) - l.rightInner)
+          lateralAxisLocal.clone().multiplyScalar(Math.max(innerCenter + desiredInnerHalf, TARGET_SIDE_CLAMP_EPSILON) - l.rightInner)
         );
         const desiredLeftKneeLocal = state.leftKneeLocal.clone().add(
-          lateralAxisLocal.clone().multiplyScalar(Math.min(kneeCenter - desiredKneeHalf, -0.001) - l.leftKnee)
+          lateralAxisLocal.clone().multiplyScalar(Math.min(kneeCenter - desiredKneeHalf, -TARGET_SIDE_CLAMP_EPSILON) - l.leftKnee)
         );
         const desiredRightKneeLocal = state.rightKneeLocal.clone().add(
-          lateralAxisLocal.clone().multiplyScalar(Math.max(kneeCenter + desiredKneeHalf, 0.001) - l.rightKnee)
+          lateralAxisLocal.clone().multiplyScalar(Math.max(kneeCenter + desiredKneeHalf, TARGET_SIDE_CLAMP_EPSILON) - l.rightKnee)
         );
 
         pointToward(leftThigh, state.leftInnerThighLocal, desiredLeftInnerLocal, resolvedCalibration.leftAxis);
@@ -724,8 +797,14 @@ function applySeatedLegAdductionWithGapLimit(
       const innerPenalty = Math.max(0, state.innerThighGap - desiredInnerThighGap);
       const kneePenalty = Math.max(0, state.kneeGap - desiredKneeGap);
       const ankleBonus = state.ankleGap - desiredAnkleGap;
-      const asymPenalty = Math.abs(leftScale - rightScale) * 0.15;
-      const score = state.innerThighGap * 1000 + innerPenalty * 400 + state.kneeGap * 40 + kneePenalty * 12 - ankleBonus * 0.5 + asymPenalty;
+      const asymPenalty = Math.abs(leftScale - rightScale) * SCORE_ASYMMETRY_WEIGHT;
+      const score =
+        state.innerThighGap * SCORE_INNER_GAP_WEIGHT +
+        innerPenalty * SCORE_INNER_EXCESS_WEIGHT +
+        state.kneeGap * SCORE_KNEE_GAP_WEIGHT +
+        kneePenalty * SCORE_KNEE_EXCESS_WEIGHT -
+        ankleBonus * SCORE_ANKLE_BONUS_WEIGHT +
+        asymPenalty;
 
       if (score < bestScore) {
         bestScore = score;
@@ -734,14 +813,14 @@ function applySeatedLegAdductionWithGapLimit(
         foundValid = true;
       }
 
-      if (state.innerThighGap <= desiredInnerThighGap + 0.0015 && state.kneeGap <= desiredKneeGap + 0.004) {
+      if (state.innerThighGap <= desiredInnerThighGap + EARLY_ACCEPT_INNER_GAP_MARGIN && state.kneeGap <= desiredKneeGap + EARLY_ACCEPT_KNEE_GAP_MARGIN) {
         bestLeftQ = leftThigh.quaternion.clone();
         bestRightQ = rightThigh.quaternion.clone();
         foundValid = true;
         break;
       }
     }
-    if (foundValid && bestScore < desiredInnerThighGap * 1000 + desiredKneeGap * 40 + 2.0) {
+    if (foundValid && bestScore < desiredInnerThighGap * EARLY_BREAK_INNER_WEIGHT + desiredKneeGap * EARLY_BREAK_KNEE_WEIGHT + EARLY_BREAK_SCORE_BIAS) {
       break;
     }
   }
@@ -816,8 +895,8 @@ function applyCustomMaterials(
         .join(' ');
       const parentName = mesh.parent?.name || "";
 
-      // 毎回再分類（userData 蓄積を避ける）。UUID は clone/reload で変わるため、
-      // customMapping は uuid と meshName の両方を許可する。
+      // 毎回再分類（userData 蓄積を避ける）UUID は clone/reload で変わるため、
+      // customMapping は uuid と meshName の両方を許可する
       const type = inferMeshType(
         meshName,
         parentName,
@@ -1175,7 +1254,7 @@ export default function ClothSimulator() {
   const handleDiscoverMeshes = useCallback(() => {}, []);
 
   const handleReload = useCallback(() => {
-    // 姿勢・視点・表示は初期化するが、色は保持する。
+    // 姿勢・視点・表示は初期化するが、色は保持する
     setPlayTarget(null);
     setProgress(0);
     setWireframe(false);
@@ -1184,7 +1263,7 @@ export default function ClothSimulator() {
   }, []);
 
   // パーツのタイプ（服・肌・その他）を手動で切り替えるトグル関数
-  // ※ 救済UIを統合したため、個別トグルは廃止しました。
+  // ※ 救済UIを統合したため、個別トグルは廃止
 
   return (
     <div className="absolute inset-0 w-full h-full bg-[#0f172a] overflow-hidden select-none">
@@ -1228,7 +1307,7 @@ export default function ClothSimulator() {
         <div className="pointer-events-auto rounded-2xl border border-slate-700/40 bg-slate-900/90 p-4 shadow-2xl backdrop-blur-md style-panel" style={{ width: 340 }}>
           <div className="text-sm font-bold text-slate-100 mb-3 flex items-center justify-between border-b border-slate-700/50 pb-2">
             <span>Pose & Color Controller</span>
-            <span className="text-[11px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-mono">v4.4-ClosedLegsTightV5</span>
+            <span className="text-[11px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-mono">v4.6-KneeGapTightenV1</span>
           </div>
 
           {/* 1. Reload ボタン：完全に初期状態（起立して停止）へリセットする */}

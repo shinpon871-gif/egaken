@@ -6,6 +6,34 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, useFBX } from '@react-three/drei';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils';
 
+// ボーン構造診断用
+function dumpBoneStructure(root: THREE.Object3D, label: string): void {
+  const bones: Array<{ name: string; depth: number }> = [];
+  root.traverse((obj, depth = 0) => {
+    const bone = obj as THREE.Bone;
+    if (bone.isBone && bone.name) {
+      bones.push({ name: bone.name, depth: 0 });
+    }
+  });
+
+  let hierarchy = '';
+  root.traverse((obj) => {
+    const bone = obj as THREE.Bone;
+    if (!bone.isBone || !bone.name) return;
+
+    let depth = 0;
+    let p = bone.parent;
+    while (p && p !== root) {
+      depth += 1;
+      p = p.parent;
+    }
+
+    hierarchy += '  '.repeat(depth) + bone.name + '\n';
+  });
+
+  console.log(`\n=== ${label} ===\nTotal bones: ${bones.length}\n${hierarchy}`);
+}
+
 
 const SUPPRESSED_CONSOLE_PATTERNS = [
   'THREE.Clock: This module has been deprecated. Please use THREE.Timer instead.',
@@ -1050,6 +1078,15 @@ function SceneWithFBX({
   }, [SIT_CLIP_PROGRESS]);
 
   const fbx = useFBX(fbxPath) as THREE.Group & { animations?: THREE.AnimationClip[] };
+  const animationFbx = useFBX('/models/StandToSit_model.fbx') as THREE.Group & { animations?: THREE.AnimationClip[] };
+  
+  // ボーン構造を診断出力
+  useEffect(() => {
+    if (fbx && animationFbx) {
+      dumpBoneStructure(fbx, 'StandToSit.fbx (Model)');
+      dumpBoneStructure(animationFbx, 'StandToSit_model.fbx (Animation)');
+    }
+  }, [fbx, animationFbx]);
   
   // スケルトンのクローンを作成
   const cloned = useMemo(() => {

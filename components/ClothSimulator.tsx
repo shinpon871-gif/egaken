@@ -4,6 +4,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, useFBX } from '@react-three/drei';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils';
 
 // ボーン構造診断用
@@ -39,18 +41,22 @@ const SUPPRESSED_CONSOLE_PATTERNS = [
   'THREE.Clock: This module has been deprecated. Please use THREE.Timer instead.',
   'THREE.WebGLShadowMap: PCFSoftShadowMap has been deprecated. Using PCFShadowMap instead.',
   'THREE.FBXLoader: Vertex has more than 4 skinning weights assigned to vertex. Deleting additional weights.',
+  'THREE.FBXLoader:',
+  'map is not supported in three.js, skipping texture.',
+  'undefined map is not supported in three.js, skipping texture.',
   'Download the React DevTools for a better development experience',
   '[Fast Refresh] rebuilding',
   '[Fast Refresh] done in',
 ];
 
 const __clothConsolePatchKey = '__clothSimulatorConsolePatched_v2';
+const __fbxTextureUrlGuardKey = '__clothSimulatorFbxTextureUrlGuard_v1';
 if (typeof globalThis !== 'undefined' && !(globalThis as Record<string, unknown>)[__clothConsolePatchKey]) {
   (globalThis as Record<string, unknown>)[__clothConsolePatchKey] = true;
 
   const shouldSuppressConsoleMessage = (args: unknown[]): boolean => {
-    const first = typeof args[0] === 'string' ? args[0] : '';
-    return SUPPRESSED_CONSOLE_PATTERNS.some((msg) => first.includes(msg));
+    const joined = args.map((arg) => String(arg)).join(' ');
+    return SUPPRESSED_CONSOLE_PATTERNS.some((msg) => joined.includes(msg));
   };
 
   const originalWarn = console.warn.bind(console);
@@ -69,6 +75,53 @@ if (typeof globalThis !== 'undefined' && !(globalThis as Record<string, unknown>
     if (shouldSuppressConsoleMessage(args)) return;
     originalInfo(...args);
   };
+}
+
+if (typeof globalThis !== 'undefined' && !(globalThis as Record<string, unknown>)[__fbxTextureUrlGuardKey]) {
+  (globalThis as Record<string, unknown>)[__fbxTextureUrlGuardKey] = true;
+
+  const shouldIgnoreFbxTextureUrl = (value: string): boolean => {
+    if (!value) return false;
+
+    const normalized = value.replace(/\\/g, '/');
+    return (
+      /^(?:[A-Za-z]:)?\/Users\//i.test(normalized) ||
+      /\/Users\//i.test(normalized) ||
+      /My%20project\/Assets\//i.test(normalized) ||
+      /Asset%20Manager\//i.test(normalized) ||
+      /scourceimages\//i.test(normalized) ||
+      /female_avartar\.bmp/i.test(normalized) ||
+      /egaken\.Textures/i.test(normalized)
+    );
+  };
+
+  const originalTextureLoad = THREE.TextureLoader.prototype.load.bind(THREE.TextureLoader.prototype) as typeof THREE.TextureLoader.prototype.load;
+
+  THREE.TextureLoader.prototype.load = function patchedLoad(
+    this: THREE.TextureLoader,
+    url: string,
+    onLoad?: ((texture: THREE.Texture) => void) | undefined,
+    onProgress?: ((event: ProgressEvent) => void) | undefined,
+    onError?: ((event: ErrorEvent | Error) => void) | undefined
+  ) {
+    const textureUrl = typeof url === 'string' ? url : '';
+    if (shouldIgnoreFbxTextureUrl(textureUrl)) {
+      const fallbackTexture = new THREE.Texture();
+      fallbackTexture.colorSpace = THREE.SRGBColorSpace;
+      if (typeof onLoad === 'function') {
+        onLoad(fallbackTexture);
+      }
+      return fallbackTexture;
+    }
+
+    return originalTextureLoad.call(
+      this,
+      url,
+      onLoad as ((texture: THREE.Texture) => void) | undefined,
+      onProgress as ((event: ProgressEvent) => void) | undefined,
+      onError as ((err: unknown) => void) | undefined
+    );
+  } as typeof THREE.TextureLoader.prototype.load;
 }
 
 // メッシュごとのカスタム色割り当て用の型定義
@@ -114,6 +167,223 @@ function inferMeshType(
 
 function isArmPoseBoneName(name: string): boolean {
   return /mixamorig(left|right)(arm|forearm|hand)|left(upper)?arm|right(upper)?arm|leftforearm|rightforearm|lefthand|righthand/i.test(name);
+}
+
+function normalizeSkirtFrameToLocal(frame: number[][], garmentReferenceName?: string | null): Float32Array {
+  if (!frame || frame.length === 0) return new Float32Array();
+
+  const points = frame.map((pt) => ({ x: pt[0] ?? 0, y: pt[1] ?? 0, z: pt[2] ?? 0 }));
+  const centroid = points.reduce(
+    (acc, point) => ({ x: acc.x + point.x, y: acc.y + point.y, z: acc.z + point.z }),
+    { x: 0, y: 0, z: 0 }
+  );
+
+  const count = points.length || 1;
+  const center = { x: centroid.x / count, y: centroid.y / count, z: centroid.z / count };
+  const localScale = garmentReferenceName ? 1.6 : 1.35;
+  const base = new Float32Array(frame.length * 3);
+
+  for (let i = 0; i < points.length; i += 1) {
+    const point = points[i];
+    const localX = (point.x - center.x) * localScale;
+    const localY = (point.y - center.y) * localScale;
+    const localZ = (point.z - center.z) * localScale;
+    const radial = Math.hypot(localX, localZ) || 0.0001;
+    const normalizedX = radial > 0 ? localX / radial : 1;
+    const normalizedZ = radial > 0 ? localZ / radial : 0;
+
+    base[i * 3] = localX + normalizedX * 0.02;
+    base[i * 3 + 1] = localY + Math.abs(point.y - center.y) * 0.2;
+    base[i * 3 + 2] = localZ + normalizedZ * 0.02;
+  }
+
+  return base;
+}
+
+function mapSkirtFrameToMeshVertices(
+  mesh: THREE.Mesh,
+  frame: number[][],
+  garmentReferenceName?: string | null,
+  motionScale = 1.0
+): Float32Array {
+  const geometry = mesh.geometry;
+  const positions = geometry.getAttribute('position');
+  if (!positions) return new Float32Array();
+
+  const basePositions = mesh.userData.skirtBasePositions as Float32Array | undefined;
+  if (!basePositions || basePositions.length === 0) return new Float32Array();
+
+  const mapped = basePositions.slice();
+  const vertexCount = Math.min(positions.count, frame.length, basePositions.length / 3);
+  const restFrame = frame[0] ?? [0, 0, 0];
+
+  for (let i = 0; i < vertexCount; i += 1) {
+    const idx = i * 3;
+    const point = frame[i] ?? frame[Math.min(frame.length - 1, i)];
+    if (!point) {
+      continue;
+    }
+
+    const reference = restFrame.length >= 3 ? restFrame : [0, 0, 0];
+    const deltaX = (point[0] - reference[0]) * motionScale;
+    const deltaY = (point[1] - reference[1]) * motionScale;
+    const deltaZ = (point[2] - reference[2]) * motionScale;
+
+    mapped[idx] = basePositions[idx] + deltaX;
+    mapped[idx + 1] = basePositions[idx + 1] + deltaY;
+    mapped[idx + 2] = basePositions[idx + 2] + deltaZ;
+  }
+
+  return mapped;
+}
+
+async function loadSkirtAssetFromUrl(candidate: string): Promise<THREE.Object3D | null> {
+  console.log('[SceneWithFBX] attempting real skirt asset load:', candidate);
+
+  try {
+    const response = await fetch(candidate);
+    console.log('[SceneWithFBX] fetch status for real skirt asset:', candidate, response.status, response.headers.get('content-type'));
+    if (!response.ok) return null;
+
+    const buffer = await response.arrayBuffer();
+    const header = new TextDecoder().decode(new Uint8Array(buffer.slice(0, 4)));
+    console.log('[SceneWithFBX] asset magic header:', candidate, header, 'length:', buffer.byteLength);
+
+    const useGltfLoader = header === 'glTF' || candidate.toLowerCase().endsWith('.glb') || candidate.toLowerCase().endsWith('.gltf');
+
+    if (useGltfLoader) {
+      const loader = new GLTFLoader();
+      const gltf = await loader.parseAsync(buffer, '/');
+      const scene = gltf.scene ?? null;
+      console.log('[SceneWithFBX] parsed real skirt mesh as glTF:', candidate, 'sceneChildren:', scene?.children.length ?? 0);
+      return scene;
+    }
+
+    const loader = new FBXLoader();
+    const fbxRoot = loader.parse(buffer, '/');
+    console.log('[SceneWithFBX] parsed real skirt mesh as FBX:', candidate, 'children:', fbxRoot.children.length);
+    return fbxRoot as THREE.Object3D;
+  } catch (error) {
+    console.warn('[SceneWithFBX] real skirt asset load failed:', candidate, error);
+    return null;
+  }
+}
+
+function createStandaloneSkirtMesh(skirtAnimData: number[][][] | null, colorHex: string, garmentReferenceName?: string | null): THREE.Mesh | null {
+  if (!skirtAnimData || skirtAnimData.length === 0) return null;
+
+  const referenceFrame = skirtAnimData[0];
+  if (!referenceFrame || referenceFrame.length === 0) return null;
+
+  const positions = normalizeSkirtFrameToLocal(referenceFrame, garmentReferenceName);
+  const vertexCount = positions.length / 3;
+  const segments = Math.max(10, Math.min(36, Math.round(Math.sqrt(vertexCount))));
+  const rings = Math.max(8, Math.ceil(vertexCount / segments));
+  const indices: number[] = [];
+
+  for (let ring = 0; ring < rings - 1; ring += 1) {
+    for (let segment = 0; segment < segments; segment += 1) {
+      const a = ring * segments + segment;
+      const b = ring * segments + ((segment + 1) % segments);
+      const c = (ring + 1) * segments + segment;
+      const d = (ring + 1) * segments + ((segment + 1) % segments);
+      if (a < vertexCount && b < vertexCount && c < vertexCount && d < vertexCount) {
+        indices.push(a, c, b, b, c, d);
+      }
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  if (indices.length > 0) {
+    geometry.setIndex(indices);
+  }
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+
+  const material = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(colorHex),
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.9,
+    roughness: 0.8,
+    metalness: 0.1,
+    wireframe: false,
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = 'DedicatedSkirtMesh';
+  mesh.position.set(0, 0.8, 0);
+  mesh.userData.skirtBasePositions = positions.slice();
+  mesh.userData.skirtSegments = segments;
+  mesh.userData.skirtRings = rings;
+  mesh.userData.skirtFrameCount = skirtAnimData.length;
+  return mesh;
+}
+
+function findSkirtMesh(root: THREE.Object3D): THREE.Mesh | null {
+  if (!root) return null;
+
+  const candidates: Array<{ mesh: THREE.Mesh; score: number; debug: string }> = [];
+
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+
+    const mesh = obj as THREE.Mesh;
+    const pos = mesh.geometry?.attributes.position;
+    const vertexCount = pos ? pos.count : 0;
+    const materialNames = Array.isArray(mesh.material)
+      ? mesh.material.map((m) => (m ? m.name : '')).join(' ')
+      : mesh.material?.name || '';
+
+    const searchable = [
+      mesh.name,
+      mesh.parent?.name || '',
+      materialNames,
+      mesh.geometry?.uuid || '',
+      mesh.userData?.name || '',
+    ]
+      .join(' ')
+      .toLowerCase();
+
+    const isBodyLike = /avatar|avartar|zbrush|default_group|body|skin|head|torso|arm|leg|hand|foot|face|neck|hair/.test(searchable);
+    const isClothingLike = /skirt|petticoat|hem|dress|sash|garment|cloth|coat skirt|coatskirt|lower garment/.test(searchable);
+
+    let score = 0;
+    if (isClothingLike) score += 500;
+    if (/skirtback|skirtfront|skirtside/.test(searchable)) score += 250;
+    if (/d026|dress|skirt|cloth/.test(materialNames.toLowerCase())) score += 80;
+    if (vertexCount > 4000 && vertexCount < 20000) score += 80;
+    if (vertexCount > 20000 && vertexCount < 60000) score += 30;
+    if (vertexCount > 60000) score -= 400;
+    if (isBodyLike) score -= 1000;
+
+    const bbox = new THREE.Box3().setFromObject(mesh);
+    const size = new THREE.Vector3();
+    bbox.getSize(size);
+    if (size.y > 2.0 || size.x > 2.5 || size.z > 1.5) score -= 300;
+    if (size.y > 0.3 && size.y < 1.2 && size.x < 1.5 && size.z < 1.0) score += 50;
+
+    if (score >= 150 && !isBodyLike && vertexCount < 60000) {
+      candidates.push({
+        mesh,
+        score,
+        debug: `${mesh.name || 'unnamed'} :: score=${score} :: verts=${vertexCount} :: size=${size.toArray().map((v) => v.toFixed(3)).join(',')}`,
+      });
+    }
+  });
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  const top = candidates[0];
+  if (top) {
+    console.log('[SceneWithFBX] selected skirt mesh candidate:', top.debug);
+  }
+
+  return top?.mesh ?? null;
 }
 
 type ArmSpreadBones = {
@@ -1098,6 +1368,10 @@ function SceneWithFBX({
   const { camera } = useThree();
   const actionRef = useRef<THREE.AnimationAction | null>(null);
   const progressRef = useRef(progress);
+  const skirtMeshRef = useRef<THREE.Mesh | null>(null);
+  const [skirtAnimData, setSkirtAnimData] = useState<number[][][] | null>(null);
+  const [realSkirtAsset, setRealSkirtAsset] = useState<THREE.Object3D | null>(null);
+  const [garmentReferenceName, setGarmentReferenceName] = useState<string | null>(null);
   const armRestPoseRef = useRef<Array<{ bone: THREE.Object3D; quaternion: THREE.Quaternion }>>([]);
   const armSpreadBonesRef = useRef<ArmSpreadBones>({
     hips: null,
@@ -1122,6 +1396,68 @@ function SceneWithFBX({
   useEffect(() => {
     progressRef.current = progress;
   }, [progress]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSkirtAnim = async () => {
+      try {
+        const res = await fetch('/models/skirt_deformation.json');
+        if (!res.ok) {
+          throw new Error(`Failed to fetch skirt deformation JSON: ${res.status}`);
+        }
+        const data = (await res.json()) as { frames?: number[][][] };
+        if (!cancelled && data.frames && data.frames.length > 0) {
+          setSkirtAnimData(data.frames);
+        }
+      } catch (error) {
+        console.warn('[SceneWithFBX] skirt deformation JSON load failed, fallback to default:', error);
+        if (!cancelled) {
+          setSkirtAnimData(null);
+        }
+      }
+    };
+
+    loadSkirtAnim();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const updateSkirtDeformation = useCallback((uiProgress: number) => {
+    if (!skirtAnimData || skirtAnimData.length === 0 || !skirtMeshRef.current) return;
+
+    const mesh = skirtMeshRef.current;
+    const geometry = mesh.geometry;
+    const positionAttribute = geometry.getAttribute('position');
+    if (!positionAttribute) return;
+
+    const basePositions = mesh.userData.skirtBasePositions as Float32Array | undefined;
+    if (!basePositions) return;
+
+    const safeProgress = Math.min(Math.max(uiProgress, 0), 1);
+    const totalFrames = skirtAnimData.length;
+    const motionFactor = garmentReferenceName ? 1.75 : 1.2;
+    const framePos = safeProgress * (totalFrames - 1);
+    const frameIndex = Math.min(totalFrames - 1, Math.floor(framePos));
+    const nextFrameIndex = Math.min(totalFrames - 1, frameIndex + 1);
+    const blend = totalFrames > 1 ? framePos - frameIndex : 0;
+
+    const currentFrame = skirtAnimData[frameIndex] ?? skirtAnimData[0];
+    const nextFrame = skirtAnimData[nextFrameIndex] ?? currentFrame;
+
+    const currentMapped = mapSkirtFrameToMeshVertices(mesh, currentFrame, garmentReferenceName, motionFactor);
+    const nextMapped = mapSkirtFrameToMeshVertices(mesh, nextFrame, garmentReferenceName, motionFactor);
+
+    const array = positionAttribute.array as Float32Array;
+    for (let i = 0; i < currentMapped.length; i += 1) {
+      array[i] = THREE.MathUtils.lerp(currentMapped[i], nextMapped[i], blend);
+    }
+
+    positionAttribute.needsUpdate = true;
+    geometry.computeVertexNormals();
+    geometry.computeBoundingSphere();
+  }, [garmentReferenceName, skirtAnimData]);
 
   // 【原因解決①】外部のアニメーション補助を廃止し独自管理へ統一
   const mixer = useMemo(() => {
@@ -1160,8 +1496,10 @@ function SceneWithFBX({
         legAdductionCalibrationRef.current,
         uiProgress
       );
+
+      updateSkirtDeformation(uiProgress);
     },
-    [cloned, mixer, selectedClip, uiProgressToClipProgress]
+    [cloned, mixer, selectedClip, uiProgressToClipProgress, updateSkirtDeformation]
   );
 
   // マテリアルの適用とメッシュ検出
@@ -1169,6 +1507,88 @@ function SceneWithFBX({
     if (!cloned) return;
     applyCustomMaterials(cloned, wireframe, customMapping, clothingColorHex, skinColorHex, onDiscoverMeshes);
   }, [cloned, wireframe, customMapping, clothingColorHex, skinColorHex, onDiscoverMeshes]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRealSkirtAsset = async () => {
+      const candidates = ['/models/skirt_mesh.fbx'];
+
+      for (const candidate of candidates) {
+        if (cancelled) return;
+
+        const asset = await loadSkirtAssetFromUrl(candidate);
+        if (asset && !cancelled) {
+          console.log('[SceneWithFBX] accepted real skirt asset candidate:', candidate, 'name:', asset.name, 'children:', asset.children.length);
+          setRealSkirtAsset(asset);
+          return;
+        }
+
+        console.log('[SceneWithFBX] rejected real skirt asset candidate:', candidate, 'asset:', Boolean(asset), 'cancelled:', cancelled);
+      }
+
+      if (!cancelled) {
+        setRealSkirtAsset(null);
+      }
+    };
+
+    loadRealSkirtAsset();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!cloned) return;
+
+    const realAsset = realSkirtAsset ? realSkirtAsset.clone() : null;
+    const dedicatedSkirt = realAsset ?? (skirtAnimData ? createStandaloneSkirtMesh(skirtAnimData, clothingColorHex, garmentReferenceName) : null);
+    if (!dedicatedSkirt) return;
+
+    const targetMesh = dedicatedSkirt instanceof THREE.Mesh
+      ? dedicatedSkirt
+      : (findSkirtMesh(dedicatedSkirt) ?? dedicatedSkirt.children.find((child) => child instanceof THREE.Mesh) as THREE.Mesh | undefined);
+
+    if (!targetMesh) return;
+
+    const basePositions = targetMesh.geometry?.getAttribute('position')?.array as Float32Array | undefined;
+    if (basePositions && basePositions.length > 0 && (!targetMesh.userData.skirtBasePositions || targetMesh.userData.skirtBasePositions.length !== basePositions.length)) {
+      targetMesh.userData.skirtBasePositions = basePositions.slice();
+    }
+
+    cloned.add(dedicatedSkirt);
+    dedicatedSkirt.position.set(0, 0.8, 0.0);
+    dedicatedSkirt.rotation.set(0, 0, 0);
+    dedicatedSkirt.scale.set(1.0, 1.0, 1.0);
+    skirtMeshRef.current = targetMesh;
+
+    console.log(
+      '[SceneWithFBX] skirt target selected:',
+      realAsset ? 'real-skirt-asset' : 'synthetic-skirt-fallback',
+      'meshName:',
+      targetMesh.name,
+      'vertexCount:',
+      targetMesh.geometry?.attributes.position?.count
+    );
+
+    updateSkirtDeformation(progress);
+
+    return () => {
+      if (dedicatedSkirt.parent) {
+        dedicatedSkirt.parent.remove(dedicatedSkirt);
+      }
+      if (targetMesh.geometry) {
+        targetMesh.geometry.dispose();
+      }
+      const material = targetMesh.material;
+      if (Array.isArray(material)) {
+        material.forEach((m) => m.dispose());
+      } else {
+        material.dispose();
+      }
+      skirtMeshRef.current = null;
+    };
+  }, [cloned, clothingColorHex, garmentReferenceName, progress, realSkirtAsset, skirtAnimData, updateSkirtDeformation]);
 
   // アクションの設定と一時停止（自動再生の競合を徹底排除）
   useEffect(() => {
@@ -1340,6 +1760,9 @@ function SceneWithFBX({
       }
 
       applyPoseAtProgress(nextProgress); // デルタ0で即時ポーズをメッシュに反映
+
+      // updateSkirtDeformation は applyPoseAtProgress 内で既に呼ばれるため
+      // ここで二重に適用するとガクつきが増える。 1 回だけ更新する。
 
       // 目標に到達したら目標値を空にしてアニメーション停止
       // これにより姿勢値は固定される（外部更新がない限り変わらない）

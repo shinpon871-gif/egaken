@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GLB Morph Animation Viewer</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #101827;
+      color: #e5edf7;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+    }
+    #hud {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 10;
+      width: min(520px, calc(100vw - 24px));
+      padding: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.86);
+      backdrop-filter: blur(8px);
+      font-size: 12px;
+      line-height: 1.5;
+      box-sizing: border-box;
+    }
+    #hud code {
+      color: #93c5fd;
+    }
+    #status {
+      white-space: pre-wrap;
+      margin-top: 8px;
+      color: #cbd5e1;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    button {
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      border-radius: 6px;
+      background: #1d4ed8;
+      color: white;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    input[type="range"] {
+      flex: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div><strong>GLB Morph Animation Viewer</strong></div>
+    <div>読み込み: <code id="fileLabel"></code></div>
+    <div class="row">
+      <button id="toggle">Pause</button>
+      <input id="scrub" type="range" min="0" max="1" step="0.001" value="0" />
+      <span id="progress">0.0%</span>
+    </div>
+    <div id="status">初期化中...</div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.184.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.184.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    const params = new URLSearchParams(location.search);
+    const glbPath = params.get('src') || '/models/skirt_mesh_sitting_animation.glb';
+    document.getElementById('fileLabel').textContent = glbPath;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#101827');
+
+    const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 100000);
+    camera.position.set(0, 0, 3800);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.2));
+    const light = new THREE.DirectionalLight(0xffffff, 2.0);
+    light.position.set(500, 1200, 900);
+    scene.add(light);
+
+    const status = document.getElementById('status');
+    const scrub = document.getElementById('scrub');
+    const progress = document.getElementById('progress');
+    const toggle = document.getElementById('toggle');
+    const clock = new THREE.Clock();
+    let mixer = null;
+    let clip = null;
+    let action = null;
+    let root = null;
+    let playing = true;
+
+    function fitCameraToObject(object) {
+      const box = new THREE.Box3().setFromObject(object);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const maxSize = Math.max(size.x, size.y, size.z);
+      const distance = maxSize / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) * 1.45;
+      camera.position.set(center.x, center.y, center.z + distance);
+      controls.target.copy(center);
+      controls.update();
+      camera.near = Math.max(0.1, distance / 1000);
+      camera.far = distance * 1000;
+      camera.updateProjectionMatrix();
+    }
+
+    function summarizeGlb(gltf) {
+      const meshes = [];
+      gltf.scene.traverse((object) => {
+        if (!object.isMesh) return;
+        meshes.push({
+          name: object.name || '(unnamed)',
+          vertices: object.geometry.getAttribute('position')?.count ?? 0,
+          morphTargets: object.morphTargetInfluences?.length ?? 0,
+        });
+        object.material = new THREE.MeshStandardMaterial({
+          color: '#7dd3fc',
+          side: THREE.DoubleSide,
+          roughness: 0.65,
+          metalness: 0.05,
+        });
+      });
+
+      const lines = [
+        `animations: ${gltf.animations.length}`,
+        ...gltf.animations.map((item, index) => (
+          `  [${index}] ${item.name || '(unnamed)'} duration=${item.duration.toFixed(3)} tracks=${item.tracks.length}`
+        )),
+        `meshes: ${meshes.length}`,
+        ...meshes.map((mesh) => (
+          `  ${mesh.name}: vertices=${mesh.vertices}, morphTargets=${mesh.morphTargets}`
+        )),
+      ];
+      status.textContent = lines.join('\n');
+    }
+
+    new GLTFLoader().load(
+      glbPath + (glbPath.includes('?') ? '&' : '?') + 'v=' + Date.now(),
+      (gltf) => {
+        root = gltf.scene;
+        scene.add(root);
+        summarizeGlb(gltf);
+        fitCameraToObject(root);
+
+        clip = gltf.animations.find((item) => item.tracks.some((track) => track.name.includes('morphTargetInfluences')))
+          || gltf.animations[0];
+
+        if (!clip) {
+          status.textContent += '\nweightsアニメーションが見つかりません。';
+          return;
+        }
+
+        mixer = new THREE.AnimationMixer(root);
+        action = mixer.clipAction(clip);
+        action.reset();
+        action.play();
+      },
+      undefined,
+      (error) => {
+        status.textContent = '読み込み失敗: ' + (error?.message || String(error));
+      }
+    );
+
+    toggle.addEventListener('click', () => {
+      playing = !playing;
+      toggle.textContent = playing ? 'Pause' : 'Play';
+    });
+
+    scrub.addEventListener('input', () => {
+      playing = false;
+      toggle.textContent = 'Play';
+      if (!mixer || !clip) return;
+      const t = Number(scrub.value);
+      mixer.setTime(t * clip.duration);
+      progress.textContent = (t * 100).toFixed(1) + '%';
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+      if (mixer && clip && playing) {
+        const t = (mixer.time + clock.getDelta()) % clip.duration;
+        mixer.setTime(t);
+        const normalized = t / clip.duration;
+        scrub.value = String(normalized);
+        progress.textContent = (normalized * 100).toFixed(1) + '%';
+      } else {
+        clock.getDelta();
+      }
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    animate();
+  </script>
+</body>
+</html>

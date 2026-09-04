@@ -1073,10 +1073,20 @@ function applyCustomMaterials(
 
       discovered.push({ id: meshId, name: meshName, current: meshType });
 
-      const nextMaterials = originalMaterials.map((sourceMaterial) => {
-        const materialType = inferMaterialCategory(sourceMaterial.name || '', meshName);
-        const category = materialType === 'default' ? meshType : materialType;
-        return createMaterial(mesh, sourceMaterial, category);
+      const storedMaterialCategories = Array.isArray(mesh.userData.clothSimMaterialCategories)
+        ? mesh.userData.clothSimMaterialCategories as ColorCategory[]
+        : [];
+      const materialCategories = originalMaterials.map((sourceMaterial, index) => {
+        const storedCategory = storedMaterialCategories[index];
+        if (storedCategory && storedCategory !== 'default') return storedCategory;
+
+        const materialType = inferMaterialCategory(sourceMaterial?.name || '', meshName);
+        return materialType === 'default' ? meshType : materialType;
+      });
+      mesh.userData.clothSimMaterialCategories = materialCategories;
+
+      const nextMaterials = originalMaterials.map((sourceMaterial, index) => {
+        return createMaterial(mesh, sourceMaterial, materialCategories[index]);
       });
       mesh.material = nextMaterials.length === 1 ? nextMaterials[0] : nextMaterials;
     }

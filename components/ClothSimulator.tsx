@@ -101,7 +101,6 @@ interface MeshColorMapping {
 type MeshType = 'clothing' | 'body' | 'default';
 
 const SAFE_SIT_CLIP_PROGRESS = 0.85; // 100%の座位ポーズはモデル上で体が不自然に折れ曲がるため85%程度までで止める
-const SEATED_HIP_LOCAL_Y_OFFSET = -10;
 function inferMeshType(
   meshName: string,
   parentName: string,
@@ -368,6 +367,18 @@ function collectLegCloseBones(root: THREE.Object3D): LegCloseBones {
     leftFoot: findBoneByNamePattern(root, [/^J_Bip_L_Foot$/i, /^mixamorigLeftFoot$/i, /^LeftFoot$/i, /left.*foot/i, /left.*ankle/i]),
     rightFoot: findBoneByNamePattern(root, [/^J_Bip_R_Foot$/i, /^mixamorigRightFoot$/i, /^RightFoot$/i, /right.*foot/i, /right.*ankle/i]),
   };
+}
+
+function getLowestFootLocalY(root: THREE.Object3D, bones: LegCloseBones): number | null {
+  const feet = [bones.leftFoot, bones.rightFoot].filter((foot): foot is THREE.Object3D => Boolean(foot));
+  if (feet.length === 0) return null;
+
+  const localYValues = feet.map((foot) => {
+    const worldPosition = foot.getWorldPosition(new THREE.Vector3());
+    return root.worldToLocal(worldPosition).y;
+  });
+
+  return Math.min(...localYValues);
 }
 
 function smoothstep01(value: number): number {
@@ -1140,6 +1151,11 @@ function SceneWithFBX({
   const seatedLegReferenceRef = useRef<SeatedLegReference | null>(null);
   const legAdductionCalibrationRef = useRef<LegAdductionCalibration | null>(null);
   const hipRestPositionRef = useRef<THREE.Vector3 | null>(null);
+  const rootMotionInterpolantRef = useRef<THREE.Interpolant | null>(null);
+  const rootMotionInitialYRef = useRef(0);
+  const rootMotionInitialZRef = useRef(0);
+  const standingFootLocalYRef = useRef<number | null>(null);
+  const modelRootRef = useRef<THREE.Group>(null);
   const TARGET_EPSILON = 1e-4;
 
   useEffect(() => {
@@ -1165,12 +1181,17 @@ function SceneWithFBX({
     (uiProgress: number) => {
       if (!mixer || !selectedClip || !cloned) return;
       const duration = selectedClip.duration || 1;
-      mixer.setTime(uiProgressToClipProgress(uiProgress) * duration);
+      const clipTime = uiProgressToClipProgress(uiProgress) * duration;
+      mixer.setTime(clipTime);
       mixer.update(0);
 
       if (legCloseBonesRef.current.hips && hipRestPositionRef.current) {
         legCloseBonesRef.current.hips.position.copy(hipRestPositionRef.current);
-        legCloseBonesRef.current.hips.position.y += SEATED_HIP_LOCAL_Y_OFFSET * smoothstep01(uiProgress);
+        const rootMotion = rootMotionInterpolantRef.current?.evaluate(clipTime);
+        if (rootMotion) {
+          legCloseBonesRef.current.hips.position.y += rootMotion[1] - rootMotionInitialYRef.current;
+          legCloseBonesRef.current.hips.position.z += rootMotion[2] - rootMotionInitialZRef.current;
+        }
       }
 
       // 立位時の腕基準ポーズを安定して維持しつつ立位区間だけ上腕を少し外側へ開いて
@@ -1190,6 +1211,16 @@ function SceneWithFBX({
         legAdductionCalibrationRef.current,
         uiProgress
       );
+
+      if (modelRootRef.current && standingFootLocalYRef.current !== null) {
+        cloned.updateMatrixWorld(true);
+        const currentFootLocalY = getLowestFootLocalY(cloned, legCloseBonesRef.current);
+        if (currentFootLocalY !== null) {
+          const worldScaleY = cloned.getWorldScale(new THREE.Vector3()).y;
+          modelRootRef.current.position.y = modelBasePosition[1] +
+            (standingFootLocalYRef.current - currentFootLocalY) * worldScaleY;
+        }
+      }
     },
     [cloned, mixer, selectedClip, uiProgressToClipProgress]
   );
@@ -1243,7 +1274,15 @@ function SceneWithFBX({
     armRestPoseRef.current = armBones;
     armSpreadBonesRef.current = collectArmSpreadBones(cloned);
     legCloseBonesRef.current = collectLegCloseBones(cloned);
+    standingFootLocalYRef.current = getLowestFootLocalY(cloned, legCloseBonesRef.current);
     hipRestPositionRef.current = legCloseBonesRef.current.hips?.position.clone() ?? null;
+    const sourceClip = fbx.animations?.find((candidate) => /mixamo.com|Take|take/i.test(candidate.name)) || fbx.animations?.[0];
+    const rootPositionTrack = sourceClip?.tracks.find((track) => track.name === 'egaken.position') as THREE.VectorKeyframeTrack | undefined;
+    rootMotionInterpolantRef.current = rootPositionTrack
+      ? rootPositionTrack.InterpolantFactoryMethodLinear(new Float32Array(3))
+      : null;
+    rootMotionInitialYRef.current = rootPositionTrack?.values[1] ?? 0;
+    rootMotionInitialZRef.current = rootPositionTrack?.values[2] ?? 0;
     legAdductionDebugCount = 0;
     legAdductionAxisRecoveryDebugCount = 0;
     legAdductionTraceCount = 0;
@@ -1315,6 +1354,10 @@ function SceneWithFBX({
       seatedLegReferenceRef.current = null;
       legAdductionCalibrationRef.current = null;
       hipRestPositionRef.current = null;
+      rootMotionInterpolantRef.current = null;
+      rootMotionInitialYRef.current = 0;
+      rootMotionInitialZRef.current = 0;
+      standingFootLocalYRef.current = null;
       legCloseBonesRef.current = {
         hips: null,
         leftThigh: null,
@@ -1409,7 +1452,7 @@ function SceneWithFBX({
   });
 
   return (
-    <group position={modelBasePosition}>
+    <group ref={modelRootRef} position={modelBasePosition}>
       {cloned && (
         <primitive
           object={cloned}

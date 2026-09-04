@@ -29,6 +29,12 @@ import torch.nn.functional as F
 #
 # 9次元:  [pose(3), point(3), body_motion(3)]
 # 12次元: [pose(3), point(3), body_position(3), body_motion(3)]
+#
+# モデルは「まず入力末尾3列のbody_motion(身体側の実変位)にそのまま追従し、
+# その上でDNNが学習した残差(布のたわみ等)を加える」skip接続構造。
+# body_motionと無関係な絶対変位を直接学習させると、身体側の変位が
+# スカート各頂点で大きく異なる場合に学習が不安定になり、過剰な変形や
+# 崩れた形状を出力しやすくなるため、この構造で安定させている。
 # ============================================================
 
 RANDOM_SEED = int(globals().get("DNN_RANDOM_SEED", 20260903))
@@ -59,7 +65,11 @@ if INPUT_FEATURES not in (9, 12):
         "DNN_INPUT_FEATURES は9または12にしてください。"
     )
 
-if "base_skirt_pc" not in globals() and os.path.isfile(BODY_CONTEXT_PATH):
+# Colabの%run -iはセルを再実行してもカーネルの変数(globals())が残り続ける。
+# 「まだ無ければ読み込む」だと、前回の実行(あるいは別のPKLに対する実行)で
+# 残った古いbase_skirt_pcを誤って使い回してしまうため、PKLが存在する限り
+# 常にそちらを正として読み直す。
+if os.path.isfile(BODY_CONTEXT_PATH):
     import pickle
 
     with open(BODY_CONTEXT_PATH, "rb") as file:
@@ -110,6 +120,38 @@ if num_points < 4 or num_faces < 1:
     raise ValueError("スカートの頂点数または面数が不足しています。")
 if np.min(base_skirt_faces) < 0 or np.max(base_skirt_faces) >= num_points:
     raise ValueError("base_skirt_facesに範囲外の頂点インデックスがあります。")
+
+# base_skirt_pcがColabカーネルに残っている別スケール・別ソースのメッシュだと、
+# 同じPKLのbody_motion(実測cm単位)と縮尺が食い違ったまま学習が進み、
+# 学習済みモデルの出力スケールごと破綻する。ここで両者の対角長を比較し、
+# 縮尺が一致しない場合はスケールを推測して補正せず、明確なエラーで停止する。
+if os.path.isfile(BODY_CONTEXT_PATH):
+    import pickle
+
+    with open(BODY_CONTEXT_PATH, "rb") as file:
+        scale_check_context = pickle.load(file)
+    if isinstance(scale_check_context, dict) and "skirt_base_vertices" in scale_check_context:
+        pkl_skirt_vertices = np.asarray(
+            scale_check_context["skirt_base_vertices"], dtype=np.float64
+        )
+        pkl_skirt_extent = float(np.linalg.norm(
+            pkl_skirt_vertices.max(axis=0) - pkl_skirt_vertices.min(axis=0)
+        ))
+        base_skirt_extent = float(np.linalg.norm(
+            base_skirt_pc.max(axis=0).astype(np.float64)
+            - base_skirt_pc.min(axis=0).astype(np.float64)
+        ))
+        if abs(base_skirt_extent - pkl_skirt_extent) > 0.2 * max(pkl_skirt_extent, 1.0e-8):
+            raise RuntimeError(
+                "base_skirt_pcの縮尺がbody_context PKLのskirt_base_verticesと"
+                "一致しません。\n"
+                f"base_skirt_pc対角長: {base_skirt_extent:.6f}, "
+                f"PKL skirt_base_vertices対角長: {pkl_skirt_extent:.6f}\n"
+                "base_skirt_pcがColabカーネルに残っている別スケール・別ソースの"
+                "メッシュの可能性があります。base_skirt_pc/base_skirt_facesの"
+                f"変数を削除してから、{BODY_CONTEXT_PATH} の"
+                "skirt_base_vertices/skirt_facesを使い直してください。"
+            )
 
 
 def fit_similarity(source: np.ndarray, target: np.ndarray):
@@ -172,7 +214,52 @@ def body_motion_from_context(context: dict) -> np.ndarray:
     return broadcast_body_motion(body_motion)
 
 
+def resolve_motion_from_context(context: dict) -> np.ndarray:
+    # "body_motion"(全SKIN頂点の平均変位)をそのままbroadcastすると、
+    # スカートの全頂点が同一の変位ベクトルになり、相対的な形状変化が
+    # 失われて剛体的に平行移動するだけになる。スカート頂点ごとに最近傍の
+    # Body/SKIN頂点を対応付けた"skirt_vertex_body_motion"(空間的に変化する
+    # 特徴量)が存在する場合はそちらを優先する。
+    if "skirt_vertex_body_motion" in context:
+        motion = np.asarray(context["skirt_vertex_body_motion"], dtype=np.float32)
+        if motion.ndim == 3 and motion.shape[1:] == (num_points, 3):
+            return motion
+        print(
+            "[warn] skirt_vertex_body_motionの形状が不正なため、"
+            "従来の平均body_motionにフォールバックします。"
+            f" 形状: {motion.shape}, 期待値: (フレーム数, {num_points}, 3)"
+        )
+    if "body_motion" in context:
+        return np.asarray(context["body_motion"], dtype=np.float32)
+    if {"body_base_vertices", "skinned_vertices"}.issubset(context):
+        return body_motion_from_context(context)
+    raise KeyError(
+        "身体特徴量にskirt_vertex_body_motion、body_motion、"
+        "body_base_vertices/skinned_verticesのいずれもありません。"
+    )
+
+
 def get_body_features() -> np.ndarray:
+    # Colabの%run -iはセルを再実行してもglobals()が残るため、DNN_BODY_MOTION等の
+    # 手動オーバーライドをこのPKL読み込みより優先すると、前回このスクリプトを
+    # 実行した際にget_body_features()自身が(誤って同名で)書き戻した古い値や、
+    # 別のPKLに対する古いオーバーライドを再利用してしまう。
+    # PKLファイルが存在する限り、常にそちらを正として最優先で使う。
+    if os.path.isfile(BODY_CONTEXT_PATH):
+        import pickle
+
+        with open(BODY_CONTEXT_PATH, "rb") as file:
+            context = pickle.load(file)
+        if not isinstance(context, dict):
+            raise TypeError("身体特徴量PKLの内容がdictではありません。")
+        motion = resolve_motion_from_context(context)
+        motion = broadcast_body_motion(motion)
+        print(f"身体特徴量の入力元: {BODY_CONTEXT_PATH}")
+        if INPUT_FEATURES == 9:
+            return motion
+        position = base_skirt_pc[None, :, :] + motion
+        return np.concatenate([position, motion], axis=2)
+
     direct = globals().get("DNN_BODY_CONTEXT_FEATURES", None)
     if direct is not None:
         features = np.asarray(direct, dtype=np.float32)
@@ -194,7 +281,7 @@ def get_body_features() -> np.ndarray:
     if context is not None:
         if not isinstance(context, dict):
             raise TypeError("DNN_BODY_CONTEXTはdictで指定してください。")
-        motion = np.asarray(context["body_motion"], dtype=np.float32)
+        motion = resolve_motion_from_context(context)
         motion = broadcast_body_motion(motion)
         if INPUT_FEATURES == 9:
             return motion
@@ -207,41 +294,6 @@ def get_body_features() -> np.ndarray:
 
     motion = globals().get("DNN_BODY_MOTION", None)
     if motion is None:
-        if os.path.isfile(BODY_CONTEXT_PATH):
-            import pickle
-
-            with open(BODY_CONTEXT_PATH, "rb") as file:
-                context = pickle.load(file)
-            if not isinstance(context, dict):
-                raise TypeError("身体特徴量PKLの内容がdictではありません。")
-            if "body_motion" in context:
-                motion = np.asarray(
-                    context["body_motion"],
-                    dtype=np.float32,
-                )
-            elif {
-                "body_base_vertices",
-                "skinned_vertices",
-            }.issubset(context):
-                motion = body_motion_from_context(context)
-            else:
-                raise KeyError(
-                    "身体特徴量PKLにbody_motionまたは"
-                    "body_base_vertices/skinned_verticesがありません。"
-                )
-            motion = broadcast_body_motion(motion)
-            if INPUT_FEATURES == 9:
-                print(
-                    "身体特徴量の入力元: "
-                    f"{BODY_CONTEXT_PATH}"
-                )
-                return motion
-            position = base_skirt_pc[None, :, :] + motion
-            print(
-                "身体特徴量の入力元: "
-                f"{BODY_CONTEXT_PATH}"
-            )
-            return np.concatenate([position, motion], axis=2)
         raise RuntimeError(
             "身体特徴量がありません。\n"
             "DNN_BODY_MOTION、DNN_BODY_CONTEXT、"
@@ -257,8 +309,15 @@ def get_body_features() -> np.ndarray:
 
 
 body_features = get_body_features()
-DNN_BODY_CONTEXT_FEATURES = body_features.copy()
-DNN_BODY_MOTION = (
+# 注意: DNN_BODY_CONTEXT_FEATURES/DNN_BODY_MOTIONという名前でここに書き戻すと、
+# それらは get_body_features() 自身が「手動オーバーライド」として最優先で
+# 読みに行く名前と衝突する。Colabの%run -iはセルを再実行してもglobals()が
+# 残るため、前回このスクリプトを実行した際の結果が次回の実行で誤って
+# 「手動オーバーライド」として再利用され、新しいPKLを再生成しても
+# 古い身体特徴量のまま学習し続けてしまう。そのためオーバーライド名とは
+# 別名で公開する。
+DNN_BODY_CONTEXT_FEATURES_RESOLVED = body_features.copy()
+DNN_BODY_MOTION_RESOLVED = (
     body_features[:, :, :3]
     if INPUT_FEATURES == 9
     else body_features[:, :, 3:6]
@@ -386,6 +445,38 @@ teacher_displacements = (
 ).astype(np.float32)
 teacher_displacements[0] = 0.0
 
+# resampled_bodyの末尾3チャンネルは常にmotion(9次元入力ならそのまま、
+# 12次元入力ならposition+motionのmotion側)。SkirtDeformationDNN.forward()は
+# 「motion_baseline(=motion) + eased*network(x)*output_scale」を出力するため、
+# 学習ターゲットは絶対変位teacher_displacementsのままでよい
+# (forward()内のskip接続が自動的にmotionを差し引いた分だけnetworkに学習させる)。
+# ここでresidual_displacements(=teacher-motion)を計算するのは、
+# 「networkが実際に学習すべき残差の大きさ」に output_scale を合わせるためだけ。
+# これをtarget_rows_allにもそのまま使うと、forward()が加算するmotionと
+# 二重に相殺され、学習が破綻する(推論時に出力が桁違いに爆発する)。
+resampled_motion = resampled_body[:, :, -3:]
+
+if target_source == "geometry_aware_synthetic_teacher":
+    # make_teacher()は身体の実変位と無関係な「相対的な布のたわみ」しか
+    # 表現していない。これをそのまま絶対教師にすると、skip接続で加算される
+    # motion_baseline(実際の身体の動き)を打ち消す方向にDNNが学習してしまい、
+    # 出力全体が「身体に追従せずほぼ動かない」小さな変位に収束してしまう
+    # (=見た目が座り込みに追従しない、ビクビクした程度の変化になる)。
+    # 教師データ自体に身体の実変位を主成分として組み込み、
+    # 「まず身体に追従し、その上にたわみを乗せる」形に一致させる。
+    teacher_displacements = teacher_displacements + resampled_motion
+
+# resampled_bodyの末尾3チャンネルは常にmotion(9次元入力ならそのまま、
+# 12次元入力ならposition+motionのmotion側)。SkirtDeformationDNN.forward()は
+# 「motion_baseline(=motion) + eased*network(x)*output_scale」を出力するため、
+# 学習ターゲットは絶対変位teacher_displacementsのままでよい
+# (forward()内のskip接続が自動的にmotionを差し引いた分だけnetworkに学習させる)。
+# ここでresidual_displacements(=teacher-motion)を計算するのは、
+# 「networkが実際に学習すべき残差の大きさ」に output_scale を合わせるためだけ。
+# これをtarget_rows_allにもそのまま使うと、forward()が加算するmotionと
+# 二重に相殺され、学習が破綻する(推論時に出力が桁違いに爆発する)。
+residual_displacements = (teacher_displacements - resampled_motion).astype(np.float32)
+
 pose_rows_all = []
 input_rows_all = []
 target_rows_all = []
@@ -425,9 +516,13 @@ validation_targets_np = all_targets[sample_validation_mask]
 input_center = np.mean(train_inputs_np, axis=0).astype(np.float32)
 input_scale = np.std(train_inputs_np, axis=0).astype(np.float32)
 input_scale = np.maximum(input_scale, np.float32(1.0e-6))
+# output_scaleは「DNNが学習すべき残差(襞の変形)」の大きさに合わせる。
+# body_motionという絶対変位そのままの大きさで正規化すると、残差(通常は
+# body_motionより小さい)に対してeased*output_scaleが過大な自由度を持ち、
+# 学習・外挿が不安定になる。
 output_scale = float(
     max(
-        np.max(np.linalg.norm(teacher_displacements, axis=2)),
+        np.max(np.linalg.norm(residual_displacements, axis=2)),
         1.0e-6,
     )
 )
@@ -465,13 +560,18 @@ class SkirtDeformationDNN(nn.Module):
         normalized_progress = torch.clamp(
             inputs[:, 1:2] / float(max_sit_angle), 0.0, 1.0
         )
-        output = self.network(normalized)
+        residual = self.network(normalized)
         eased = (
             normalized_progress
             * normalized_progress
             * (3.0 - 2.0 * normalized_progress)
         )
-        return eased * output * self.output_scale
+        # 入力の末尾3列は常にbody_motion(スカート頂点が追従すべき身体側の
+        # 実変位)。DNNの出力にそのまま加算するskip接続にすることで、
+        # 「まず身体の動きに追従し、その上にDNNが襞の変形(残差)を乗せる」
+        # 構造にする。無相関な入力を絶対座標へ直接学習させるより安定する。
+        motion_baseline = inputs[:, -3:]
+        return motion_baseline + eased * residual * self.output_scale
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

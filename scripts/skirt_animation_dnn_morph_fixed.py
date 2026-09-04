@@ -39,7 +39,11 @@ blend_path = str(globals().get(
 npz_path = os.path.join(output_dir, "skirt_animation_vertices.npz")
 blender_data_path = os.path.join(output_dir, "skirt_animation_vertices_for_blender.pkl")
 
-if "base_skirt_pc" not in globals() and os.path.isfile(body_context_path):
+# Colabの%run -iはセルを再実行してもカーネルの変数(globals())が残り続ける。
+# 「まだ無ければ読み込む」だと、前回の実行(あるいは別のPKLに対する実行)で
+# 残った古いbase_skirt_pcを誤って使い回してしまうため、PKLが存在する限り
+# 常にそちらを正として読み直す。
+if os.path.isfile(body_context_path):
     with open(body_context_path, "rb") as file:
         skirt_context = pickle.load(file)
     if isinstance(skirt_context, dict) and {
@@ -79,26 +83,48 @@ if input_features not in (9, 12):
 
 with open(body_context_path, "rb") as file:
     context = pickle.load(file)
-body_motion = np.asarray(context["body_motion"], dtype=np.float32)
-# optional per-vertex motion for diagnostics/scaling (frames, vertices, 3)
+# base_skirt_pc(Colabカーネルの既存変数、または上でこのpklから読み込んだもの)と
+# body_motion(このpklのskirt_vertex_body_motion/body_motion)が異なる縮尺・
+# 別ソースのメッシュだと、スケールを推測して/100等の補正をかけるその場しのぎの
+# 変換は「たまたま近い値」を作るだけで根本解決にならず、実際には数十万倍もの
+# 出力破綻を招く(スキップ接続がbody_motionをそのまま出力へ加算するため)。
+# ここではbase_vertices自身とこのpkl由来のskirt_base_verticesの対角長を比較し、
+# 縮尺が一致しない場合は推測変換をせずに明確なエラーで停止する。
+context_skirt_extent = float(np.linalg.norm(
+    np.asarray(context["skirt_base_vertices"], dtype=np.float64).max(axis=0)
+    - np.asarray(context["skirt_base_vertices"], dtype=np.float64).min(axis=0)
+))
+base_vertices_extent = float(np.linalg.norm(
+    base_vertices.max(axis=0).astype(np.float64) - base_vertices.min(axis=0).astype(np.float64)
+))
+if abs(base_vertices_extent - context_skirt_extent) > 0.2 * max(context_skirt_extent, 1.0e-8):
+    raise RuntimeError(
+        "base_skirt_pcの縮尺がbody_context PKLのskirt_base_verticesと一致しません。\n"
+        f"base_skirt_pc対角長: {base_vertices_extent:.6f}, "
+        f"PKL skirt_base_vertices対角長: {context_skirt_extent:.6f}\n"
+        "base_skirt_pcがColabカーネルに残っている別スケール・別ソースのメッシュの"
+        "可能性があります。base_skirt_pc/base_skirt_facesの変数を削除してから、"
+        f"{body_context_path} のskirt_base_vertices/skirt_facesを使い直してください。"
+    )
+# "body_motion"(全SKIN頂点の平均変位)を全スカート頂点にそのまま
+# broadcastすると空間的な変形が失われ、スカートが剛体的に平行移動する
+# だけになる。スカート頂点ごとに最近傍Body/SKIN頂点を対応付けた
+# "skirt_vertex_body_motion"(空間的に変化する特徴量)を優先して使う。
+if "skirt_vertex_body_motion" in context:
+    body_motion = np.asarray(context["skirt_vertex_body_motion"], dtype=np.float32)
+    if body_motion.ndim != 3 or body_motion.shape[1:] != (len(base_vertices), 3):
+        print(
+            "[warn] skirt_vertex_body_motionの形状が不正なため、"
+            "従来の平均body_motionにフォールバックします。"
+            f" 形状: {body_motion.shape}, 期待値: (フレーム数, {len(base_vertices)}, 3)"
+        )
+        body_motion = np.asarray(context["body_motion"], dtype=np.float32)
+else:
+    body_motion = np.asarray(context["body_motion"], dtype=np.float32)
+# optional per-vertex motion for diagnostics (frames, vertices, 3)
 body_motion_per_vertex = None
 if "body_motion_per_vertex" in context:
     body_motion_per_vertex = np.asarray(context["body_motion_per_vertex"], dtype=np.float32)
-    # diagnostic: detect unit mismatch (e.g., PKL in cm but base_vertices in m)
-    try:
-        per_vertex_norms = np.linalg.norm(body_motion_per_vertex, axis=2)
-        median_motion = float(np.median(per_vertex_norms))
-        base_extent_est = float(np.linalg.norm(base_skirt_pc.max(axis=0) - base_skirt_pc.min(axis=0)))
-        # If median per-vertex motion is much larger than base extent, assume units are cm -> meters
-        if median_motion > max(10.0, base_extent_est * 5.0):
-            print(
-                f"[diag] detected large body_motion scale: median_motion={median_motion:.6f}, "
-                f"base_extent={base_extent_est:.6f}. Applying /100 scale to body_motion (cm->m)."
-            )
-            body_motion = body_motion / 100.0
-            body_motion_per_vertex = body_motion_per_vertex / 100.0
-    except Exception:
-        pass
 if body_motion.ndim == 2 and body_motion.shape[1] == 3:
     body_motion = body_motion[:, None, :]
 if body_motion.ndim != 3 or body_motion.shape[2] != 3:

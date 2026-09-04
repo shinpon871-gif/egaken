@@ -230,6 +230,34 @@ per_vertex_motion = skinned_array - base_array[None, :, :]
 body_motion_preview = np.mean(per_vertex_motion, axis=1)
 motion_norms = np.linalg.norm(body_motion_preview, axis=1)
 per_vertex_norms_max = np.linalg.norm(per_vertex_motion, axis=2).max(axis=1)
+# 切り捨て後もsource_frame表示が元のサンプリング刻みと対応するよう、
+# 切り捨て前のframe_countを別名で保持しておく。
+original_frame_count = frame_count
+
+# body_motionが山型になり途中から戻ると、学習側はprogress(=フレームindex/
+# frame_count)と実際の座り込み量が単調対応すると仮定しているため対応が
+# 崩れ、推論時に座りすぎた後に立ち上がる方向へ戻るなど異常な結果になる。
+# ピーク(最大変位)以降の減少区間は切り捨てて単調な区間だけを採用する。
+peak_index = int(np.argmax(motion_norms))
+if peak_index < frame_count - 1:
+    print(
+        f"[diag] body_motion norm がidx={peak_index:03d}でピークに達した後"
+        "減少しています。以降のフレームを切り捨てます "
+        f"(採用フレーム数: {peak_index + 1}/{frame_count})。"
+    )
+    skinned_vertices = skinned_vertices[: peak_index + 1]
+    skinned_array = skinned_array[: peak_index + 1]
+    per_vertex_motion = per_vertex_motion[: peak_index + 1]
+    body_motion_preview = body_motion_preview[: peak_index + 1]
+    motion_norms = motion_norms[: peak_index + 1]
+    per_vertex_norms_max = per_vertex_norms_max[: peak_index + 1]
+    frame_count = peak_index + 1
+if frame_count < 2:
+    raise RuntimeError(
+        "body_motionが最初のフレームでピークになり単調な区間がありません。"
+        "アニメーションまたはprogress_limitを見直してください。"
+    )
+
 print(
     f"[diag] body_motion mean-norm: min={motion_norms.min():.6f}, "
     f"mean={motion_norms.mean():.6f}, max={motion_norms.max():.6f}"
@@ -252,7 +280,10 @@ sample_indices = sorted({
 })
 print("[diag] body_motion norm curve (index: progress%, source_frame, norm):")
 for sample_index in sample_indices:
-    sample_progress = sample_index / float(frame_count - 1)
+    # progress/source_frameは生成時と同じ分母(original_frame_count)で
+    # 計算しないと、切り捨て後の表示上のsource_frameが実際に評価した
+    # フレームとズレてしまう。
+    sample_progress = sample_index / float(original_frame_count - 1)
     sample_body_progress = max(0.0, min(1.0, sample_progress)) * progress_limit
     sample_source_frame = animation_start + (
         animation_end - animation_start
@@ -263,6 +294,48 @@ for sample_index in sample_indices:
         f"norm={motion_norms[sample_index]:.6f}"
     )
 
+# body_motion(全SKIN頂点の平均変位)を全スカート頂点にそのままbroadcastすると、
+# スカートの全頂点が同一の変位ベクトルを受け取ることになり、スカート形状の
+# 相対的な変形(前後左右で異なる沈み込み方)が一切表現できず、スカート全体が
+# 剛体のようにただ下へ平行移動するだけの不自然なアニメーションになる。
+# これを避けるため、スカート各頂点に近いBody/SKIN頂点を対応付け、
+# その頂点の変位系列をスカート頂点ごとの身体特徴量として個別に保存する。
+#
+# ただし「最も近い1頂点だけ」を対応付ける方式(最近傍法)は、Body/SKINの
+# 頂点密度・三角形分割がスカートと異なるため、隣接するスカート頂点同士が
+# 全く異なるBody頂点にスナップされることがある。これにより変位場が
+# 空間的に不連続(ノイズ状)になり、DNNの出力もその不連続さを引き継いで
+# スカート形状がギザギザに尖った/つぶれた異常な見た目になる。
+# そこで近傍K点の逆距離二乗重み付き平均を取り、滑らかに変化する
+# 変位場を作る。
+skirt_base_array = np.asarray(skirt_base_vertices, dtype=np.float64)
+distances_squared = np.sum(
+    (skirt_base_array[:, None, :] - base_array[None, :, :]) ** 2,
+    axis=2,
+)
+neighbor_count = min(8, base_array.shape[0])
+neighbor_indices = np.argpartition(
+    distances_squared, neighbor_count - 1, axis=1
+)[:, :neighbor_count]
+neighbor_distances_squared = np.take_along_axis(
+    distances_squared, neighbor_indices, axis=1
+)
+neighbor_weights = 1.0 / (neighbor_distances_squared + 1.0e-6)
+neighbor_weights /= np.sum(neighbor_weights, axis=1, keepdims=True)
+# (frames, skirt_vertices, neighbor_count, 3): 近傍Body/SKIN頂点ごとの変位
+neighbor_motion = per_vertex_motion[:, neighbor_indices, :]
+# (frames, skirt_vertices, 3): 逆距離二乗重み付き平均による滑らかな変位場
+skirt_vertex_body_motion = np.sum(
+    neighbor_motion * neighbor_weights[None, :, :, None],
+    axis=2,
+)
+nearest_body_indices = neighbor_indices[:, 0]
+print(
+    "[diag] skirt_vertex_body_motion: shape="
+    f"{skirt_vertex_body_motion.shape}, neighbor_count={neighbor_count}, "
+    f"unique nearest body vertices={len(set(nearest_body_indices.tolist()))}"
+)
+
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 with open(output_path, "wb") as file:
     pickle.dump(
@@ -271,9 +344,16 @@ with open(output_path, "wb") as file:
             "body_vertex_indices": body_vertex_indices,
             "skinned_vertices": skinned_vertices,
             # 保存は従来互換のフレームごとの平均変位 (frames, 3)
+            # 注意: 空間的な変化が失われるため、学習時は
+            # skirt_vertex_body_motionが優先して使われる。
             "body_motion": body_motion_preview.tolist(),
             # 追加: フレーム×頂点の生の変位データ (frames, vertices, 3)
             "body_motion_per_vertex": per_vertex_motion.tolist(),
+            # 追加: スカート頂点ごとに近傍Body/SKIN頂点を逆距離二乗重み付き
+            # 平均した変位 (frames, skirt_vertices, 3)。単純な最近傍法と違い
+            # 空間的に滑らかで、スカートの空間的な変形を学習可能にする。
+            "skirt_vertex_body_motion": skirt_vertex_body_motion.tolist(),
+            "skirt_vertex_nearest_body_index": nearest_body_indices.tolist(),
             "skirt_base_vertices": skirt_base_vertices,
             "skirt_faces": skirt_faces,
             "skirt_vertex_indices": skirt_vertex_indices,

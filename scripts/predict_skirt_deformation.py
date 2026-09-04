@@ -31,7 +31,11 @@ OUTPUT_PATH = str(
     )
 )
 
-if "base_skirt_pc" not in globals() and os.path.isfile(BODY_CONTEXT_PATH):
+# Colabの%run -iはセルを再実行してもカーネルの変数(globals())が残り続ける。
+# 「まだ無ければ読み込む」だと、前回の実行(あるいは別のPKLに対する実行)で
+# 残った古いbase_skirt_pcを誤って使い回してしまうため、PKLが存在する限り
+# 常にそちらを正として読み直す。
+if os.path.isfile(BODY_CONTEXT_PATH):
     with open(BODY_CONTEXT_PATH, "rb") as file:
         skirt_context = pickle.load(file)
     if isinstance(skirt_context, dict) and "skirt_base_vertices" in skirt_context:
@@ -53,6 +57,33 @@ if base_vertices.ndim != 2 or base_vertices.shape[1] != 3:
         "base_skirt_pcは(頂点数, 3)で指定してください。"
     )
 num_points = int(base_vertices.shape[0])
+
+# base_skirt_pcがColabカーネルに残っている別スケール・別ソースのメッシュだと、
+# 同じPKLのbody_motion(実測cm単位)と縮尺が食い違ったままDNNへ入力される。
+# スケールを推測して補正せず、縮尺不一致を明確なエラーで検出する。
+if os.path.isfile(BODY_CONTEXT_PATH):
+    with open(BODY_CONTEXT_PATH, "rb") as file:
+        scale_check_context = pickle.load(file)
+    if isinstance(scale_check_context, dict) and "skirt_base_vertices" in scale_check_context:
+        pkl_skirt_vertices = np.asarray(
+            scale_check_context["skirt_base_vertices"], dtype=np.float64
+        )
+        pkl_skirt_extent = float(np.linalg.norm(
+            pkl_skirt_vertices.max(axis=0) - pkl_skirt_vertices.min(axis=0)
+        ))
+        base_skirt_extent = float(np.linalg.norm(
+            base_vertices.max(axis=0) - base_vertices.min(axis=0)
+        ))
+        if abs(base_skirt_extent - pkl_skirt_extent) > 0.2 * max(pkl_skirt_extent, 1.0e-8):
+            raise RuntimeError(
+                "base_skirt_pcの縮尺がbody_context PKLのskirt_base_verticesと"
+                "一致しません。\n"
+                f"base_skirt_pc対角長: {base_skirt_extent:.6f}, "
+                f"PKL skirt_base_vertices対角長: {pkl_skirt_extent:.6f}\n"
+                "base_skirt_pcがColabカーネルに残っている別スケール・別ソースの"
+                f"メッシュの可能性があります。base_skirt_pcの変数を削除してから、"
+                f"{BODY_CONTEXT_PATH} のskirt_base_verticesを使い直してください。"
+            )
 
 
 def model_input_count(model_module):
@@ -109,12 +140,15 @@ def broadcast_body_motion(motion):
 
 
 def load_body_motion():
-    direct = globals().get("DNN_BODY_MOTION", None)
-    if direct is not None:
-        motion = np.asarray(direct, dtype=np.float64)
-        return broadcast_body_motion(motion)
-
+    # Colabの%run -iはセルを再実行してもglobals()が残るため、DNN_BODY_MOTIONの
+    # 手動オーバーライドをPKL読み込みより優先すると、train_skirt_sitting_dnn.py
+    # 等の前回実行で残った古い値を誤って使い回してしまう。
+    # PKLファイルが存在する限り、常にそちらを正として最優先で使う。
     if not os.path.isfile(BODY_CONTEXT_PATH):
+        direct = globals().get("DNN_BODY_MOTION", None)
+        if direct is not None:
+            motion = np.asarray(direct, dtype=np.float64)
+            return broadcast_body_motion(motion)
         raise FileNotFoundError(
             "身体特徴量PKLがありません: " + BODY_CONTEXT_PATH
         )
@@ -123,9 +157,23 @@ def load_body_motion():
     if not isinstance(context, dict):
         raise TypeError("身体特徴量PKLの内容がdictではありません。")
 
-    if "body_motion" in context:
+    if "skirt_vertex_body_motion" in context:
+        motion = np.asarray(context["skirt_vertex_body_motion"], dtype=np.float64)
+        if motion.ndim != 3 or motion.shape[1:] != (num_points, 3):
+            print(
+                "[warn] skirt_vertex_body_motionの形状が不正なため、"
+                "従来の平均body_motionにフォールバックします。"
+                f" 形状: {motion.shape}, 期待値: (フレーム数, {num_points}, 3)"
+            )
+            motion = None
+    else:
+        motion = None
+    # "body_motion"(全SKIN頂点の平均変位)を全スカート頂点にそのまま
+    # broadcastすると空間的な変形が失われ、剛体的な平行移動になる。
+    # スカート頂点ごとの変位を持つskirt_vertex_body_motionを優先する。
+    if motion is None and "body_motion" in context:
         motion = np.asarray(context["body_motion"], dtype=np.float64)
-    elif {"body_base_vertices", "skinned_vertices"}.issubset(context):
+    elif motion is None and {"body_base_vertices", "skinned_vertices"}.issubset(context):
         body_base = np.asarray(context["body_base_vertices"], dtype=np.float64)
         skinned = np.asarray(context["skinned_vertices"], dtype=np.float64)
         if body_base.ndim != 2 or body_base.shape[1] != 3:
@@ -133,7 +181,7 @@ def load_body_motion():
         if skinned.ndim != 3 or skinned.shape[1:] != body_base.shape:
             raise ValueError("PKLのskinned_verticesの形状が一致しません。")
         motion = np.mean(skinned, axis=1) - np.mean(body_base, axis=0)
-    else:
+    elif motion is None:
         raise KeyError(
             "PKLにbody_motionまたはbody_base_vertices/skinned_verticesがありません。"
         )

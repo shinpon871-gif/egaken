@@ -6,35 +6,6 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, useFBX } from '@react-three/drei';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils';
 
-// ボーン構造診断用
-function dumpBoneStructure(root: THREE.Object3D, label: string): void {
-  const bones: Array<{ name: string; depth: number }> = [];
-  root.traverse((obj, depth = 0) => {
-    const bone = obj as THREE.Bone;
-    if (bone.isBone && bone.name) {
-      bones.push({ name: bone.name, depth: 0 });
-    }
-  });
-
-  let hierarchy = '';
-  root.traverse((obj) => {
-    const bone = obj as THREE.Bone;
-    if (!bone.isBone || !bone.name) return;
-
-    let depth = 0;
-    let p = bone.parent;
-    while (p && p !== root) {
-      depth += 1;
-      p = p.parent;
-    }
-
-    hierarchy += '  '.repeat(depth) + bone.name + '\n';
-  });
-
-  console.log(`\n=== ${label} ===\nTotal bones: ${bones.length}\n${hierarchy}`);
-}
-
-
 const SUPPRESSED_CONSOLE_PATTERNS = [
   'THREE.Clock: This module has been deprecated. Please use THREE.Timer instead.',
   'THREE.WebGLShadowMap: PCFSoftShadowMap has been deprecated. Using PCFShadowMap instead.',
@@ -130,6 +101,7 @@ interface MeshColorMapping {
 type MeshType = 'clothing' | 'body' | 'default';
 
 const SAFE_SIT_CLIP_PROGRESS = 0.85; // 100%の座位ポーズはモデル上で体が不自然に折れ曲がるため85%程度までで止める
+const SEATED_HIP_LOCAL_Y_OFFSET = -10;
 function inferMeshType(
   meshName: string,
   parentName: string,
@@ -163,7 +135,7 @@ function inferMeshType(
 }
 
 function isArmPoseBoneName(name: string): boolean {
-  return /mixamorig(left|right)(arm|forearm|hand)|left(upper)?arm|right(upper)?arm|leftforearm|rightforearm|lefthand|righthand/i.test(name);
+  return /mixamorig(left|right)(arm|forearm|hand)|j_bip_[lr]_(upperarm|lowerarm|hand)|left(upper)?arm|right(upper)?arm|leftforearm|rightforearm|lefthand|righthand/i.test(name);
 }
 
 type ArmSpreadBones = {
@@ -378,23 +350,23 @@ function findBoneByNamePattern(root: THREE.Object3D, patterns: RegExp[]): THREE.
 
 function collectArmSpreadBones(root: THREE.Object3D): ArmSpreadBones {
   return {
-    hips: findBoneByNamePattern(root, [/^mixamorigHips$/i, /^Hips$/i, /pelvis/i]),
-    leftUpperArm: findBoneByNamePattern(root, [/^mixamorigLeftArm$/i, /^LeftArm$/i, /left.*upper.*arm/i, /left.*arm/i]),
-    rightUpperArm: findBoneByNamePattern(root, [/^mixamorigRightArm$/i, /^RightArm$/i, /right.*upper.*arm/i, /right.*arm/i]),
-    leftForearm: findBoneByNamePattern(root, [/^mixamorigLeftForeArm$/i, /^LeftForeArm$/i, /left.*forearm/i]),
-    rightForearm: findBoneByNamePattern(root, [/^mixamorigRightForeArm$/i, /^RightForeArm$/i, /right.*forearm/i]),
+    hips: findBoneByNamePattern(root, [/^J_Bip_C_Hips$/i, /^mixamorigHips$/i, /^Hips$/i, /pelvis/i]),
+    leftUpperArm: findBoneByNamePattern(root, [/^J_Bip_L_UpperArm$/i, /^mixamorigLeftArm$/i, /^LeftArm$/i, /left.*upper.*arm/i, /left.*arm/i]),
+    rightUpperArm: findBoneByNamePattern(root, [/^J_Bip_R_UpperArm$/i, /^mixamorigRightArm$/i, /^RightArm$/i, /right.*upper.*arm/i, /right.*arm/i]),
+    leftForearm: findBoneByNamePattern(root, [/^J_Bip_L_LowerArm$/i, /^mixamorigLeftForeArm$/i, /^LeftForeArm$/i, /left.*forearm/i]),
+    rightForearm: findBoneByNamePattern(root, [/^J_Bip_R_LowerArm$/i, /^mixamorigRightForeArm$/i, /^RightForeArm$/i, /right.*forearm/i]),
   };
 }
 
 function collectLegCloseBones(root: THREE.Object3D): LegCloseBones {
   return {
-    hips: findBoneByNamePattern(root, [/^mixamorigHips$/i, /^Hips$/i, /pelvis/i]),
-    leftThigh: findBoneByNamePattern(root, [/^mixamorigLeftUpLeg$/i, /^LeftUpLeg$/i, /left.*up.*leg/i, /left.*thigh/i]),
-    rightThigh: findBoneByNamePattern(root, [/^mixamorigRightUpLeg$/i, /^RightUpLeg$/i, /right.*up.*leg/i, /right.*thigh/i]),
-    leftKnee: findBoneByNamePattern(root, [/^mixamorigLeftLeg$/i, /^LeftLeg$/i, /left(?!.*up).*leg/i, /left.*knee/i]),
-    rightKnee: findBoneByNamePattern(root, [/^mixamorigRightLeg$/i, /^RightLeg$/i, /right(?!.*up).*leg/i, /right.*knee/i]),
-    leftFoot: findBoneByNamePattern(root, [/^mixamorigLeftFoot$/i, /^LeftFoot$/i, /left.*foot/i, /left.*ankle/i]),
-    rightFoot: findBoneByNamePattern(root, [/^mixamorigRightFoot$/i, /^RightFoot$/i, /right.*foot/i, /right.*ankle/i]),
+    hips: findBoneByNamePattern(root, [/^J_Bip_C_Hips$/i, /^mixamorigHips$/i, /^Hips$/i, /pelvis/i]),
+    leftThigh: findBoneByNamePattern(root, [/^J_Bip_L_UpperLeg$/i, /^mixamorigLeftUpLeg$/i, /^LeftUpLeg$/i, /left.*up.*leg/i, /left.*thigh/i]),
+    rightThigh: findBoneByNamePattern(root, [/^J_Bip_R_UpperLeg$/i, /^mixamorigRightUpLeg$/i, /^RightUpLeg$/i, /right.*up.*leg/i, /right.*thigh/i]),
+    leftKnee: findBoneByNamePattern(root, [/^J_Bip_L_LowerLeg$/i, /^mixamorigLeftLeg$/i, /^LeftLeg$/i, /left(?!.*up).*leg/i, /left.*knee/i]),
+    rightKnee: findBoneByNamePattern(root, [/^J_Bip_R_LowerLeg$/i, /^mixamorigRightLeg$/i, /^RightLeg$/i, /right(?!.*up).*leg/i, /right.*knee/i]),
+    leftFoot: findBoneByNamePattern(root, [/^J_Bip_L_Foot$/i, /^mixamorigLeftFoot$/i, /^LeftFoot$/i, /left.*foot/i, /left.*ankle/i]),
+    rightFoot: findBoneByNamePattern(root, [/^J_Bip_R_Foot$/i, /^mixamorigRightFoot$/i, /^RightFoot$/i, /right.*foot/i, /right.*ankle/i]),
   };
 }
 
@@ -1050,6 +1022,11 @@ function applyCustomMaterials(
     }
 
     mesh.material = newMat;
+
+    if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
+      // Skinned vertices can move outside the FBX bind-pose bounds while posing.
+      mesh.frustumCulled = false;
+    }
   };
   
   const discovered: { id: string; name: string; current: MeshType }[] = [];
@@ -1074,8 +1051,10 @@ function applyCustomMaterials(
         parentName,
         matName,
         texName,
-        customMapping[meshId] ?? customMapping[meshName]
+        customMapping[meshId] ?? customMapping[meshName] ?? mesh.userData.clothSimMeshType
       );
+
+      mesh.userData.clothSimMeshType = type;
 
       discovered.push({ id: meshId, name: meshName, current: type });
 
@@ -1130,15 +1109,6 @@ function SceneWithFBX({
   }, [SIT_CLIP_PROGRESS]);
 
   const fbx = useFBX(fbxPath) as THREE.Group & { animations?: THREE.AnimationClip[] };
-  const animationFbx = useFBX('/models/StandToSit_model.fbx') as THREE.Group & { animations?: THREE.AnimationClip[] };
-  
-  // ボーン構造を診断出力
-  useEffect(() => {
-    if (fbx && animationFbx) {
-      dumpBoneStructure(fbx, 'StandToSit_model.fbx (Model)');
-      dumpBoneStructure(animationFbx, 'StandToSit_model.fbx (Animation)');
-    }
-  }, [fbx, animationFbx]);
   
   // スケルトンのクローンを作成
   const cloned = useMemo(() => {
@@ -1169,6 +1139,7 @@ function SceneWithFBX({
   });
   const seatedLegReferenceRef = useRef<SeatedLegReference | null>(null);
   const legAdductionCalibrationRef = useRef<LegAdductionCalibration | null>(null);
+  const hipRestPositionRef = useRef<THREE.Vector3 | null>(null);
   const TARGET_EPSILON = 1e-4;
 
   useEffect(() => {
@@ -1185,8 +1156,10 @@ function SceneWithFBX({
   const selectedClip = useMemo(() => {
     if (!fbx?.animations || fbx.animations.length === 0) return null;
     // 一般的なテイク名を含むクリップを優先して探索
-    return fbx.animations.find((clip) => /mixamo.com|Take|take/i.test(clip.name)) || fbx.animations[0];
-  }, [fbx]);
+    const clip = fbx.animations.find((candidate) => /mixamo.com|Take|take/i.test(candidate.name)) || fbx.animations[0];
+    const renderTracks = clip.tracks.filter((track) => !/^egaken\.(position|quaternion|scale)$/.test(track.name));
+    return new THREE.AnimationClip(`${clip.name}_renderable`, clip.duration, renderTracks);
+  }, [fbx, fbxPath]);
 
   const applyPoseAtProgress = useCallback(
     (uiProgress: number) => {
@@ -1194,6 +1167,11 @@ function SceneWithFBX({
       const duration = selectedClip.duration || 1;
       mixer.setTime(uiProgressToClipProgress(uiProgress) * duration);
       mixer.update(0);
+
+      if (legCloseBonesRef.current.hips && hipRestPositionRef.current) {
+        legCloseBonesRef.current.hips.position.copy(hipRestPositionRef.current);
+        legCloseBonesRef.current.hips.position.y += SEATED_HIP_LOCAL_Y_OFFSET * smoothstep01(uiProgress);
+      }
 
       // 立位時の腕基準ポーズを安定して維持しつつ立位区間だけ上腕を少し外側へ開いて
       // 手が衣装へ食い込まないようにする
@@ -1265,6 +1243,7 @@ function SceneWithFBX({
     armRestPoseRef.current = armBones;
     armSpreadBonesRef.current = collectArmSpreadBones(cloned);
     legCloseBonesRef.current = collectLegCloseBones(cloned);
+    hipRestPositionRef.current = legCloseBonesRef.current.hips?.position.clone() ?? null;
     legAdductionDebugCount = 0;
     legAdductionAxisRecoveryDebugCount = 0;
     legAdductionTraceCount = 0;
@@ -1335,6 +1314,7 @@ function SceneWithFBX({
       };
       seatedLegReferenceRef.current = null;
       legAdductionCalibrationRef.current = null;
+      hipRestPositionRef.current = null;
       legCloseBonesRef.current = {
         hips: null,
         leftThigh: null,
@@ -1382,7 +1362,7 @@ function SceneWithFBX({
     const offsetY = -centerY * scale;
 
     return { objectScale: scale, modelOffsetY: offsetY };
-  }, [cloned, camera, modelBasePosition]);
+  }, [cloned, camera, fbxPath, modelBasePosition]);
 
   // 【原因解決②】ボタン操作およびスライダーによるポーズ変更をボーンへリアルタイム反映
   // 目標到達後は姿勢値を固定し勝手に戻らないようにする
@@ -1454,7 +1434,7 @@ export default function ClothSimulator() {
   const [clothingIndex, setClothingIndex] = useState(2);
 
   const modelBasePosition: [number, number, number] = [0, 0, 0];
-  const fbxPath = '/models/StandToSit.fbx';
+  const fbxPath = '/models/StandToSit_model.fbx';
 
   // 服のカラーパレット
   const clothingPalette = ['#000000', '#ef4444', '#7dd3fc', '#facc15', '#ffffff'];
@@ -1469,6 +1449,7 @@ export default function ClothSimulator() {
   }, [skinTone, skinLight, skinDark]);
 
   const clothingColorHex = clothingPalette[Math.max(0, Math.min(clothingIndex, clothingPalette.length - 1))];
+  const customMapping = useMemo<MeshColorMapping>(() => ({}), []);
 
   // メッシュ検出コールバックは現状UI未使用のため空関数とする
   const handleDiscoverMeshes = useCallback(() => {}, []);
@@ -1513,7 +1494,7 @@ export default function ClothSimulator() {
           showSkirtOnly={showSkirtOnly}
           playTarget={playTarget}
           onFinished={() => setPlayTarget(null)}
-          customMapping={{}}
+          customMapping={customMapping}
           clothingColorHex={clothingColorHex}
           skinColorHex={skinColorHex}
           onDiscoverMeshes={handleDiscoverMeshes}

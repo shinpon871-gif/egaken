@@ -13,7 +13,7 @@ import torch.nn.functional as F
 # 1. base_skirt_pc と base_skirt_faces を同じColabカーネルで作成する。
 # 2. 身体特徴量を DNN_BODY_MOTION または DNN_BODY_CONTEXT に用意する。
 #    DNN_BODY_MOTION: (フレーム数, 頂点数, 3)
-#      base_skirt_pc と同じ座標系での、立位d026からの身体頂点差分。
+#      base_skirt_pc と同じ座標系での、立位Body/SKINからの身体頂点差分。
 #    DNN_BODY_CONTEXT: dict形式の場合は次のどちらか。
 #      {"body_motion": ndarray[F, N, 3]}
 #      {"body_position": ndarray[F, N, 3],
@@ -58,6 +58,18 @@ if INPUT_FEATURES not in (9, 12):
     raise ValueError(
         "DNN_INPUT_FEATURES は9または12にしてください。"
     )
+
+if "base_skirt_pc" not in globals() and os.path.isfile(BODY_CONTEXT_PATH):
+    import pickle
+
+    with open(BODY_CONTEXT_PATH, "rb") as file:
+        skirt_context = pickle.load(file)
+    if isinstance(skirt_context, dict) and {
+        "skirt_base_vertices",
+        "skirt_faces",
+    }.issubset(skirt_context):
+        base_skirt_pc = np.asarray(skirt_context["skirt_base_vertices"], dtype=np.float32)
+        base_skirt_faces = np.asarray(skirt_context["skirt_faces"], dtype=np.int64)
 
 random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
@@ -147,31 +159,16 @@ def broadcast_body_motion(motion: np.ndarray) -> np.ndarray:
     ).copy()
 
 
-def convert_body_motion_to_garment_space(
-    body_motion: np.ndarray,
-    body_base: np.ndarray,
-) -> np.ndarray:
-    body_motion = np.asarray(body_motion, dtype=np.float64)
-    body_base = np.asarray(body_base, dtype=np.float64)
-    body_extent = np.ptp(body_base, axis=0)
-    garment_extent = np.ptp(base_skirt_pc.astype(np.float64), axis=0)
-    scale = garment_extent / np.maximum(body_extent, 1.0e-8)
-    converted = body_motion * scale
-    return converted.astype(np.float32)
-
-
 def body_motion_from_context(context: dict) -> np.ndarray:
-    d026 = np.asarray(context["d026_vertices"], dtype=np.float64)
+    # body_base_verticesとbase_skirt_pcは同じBodyメッシュ・同じ座標系から
+    # 抽出されるため、軸ごとの範囲比によるスケール変換は不要かつ有害。
+    body_base = np.asarray(context["body_base_vertices"], dtype=np.float64)
     skinned = np.asarray(context["skinned_vertices"], dtype=np.float64)
-    if d026.ndim != 2 or d026.shape[1] != 3:
-        raise ValueError("身体PKLのd026_verticesの形状が不正です。")
-    if skinned.ndim != 3 or skinned.shape[1:] != d026.shape:
+    if body_base.ndim != 2 or body_base.shape[1] != 3:
+        raise ValueError("身体PKLのbody_base_verticesの形状が不正です。")
+    if skinned.ndim != 3 or skinned.shape[1:] != body_base.shape:
         raise ValueError("身体PKLのskinned_verticesの形状が不正です。")
-    body_motion = np.mean(skinned, axis=1) - np.mean(d026, axis=0)
-    body_motion = convert_body_motion_to_garment_space(
-        body_motion,
-        d026,
-    )
+    body_motion = (np.mean(skinned, axis=1) - np.mean(body_base, axis=0)).astype(np.float32)
     return broadcast_body_motion(body_motion)
 
 
@@ -179,6 +176,8 @@ def get_body_features() -> np.ndarray:
     direct = globals().get("DNN_BODY_CONTEXT_FEATURES", None)
     if direct is not None:
         features = np.asarray(direct, dtype=np.float32)
+        # Add this line to broadcast the motion if its shape is (frames, 3)
+        features = broadcast_body_motion(features)
         expected_channels = 3 if INPUT_FEATURES == 9 else 6
         if features.ndim != 3 or features.shape[1:] != (
             num_points,
@@ -220,21 +219,17 @@ def get_body_features() -> np.ndarray:
                     context["body_motion"],
                     dtype=np.float32,
                 )
-                if "d026_vertices" in context:
-                    motion = convert_body_motion_to_garment_space(
-                        motion,
-                        context["d026_vertices"],
-                    )
             elif {
-                "d026_vertices",
+                "body_base_vertices",
                 "skinned_vertices",
             }.issubset(context):
                 motion = body_motion_from_context(context)
             else:
                 raise KeyError(
                     "身体特徴量PKLにbody_motionまたは"
-                    "d026_vertices/skinned_verticesがありません。"
+                    "body_base_vertices/skinned_verticesがありません。"
                 )
+            motion = broadcast_body_motion(motion)
             if INPUT_FEATURES == 9:
                 print(
                     "身体特徴量の入力元: "
@@ -254,7 +249,6 @@ def get_body_features() -> np.ndarray:
             f"次のPKLを先に生成してください: {BODY_CONTEXT_PATH}\n"
             "Colabではcreate_skirt_body_context.pyを実行してください。"
         )
-    motion = broadcast_body_motion(motion)
     motion = broadcast_body_motion(motion)
     if INPUT_FEATURES == 9:
         return motion

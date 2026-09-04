@@ -31,6 +31,12 @@ OUTPUT_PATH = str(
     )
 )
 
+if "base_skirt_pc" not in globals() and os.path.isfile(BODY_CONTEXT_PATH):
+    with open(BODY_CONTEXT_PATH, "rb") as file:
+        skirt_context = pickle.load(file)
+    if isinstance(skirt_context, dict) and "skirt_base_vertices" in skirt_context:
+        base_skirt_pc = np.asarray(skirt_context["skirt_base_vertices"], dtype=np.float64)
+
 if "model" not in globals():
     raise RuntimeError(
         "学習済みmodelがありません。先にtrain_skirt_sitting_dnn.pyを実行してください。"
@@ -102,15 +108,6 @@ def broadcast_body_motion(motion):
     ).copy()
 
 
-def convert_body_motion_to_garment_space(body_motion, body_base):
-    body_motion = np.asarray(body_motion, dtype=np.float64)
-    body_base = np.asarray(body_base, dtype=np.float64)
-    body_extent = np.ptp(body_base, axis=0)
-    garment_extent = np.ptp(base_vertices, axis=0)
-    scale = garment_extent / np.maximum(body_extent, 1.0e-8)
-    return (body_motion * scale).astype(np.float64)
-
-
 def load_body_motion():
     direct = globals().get("DNN_BODY_MOTION", None)
     if direct is not None:
@@ -128,21 +125,17 @@ def load_body_motion():
 
     if "body_motion" in context:
         motion = np.asarray(context["body_motion"], dtype=np.float64)
-    elif {"d026_vertices", "skinned_vertices"}.issubset(context):
-        body_base = np.asarray(context["d026_vertices"], dtype=np.float64)
+    elif {"body_base_vertices", "skinned_vertices"}.issubset(context):
+        body_base = np.asarray(context["body_base_vertices"], dtype=np.float64)
         skinned = np.asarray(context["skinned_vertices"], dtype=np.float64)
         if body_base.ndim != 2 or body_base.shape[1] != 3:
-            raise ValueError("PKLのd026_verticesの形状が不正です。")
+            raise ValueError("PKLのbody_base_verticesの形状が不正です。")
         if skinned.ndim != 3 or skinned.shape[1:] != body_base.shape:
             raise ValueError("PKLのskinned_verticesの形状が一致しません。")
         motion = np.mean(skinned, axis=1) - np.mean(body_base, axis=0)
-        motion = convert_body_motion_to_garment_space(
-            motion,
-            body_base,
-        )
     else:
         raise KeyError(
-            "PKLにbody_motionまたはd026_vertices/skinned_verticesがありません。"
+            "PKLにbody_motionまたはbody_base_vertices/skinned_verticesがありません。"
         )
 
     return broadcast_body_motion(motion)

@@ -116,15 +116,35 @@
     let playing = true;
 
     function fitCameraToObject(object) {
-      const box = new THREE.Box3().setFromObject(object);
+      // Box3.setFromObject()（内部でcomputeBoundingBox）はモーフターゲットの
+      // 最大変位まで含めた見積もりを返すため、異常に大きい変位があると
+      // カメラが実物から極端に遠い位置へ飛んでしまい、何も見えなくなる。
+      // ここでは基準姿勢（Basis）の実頂点位置だけでカメラを合わせる。
+      const box = new THREE.Box3();
+      object.traverse((child) => {
+        if (!child.isMesh) return;
+        const position = child.geometry.getAttribute('position');
+        if (!position) return;
+        const localBox = new THREE.Box3();
+        for (let i = 0; i < position.count; i += 1) {
+          localBox.expandByPoint(new THREE.Vector3(
+            position.getX(i),
+            position.getY(i),
+            position.getZ(i),
+          ));
+        }
+        localBox.applyMatrix4(child.matrixWorld);
+        box.union(localBox);
+      });
+
       const size = box.getSize(new THREE.Vector3());
       const center = box.getCenter(new THREE.Vector3());
-      const maxSize = Math.max(size.x, size.y, size.z);
+      const maxSize = Math.max(size.x, size.y, size.z) || 1;
       const distance = maxSize / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) * 1.45;
       camera.position.set(center.x, center.y, center.z + distance);
       controls.target.copy(center);
       controls.update();
-      camera.near = Math.max(0.1, distance / 1000);
+      camera.near = Math.max(0.001, distance / 1000);
       camera.far = distance * 1000;
       camera.updateProjectionMatrix();
     }
@@ -133,10 +153,26 @@
       const meshes = [];
       gltf.scene.traverse((object) => {
         if (!object.isMesh) return;
+        const geometry = object.geometry;
+        const position = geometry.getAttribute('position');
+        let maxMorphDisplacement = 0;
+        const morphPositions = geometry.morphAttributes?.position;
+        if (morphPositions && position) {
+          morphPositions.forEach((morphAttribute) => {
+            for (let i = 0; i < morphAttribute.count; i += 1) {
+              const dx = morphAttribute.getX(i);
+              const dy = morphAttribute.getY(i);
+              const dz = morphAttribute.getZ(i);
+              const norm = Math.sqrt(dx * dx + dy * dy + dz * dz);
+              if (norm > maxMorphDisplacement) maxMorphDisplacement = norm;
+            }
+          });
+        }
         meshes.push({
           name: object.name || '(unnamed)',
-          vertices: object.geometry.getAttribute('position')?.count ?? 0,
+          vertices: position?.count ?? 0,
           morphTargets: object.morphTargetInfluences?.length ?? 0,
+          maxMorphDisplacement,
         });
         object.material = new THREE.MeshStandardMaterial({
           color: '#7dd3fc',
@@ -153,7 +189,7 @@
         )),
         `meshes: ${meshes.length}`,
         ...meshes.map((mesh) => (
-          `  ${mesh.name}: vertices=${mesh.vertices}, morphTargets=${mesh.morphTargets}`
+          `  ${mesh.name}: vertices=${mesh.vertices}, morphTargets=${mesh.morphTargets}, maxMorphDisplacement=${mesh.maxMorphDisplacement.toFixed(3)}`
         )),
       ];
       status.textContent = lines.join('\n');

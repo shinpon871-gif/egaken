@@ -95,19 +95,29 @@ if (typeof globalThis !== 'undefined' && !(globalThis as Record<string, unknown>
 
 // メッシュごとのカスタム色割り当て用の型定義
 interface MeshColorMapping {
-  [meshId: string]: 'clothing' | 'body' | 'default';
+  [meshId: string]: ColorCategory;
 }
 
-type MeshType = 'clothing' | 'body' | 'default';
+type ColorCategory = 'hair' | 'skin' | 'jacket' | 'skirt' | 'shoes' | 'default';
 
 const SAFE_SIT_CLIP_PROGRESS = 0.85; // 100%の座位ポーズはモデル上で体が不自然に折れ曲がるため85%程度までで止める
+function inferMaterialCategory(materialName: string, meshName: string): ColorCategory {
+  const search = `${materialName} ${meshName}`.toLowerCase();
+  if (/hair/.test(search)) return 'hair';
+  if (/shoe|footwear|sneaker|boot/.test(search)) return 'shoes';
+  if (/bottom|skirt/.test(search)) return 'skirt';
+  if (/top|shirt|jacket|coat|blouse|dress|cloth/.test(search)) return 'jacket';
+  if (/skin|face|body|mouth|eye|brow|hair/.test(search)) return 'skin';
+  return 'default';
+}
+
 function inferMeshType(
   meshName: string,
   parentName: string,
   matName: string,
   texName: string,
-  customType?: MeshType
-): MeshType {
+  customType?: ColorCategory
+): ColorCategory {
   if (customType && customType !== 'default') return customType;
 
   const meshOnly = meshName.toLowerCase();
@@ -122,15 +132,16 @@ function inferMeshType(
     /^d026/i.test(meshName) ||
     /skirt|dress|shirt|top|pant|jacket|coat|sleeve|hood|blouse|cape|jumpsuit|tunic|cloth|clothes|bottom|wear|suit|collar|tie|sock|shoe|boot|hat|cap|glove/i.test(meshOnly);
 
-  if (knownBodyMesh) return 'body';
-  if (knownClothingMesh) return 'clothing';
+  if (/hair/.test(meshOnly)) return 'hair';
+  if (knownBodyMesh || /face|body/.test(meshOnly)) return 'skin';
+  if (knownClothingMesh) return inferMaterialCategory(`${matName} ${texName}`, meshName);
 
   const isBody = /body|skin|torso|head|leg|arm|hand|foot|face|neck|eye|mouth|teeth|hair|ear|nose|brow|lash|female|avatar|avartar|zbrush/i.test(searchStr);
   const isClothing = /skirt|dress|shirt|top|pant|jacket|coat|sleeve|hood|blouse|cape|jumpsuit|tunic|cloth|clothes|bottom|wear|suit|collar|tie|sock|shoe|boot|hat|cap|glove/i.test(searchStr);
 
-  if (isBody && !isClothing) return 'body';
-  if (isClothing) return 'clothing';
-  return 'clothing';
+  if (isBody && !isClothing) return inferMaterialCategory(`${matName} ${texName}`, meshName);
+  if (isClothing) return inferMaterialCategory(`${matName} ${texName}`, meshName);
+  return 'default';
 }
 
 function isArmPoseBoneName(name: string): boolean {
@@ -997,18 +1008,17 @@ function applyCustomMaterials(
   root: THREE.Object3D | null,
   wireframe: boolean,
   customMapping: MeshColorMapping,
-  clothingColorHex: string,
-  skinColorHex: string,
-  onDiscoverMeshes?: (meshes: { id: string; name: string; current: 'clothing' | 'body' | 'default' }[]) => void
+  colors: Record<ColorCategory, string>,
+  onDiscoverMeshes?: (meshes: { id: string; name: string; current: ColorCategory }[]) => void
 ) {
   if (!root) return;
 
-  const createOrUpdateMaterial = (mesh: THREE.Mesh, hexColor: string) => {
+  const createMaterial = (mesh: THREE.Mesh, sourceMaterial: THREE.Material | null, category: ColorCategory) => {
     // 色変更を確実に即時反映させるため毎回新しいマテリアルを生成する
     // 使い回すと古い色状態が残ることがあるため再利用しない
 
     const newMat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(hexColor),
+      color: new THREE.Color(colors[category] || colors.default),
       side: THREE.DoubleSide,
       roughness: 0.5,
       metalness: 0.1,
@@ -1024,30 +1034,24 @@ function applyCustomMaterials(
     }
     newMat.userData.fromClothSim = true;
 
-    if (mesh.material) {
-      if (Array.isArray(mesh.material)) {
-        mesh.material.forEach((m) => m.dispose());
-      } else {
-        mesh.material.dispose();
-      }
-    }
-
-    mesh.material = newMat;
-
     if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
       // Skinned vertices can move outside the FBX bind-pose bounds while posing.
       mesh.frustumCulled = false;
     }
+
+    if (sourceMaterial) sourceMaterial.dispose();
+    return newMat;
   };
   
-  const discovered: { id: string; name: string; current: MeshType }[] = [];
+  const discovered: { id: string; name: string; current: ColorCategory }[] = [];
 
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
     if (mesh.isMesh) {
       const meshId = mesh.uuid;
       const meshName = mesh.name || "Unnamed Mesh";
-      const materialArray = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const originalMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const materialArray = originalMaterials.filter((material): material is THREE.Material => Boolean(material));
       const matName = materialArray.filter(Boolean).map((m) => m?.name || '').join(' ');
       const texName = materialArray
         .filter(Boolean)
@@ -1057,7 +1061,7 @@ function applyCustomMaterials(
 
       // 毎回再分類（ユーザーデータ蓄積を避ける）識別子は複製/再読込で変わるため
       // カスタム割り当ては識別子とメッシュ名の両方を許可する
-      const type = inferMeshType(
+      const meshType = inferMeshType(
         meshName,
         parentName,
         matName,
@@ -1065,18 +1069,16 @@ function applyCustomMaterials(
         customMapping[meshId] ?? customMapping[meshName] ?? mesh.userData.clothSimMeshType
       );
 
-      mesh.userData.clothSimMeshType = type;
+      mesh.userData.clothSimMeshType = meshType;
 
-      discovered.push({ id: meshId, name: meshName, current: type });
+      discovered.push({ id: meshId, name: meshName, current: meshType });
 
-      // 指定された色に合わせた新規マテリアルを強制生成
-      let hexColor = clothingColorHex;
-      if (type === 'clothing') {
-        hexColor = clothingColorHex;
-      } else if (type === 'body') {
-        hexColor = skinColorHex;
-      }
-      createOrUpdateMaterial(mesh, hexColor);
+      const nextMaterials = originalMaterials.map((sourceMaterial) => {
+        const materialType = inferMaterialCategory(sourceMaterial.name || '', meshName);
+        const category = materialType === 'default' ? meshType : materialType;
+        return createMaterial(mesh, sourceMaterial, category);
+      });
+      mesh.material = nextMaterials.length === 1 ? nextMaterials[0] : nextMaterials;
     }
   });
 
@@ -1092,11 +1094,9 @@ function SceneWithFBX({
   progress,
   onProgressChange,
   wireframe,
-  showSkirtOnly,
   playTarget,
   onFinished = () => {},
-  clothingColorHex,
-  skinColorHex,
+  colors,
   customMapping,
   onDiscoverMeshes
 }: {
@@ -1105,13 +1105,11 @@ function SceneWithFBX({
   progress: number;
   onProgressChange: (p: number) => void;
   wireframe: boolean;
-  showSkirtOnly: boolean;
   playTarget: number | null;
   onFinished?: () => void;
-  clothingColorHex: string;
-  skinColorHex: string;
+  colors: Record<ColorCategory, string>;
   customMapping: MeshColorMapping;
-  onDiscoverMeshes: (meshes: { id: string; name: string; current: 'clothing' | 'body' | 'default' }[]) => void;
+  onDiscoverMeshes: (meshes: { id: string; name: string; current: ColorCategory }[]) => void;
 }) {
   const SIT_CLIP_PROGRESS = SAFE_SIT_CLIP_PROGRESS;
   const uiProgressToClipProgress = useCallback((uiProgress: number) => {
@@ -1175,7 +1173,7 @@ function SceneWithFBX({
     const clip = fbx.animations.find((candidate) => /mixamo.com|Take|take/i.test(candidate.name)) || fbx.animations[0];
     const renderTracks = clip.tracks.filter((track) => !/^egaken\.(position|quaternion|scale)$/.test(track.name));
     return new THREE.AnimationClip(`${clip.name}_renderable`, clip.duration, renderTracks);
-  }, [fbx, fbxPath]);
+  }, [fbx]);
 
   const applyPoseAtProgress = useCallback(
     (uiProgress: number) => {
@@ -1222,35 +1220,14 @@ function SceneWithFBX({
         }
       }
     },
-    [cloned, mixer, selectedClip, uiProgressToClipProgress]
+    [cloned, mixer, modelBasePosition, selectedClip, uiProgressToClipProgress]
   );
 
   // マテリアルの適用とメッシュ検出
   useEffect(() => {
     if (!cloned) return;
-    applyCustomMaterials(cloned, wireframe, customMapping, clothingColorHex, skinColorHex, onDiscoverMeshes);
-  }, [cloned, wireframe, customMapping, clothingColorHex, skinColorHex, onDiscoverMeshes]);
-
-  useEffect(() => {
-    if (!cloned) return;
-
-    let hiddenOnePieceCount = 0;
-    cloned.traverse((object) => {
-      if (!(object instanceof THREE.Mesh)) return;
-      const isOnePieceMesh = /^d026/i.test(object.name);
-      if (isOnePieceMesh) {
-        object.visible = !showSkirtOnly;
-        if (showSkirtOnly) hiddenOnePieceCount += 1;
-      } else {
-        object.visible = true;
-      }
-    });
-
-    console.info('[SceneWithFBX][SkirtVisibilityDiagnostic]', {
-      status: showSkirtOnly ? 'HIDING_ONE_PIECE' : 'SHOWING_FULL_GARMENT',
-      hiddenOnePieceCount,
-    });
-  }, [cloned, showSkirtOnly]);
+    applyCustomMaterials(cloned, wireframe, customMapping, colors, onDiscoverMeshes);
+  }, [cloned, wireframe, customMapping, colors, onDiscoverMeshes]);
 
   // アクションの設定と一時停止（自動再生の競合を徹底排除）
   useEffect(() => {
@@ -1368,7 +1345,7 @@ function SceneWithFBX({
         rightFoot: null,
       };
     };
-  }, [SIT_CLIP_PROGRESS, mixer, cloned, selectedClip]);
+  }, [SIT_CLIP_PROGRESS, mixer, cloned, fbx, selectedClip]);
 
   // 初期ポーズ適用と外部変更時の即時反映
   useEffect(() => {
@@ -1405,7 +1382,7 @@ function SceneWithFBX({
     const offsetY = -centerY * scale;
 
     return { objectScale: scale, modelOffsetY: offsetY };
-  }, [cloned, camera, fbxPath, modelBasePosition]);
+  }, [cloned, camera, modelBasePosition]);
 
   // 【原因解決②】ボタン操作およびスライダーによるポーズ変更をボーンへリアルタイム反映
   // 目標到達後は姿勢値を固定し勝手に戻らないようにする
@@ -1466,44 +1443,27 @@ function SceneWithFBX({
 
 export default function ClothSimulator() {
   const [wireframe, setWireframe] = useState(false);
-  const [showSkirtOnly, setShowSkirtOnly] = useState(false);
   const [progress, setProgress] = useState(0); // 0: 立位, 1: 座位
   const [playTarget, setPlayTarget] = useState<number | null>(null);
-  const [fbxReloadKey, setFbxReloadKey] = useState(0);
-  const [canvasResetKey, setCanvasResetKey] = useState(0);
-  // 新規: 皮膚色トーン（0 = 明るい, 1 = 暗い）
-  const [skinTone, setSkinTone] = useState(0);
-  // 服色パレットインデックス（0:黒,1:赤,2:青,3:黄,4:白）
-  const [clothingIndex, setClothingIndex] = useState(2);
+  const [colors, setColors] = useState<Record<ColorCategory, string>>({
+    hair: '#3b2418',
+    skin: '#f5dcc0',
+    jacket: '#7dd3fc',
+    skirt: '#1e293b',
+    shoes: '#171717',
+    default: '#d1d5db',
+  });
 
   const modelBasePosition: [number, number, number] = [0, 0, 0];
   const fbxPath = '/models/StandToSit_model.fbx';
 
-  // 服のカラーパレット
-  const clothingPalette = ['#000000', '#ef4444', '#7dd3fc', '#facc15', '#ffffff'];
-
-  // 皮膚色: ライトベージュ -> 褐色 の補間
-  const skinLight = useMemo(() => new THREE.Color('#f5dcc0'), []);
-  const skinDark = useMemo(() => new THREE.Color('#7a4a2b'), []);
-  const skinColorHex = useMemo(() => {
-    const c = new THREE.Color();
-    c.lerpColors(skinLight, skinDark, Math.min(Math.max(skinTone, 0), 1));
-    return `#${c.getHexString()}`;
-  }, [skinTone, skinLight, skinDark]);
-
-  const clothingColorHex = clothingPalette[Math.max(0, Math.min(clothingIndex, clothingPalette.length - 1))];
   const customMapping = useMemo<MeshColorMapping>(() => ({}), []);
 
   // メッシュ検出コールバックは現状UI未使用のため空関数とする
   const handleDiscoverMeshes = useCallback(() => {}, []);
 
-  const handleReload = useCallback(() => {
-    // 姿勢・視点・表示は初期化するが色は保持する
-    setPlayTarget(null);
-    setProgress(0);
-    setWireframe(false);
-    setFbxReloadKey((prev) => prev + 1);
-    setCanvasResetKey((prev) => prev + 1);
+  const updateColor = useCallback((category: ColorCategory, value: string) => {
+    setColors((current) => ({ ...current, [category]: value }));
   }, []);
 
   // パーツのタイプ（服・肌・その他）を手動で切り替えるトグル関数
@@ -1513,7 +1473,6 @@ export default function ClothSimulator() {
     <div className="absolute inset-0 w-full h-full bg-[#0f172a] overflow-hidden select-none">
       {/* 3次元キャンバス領域 */}
       <Canvas
-        key={canvasResetKey}
         shadows
         camera={{ position: [0, 0, 4.5], fov: 32 }}
         className="w-full h-full"
@@ -1534,14 +1493,11 @@ export default function ClothSimulator() {
           progress={progress}
           onProgressChange={setProgress}
           wireframe={wireframe}
-          showSkirtOnly={showSkirtOnly}
           playTarget={playTarget}
           onFinished={() => setPlayTarget(null)}
           customMapping={customMapping}
-          clothingColorHex={clothingColorHex}
-          skinColorHex={skinColorHex}
+          colors={colors}
           onDiscoverMeshes={handleDiscoverMeshes}
-          key={fbxReloadKey}
         />
 
         <OrbitControls makeDefault enablePan={true} enableZoom={true} enableRotate={true} target={[0, 0, 0]} />
@@ -1550,21 +1506,6 @@ export default function ClothSimulator() {
       {/* 右側：メイン操作コントロールパネル */}
       <div className="pointer-events-none absolute inset-0 flex items-start justify-end p-4">
         <div className="pointer-events-auto rounded-2xl border border-slate-700/40 bg-slate-900/90 p-4 shadow-2xl backdrop-blur-md style-panel" style={{ width: 340 }}>
-          <div className="text-sm font-bold text-slate-100 mb-3 flex items-center justify-between border-b border-slate-700/50 pb-2">
-            <span>Pose & Color Controller</span>
-            <span className="text-[11px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-mono">v4.6-KneeGapTightenV1</span>
-          </div>
-
-          {/* 1. 再読込ボタン：完全に初期状態（起立して停止）へリセットする */}
-          <div className="mb-4">
-            <button
-              className="w-full py-2 rounded-lg bg-rose-600/90 hover:bg-rose-600 text-sm font-semibold text-white transition-all shadow-md shadow-rose-900/20 active:scale-[0.98]"
-              onClick={handleReload}
-            >
-              🔄 Reload (Reset to Stand)
-            </button>
-          </div>
-
           {/* 2. 座る/立つアニメーションボタン */}
           <div className="mb-4 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800">
             <div className="text-xs font-medium text-slate-400 mb-2">Animation Triggers</div>
@@ -1626,39 +1567,27 @@ export default function ClothSimulator() {
             </div>
           </div>
 
-          {/* 3.5 皮膚色 / 服色コントロール */}
+          {/* 3. 色コントロール */}
           <div className="mb-4 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800">
             <div className="text-xs font-medium text-slate-400 mb-2">Color Controls</div>
-
-            <div className="text-[11px] text-slate-300 mb-2">Skin Tone</div>
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.01}
-                value={skinTone}
-                onChange={(e) => setSkinTone(parseFloat(e.target.value))}
-                className="flex-1 accent-amber-400 h-1.5"
-              />
-              <div style={{ width: 36, height: 20, background: skinColorHex, borderRadius: 4, border: '1px solid rgba(255,255,255,0.06)', transition: 'background 0.1s' }} />
-              <span className="text-[10px] text-slate-500 font-mono">{skinColorHex}</span>
-            </div>
-
-            <div className="mt-3 text-[11px] text-slate-300 mb-2">Clothing Color</div>
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min={0}
-                max={4}
-                step={1}
-                value={clothingIndex}
-                onChange={(e) => setClothingIndex(parseInt(e.target.value))}
-                className="flex-1 accent-sky-500 h-1.5"
-              />
-              <div style={{ width: 36, height: 20, background: clothingColorHex, borderRadius: 4, border: '1px solid rgba(255,255,255,0.06)', transition: 'background 0.1s' }} />
-              <span className="text-[10px] text-slate-500 font-mono">{clothingColorHex}</span>
-            </div>
+            {([
+              ['hair', '髪色'],
+              ['skin', '肌の色'],
+              ['jacket', '上着の色'],
+              ['skirt', 'スカートの色'],
+              ['shoes', '靴の色'],
+            ] as const).map(([category, label]) => (
+              <label key={category} className="mt-2 flex items-center justify-between gap-3 text-[11px] text-slate-300">
+                <span>{label}</span>
+                <input
+                  type="color"
+                  value={colors[category]}
+                  onChange={(e) => updateColor(category, e.target.value)}
+                  className="h-7 w-12 cursor-pointer rounded border border-slate-700 bg-slate-900 p-0.5"
+                  aria-label={label}
+                />
+              </label>
+            ))}
           </div>
 
           {/* 4. 表示オプション */}
@@ -1671,15 +1600,6 @@ export default function ClothSimulator() {
                 className="rounded border-slate-700 text-sky-500 focus:ring-0 focus:ring-offset-0 bg-slate-900 w-4 h-4"
               />
               <span className="font-medium">Show Wireframe (ワイヤーフレーム)</span>
-            </label>
-            <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={showSkirtOnly}
-                onChange={(e) => setShowSkirtOnly(e.target.checked)}
-                className="rounded border-slate-700 text-sky-500 focus:ring-0 focus:ring-offset-0 bg-slate-900 w-4 h-4"
-              />
-              <span className="font-medium">ワンピース非表示</span>
             </label>
           </div>
         </div>

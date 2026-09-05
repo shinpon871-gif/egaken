@@ -1,6 +1,9 @@
+// FBXモデルをGLTF/GLBバイナリ形式へ変換するスクリプト
 import fs from 'fs';
 import * as THREE from 'three';
 
+// Node.js環境用FileReaderポリフィル
+// Three.jsローダーがブラウザ用FileReader APIを必要とするため定義
 if (typeof globalThis.FileReader === 'undefined') {
   class NodeFileReader {
     constructor() {
@@ -14,6 +17,7 @@ if (typeof globalThis.FileReader === 'undefined') {
         this[eventName]({ target: this });
       }
     }
+    // バイナリバッファ読み込み処理
     readAsArrayBuffer(blob) {
       blob.arrayBuffer()
         .then((buffer) => {
@@ -28,6 +32,7 @@ if (typeof globalThis.FileReader === 'undefined') {
           this._emit('onloadend');
         });
     }
+    // Base64 DataURL形式読み込み処理
     readAsDataURL(blob) {
       blob.arrayBuffer()
         .then((buffer) => {
@@ -48,12 +53,15 @@ if (typeof globalThis.FileReader === 'undefined') {
   globalThis.FileReader = NodeFileReader;
 }
 
+// 動的インポートによりThree.jsローダーおよびエクスポータを取得
 const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js');
 const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
 
+// 入出力ファイルパス定義
 const inputPath = new URL('../public/models/Stand To Sit.fbx', import.meta.url);
 const outputPath = new URL('../public/models/human.glb', import.meta.url);
 
+// FBXバイナリファイルの読み込みとThree.jsオブジェクトへのパース
 const fileBuffer = fs.readFileSync(inputPath);
 const arrayBuffer = fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength);
 
@@ -64,6 +72,7 @@ const exporter = new GLTFExporter();
 
 console.log('FBX loaded. Exporting to GLB...');
 
+// アニメーションおよびテクスチャを埋め込んだGLBバイナリの非同期エクスポート
 const result = await exporter.parseAsync(object, {
   binary: true,
   trs: false,
@@ -75,6 +84,7 @@ const result = await exporter.parseAsync(object, {
 
 console.log('parse returned type:', result?.constructor?.name);
 
+// 出力結果の型に応じたファイル書き込み処理
 if (result instanceof ArrayBuffer) {
   fs.writeFileSync(outputPath, Buffer.from(result));
   console.log('GLB exported to', outputPath.pathname);

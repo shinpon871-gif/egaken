@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, useFBX } from '@react-three/drei';
+import { OrbitControls, useFBX, useGLTF } from '@react-three/drei';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils';
 
 const SUPPRESSED_CONSOLE_PATTERNS = [
@@ -1026,6 +1026,7 @@ function applyCustomMaterials(
       vertexColors: false,
       map: null,
       emissive: new THREE.Color(0x000000),
+      visible: true,
     });
 
     // スキンメッシュではスキニングを有効化し差し替え後もポーズ変形を維持する
@@ -1441,11 +1442,9 @@ function SceneWithFBX({
   return (
     <group ref={modelRootRef} position={modelBasePosition}>
       {cloned && (
-        <primitive
-          object={cloned}
-          scale={[objectScale, objectScale, objectScale]}
-          position={[0, modelOffsetY, 0]}
-        />
+        <group scale={[objectScale, objectScale, objectScale]} position={[0, modelOffsetY, 0]}>
+          <primitive object={cloned} />
+        </group>
       )}
     </group>
   );

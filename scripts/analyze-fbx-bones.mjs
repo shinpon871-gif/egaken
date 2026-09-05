@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
+// FBXファイルのボーン階層構造およびアニメーショントラックを解析・比較出力するスクリプト
 import fs from 'fs';
 import * as path from 'path';
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 
-// FileReader polyfill for Node.js
+// Node.js環境用FileReaderポリフィル
 if (typeof globalThis.FileReader === 'undefined') {
   class NodeFileReader {
     constructor() {
@@ -37,7 +38,7 @@ if (typeof globalThis.FileReader === 'undefined') {
   globalThis.FileReader = NodeFileReader;
 }
 
-// Blob polyfill
+// Node.js環境用Blobポリフィル
 if (typeof globalThis.Blob === 'undefined') {
   globalThis.Blob = class Blob {
     constructor(chunks, options = {}) {
@@ -78,7 +79,7 @@ if (typeof globalThis.Blob === 'undefined') {
   };
 }
 
-// Document polyfill for FBXLoader texture loading
+// FBXLoaderのテクスチャ読み込みエラー防止用documentポリフィル
 if (typeof globalThis.document === 'undefined') {
   globalThis.document = {
     createElementNS: () => ({
@@ -100,6 +101,7 @@ if (typeof globalThis.document === 'undefined') {
 
 const loader = new FBXLoader();
 
+// FBXモデルからボーン一覧・アニメーショントラック・ツリー階層を出力する関数
 function dumpBoneHierarchy(object, label) {
   console.log(`\n${'='.repeat(60)}`);
   console.log(`${label}`);
@@ -109,6 +111,7 @@ function dumpBoneHierarchy(object, label) {
   const tracks = [];
   let boneCount = 0;
 
+  // ボーンオブジェクトのカウントと名前抽出
   object.traverse((child) => {
     if (child.isBone) {
       boneCount++;
@@ -116,6 +119,7 @@ function dumpBoneHierarchy(object, label) {
     }
   });
 
+  // クリップ名と内包トラック一覧の出力
   if (object.animations && object.animations.length > 0) {
     object.animations.forEach((clip) => {
       console.log(`\nAnimationClip: "${clip.name}" (duration: ${clip.duration.toFixed(3)}s)`);
@@ -126,6 +130,7 @@ function dumpBoneHierarchy(object, label) {
     });
   }
 
+  // ボーンツリー階層構造のインデント整形出力
   console.log(`\nBone Hierarchy (${boneCount} bones):`);
   let hierarchyStr = '';
   
@@ -144,7 +149,7 @@ function dumpBoneHierarchy(object, label) {
 
   console.log(hierarchyStr);
 
-  // ボーン名の共通パターンを抽出
+  // ボーン命名接頭辞パターンの集計と分類
   console.log('\nBone Names Analysis:');
   const patterns = {};
   bones.forEach((name) => {
@@ -163,6 +168,7 @@ function dumpBoneHierarchy(object, label) {
   return { boneCount, bones, tracks };
 }
 
+// FBXファイル読み込みとパース処理
 async function analyzeFBX(filePath) {
   const fileBuffer = fs.readFileSync(filePath);
   const arrayBuffer = fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength);
@@ -177,6 +183,7 @@ async function analyzeFBX(filePath) {
   });
 }
 
+// メイン実行処理：モデル間のボーン構造比較
 async function main() {
   try {
     console.log('FBX Bone Structure Analysis');

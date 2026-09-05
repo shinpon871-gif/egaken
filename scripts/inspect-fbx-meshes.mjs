@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
+// FBXモデル内のメッシュ構成・頂点数・マテリアル・部位別カテゴリを抽出・比較するスクリプト
 import fs from 'fs';
 import * as path from 'path';
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 
-// FileReader polyfill
+// Node.js環境用FileReaderポリフィル
 if (typeof globalThis.FileReader === 'undefined') {
   class NodeFileReader {
     constructor() {
@@ -37,6 +38,7 @@ if (typeof globalThis.FileReader === 'undefined') {
   globalThis.FileReader = NodeFileReader;
 }
 
+// Node.js環境用Blobポリフィル
 if (typeof globalThis.Blob === 'undefined') {
   globalThis.Blob = class Blob {
     constructor(chunks, options = {}) {
@@ -73,6 +75,7 @@ if (typeof globalThis.Blob === 'undefined') {
   };
 }
 
+// FBXLoaderのテクスチャ読み込み用documentポリフィル
 if (typeof globalThis.document === 'undefined') {
   globalThis.document = {
     createElementNS: () => ({ style: {}, addEventListener: () => {}, src: '' }),
@@ -82,6 +85,7 @@ if (typeof globalThis.document === 'undefined') {
 
 const loader = new FBXLoader();
 
+// モデル内の全メッシュ属性（頂点数マテリアル数可視性）を走査して出力する関数
 function inspectMeshes(object, label) {
   console.log(`\n${'='.repeat(60)}`);
   console.log(`${label}`);
@@ -90,6 +94,7 @@ function inspectMeshes(object, label) {
   const meshes = [];
   const materials = new Set();
 
+  // メッシュオブジェクトの探索と情報収集
   object.traverse((child) => {
     if (child.isMesh) {
       const matArray = Array.isArray(child.material) ? child.material : [child.material];
@@ -119,7 +124,7 @@ function inspectMeshes(object, label) {
     );
   });
 
-  // メッシュ名で推測できるカテゴリ
+  // メッシュ名パターンに基づく部位別カテゴリ分類
   console.log('\nMesh Categories (by name patterns):');
   const categories = {
     clothing: meshes.filter((m) => /dress|shirt|coat|skirt|cloth|wear|outfit/i.test(m.name)),
@@ -129,7 +134,7 @@ function inspectMeshes(object, label) {
     other: [],
   };
 
-  // その他のメッシュを分類
+  // 未分類メッシュの割り当て
   const categorized = new Set();
   Object.values(categories).forEach((arr) => {
     arr.forEach((m) => categorized.add(m.name));
@@ -151,12 +156,14 @@ function inspectMeshes(object, label) {
   return { meshCount: meshes.length, meshes };
 }
 
+// FBXファイル読み込み処理
 async function analyzeFBX(filePath) {
   const fileBuffer = fs.readFileSync(filePath);
   const arrayBuffer = fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength);
   return loader.parse(arrayBuffer, '');
 }
 
+// 2つのFBXモデル間でメッシュ数と構成を比較するメイン処理
 async function main() {
   try {
     console.log('FBX Mesh Structure Comparison');
@@ -176,7 +183,7 @@ async function main() {
     const fbx2 = await analyzeFBX(model2Path);
     const result2 = inspectMeshes(fbx2, 'StandToSit_model.fbx (Alternative)');
 
-    // 比較
+    // 比較結果のサマリー出力
     console.log(`\n${'='.repeat(60)}`);
     console.log('SUMMARY & MIGRATION IMPACT');
     console.log(`${'='.repeat(60)}`);
@@ -198,6 +205,12 @@ async function main() {
 
     console.log('\n');
   } catch (error) {
+    console.error('Error during analysis:', error);
+    process.exit(1);
+  }
+}
+
+main();
     console.error('Error:', error);
     process.exit(1);
   }

@@ -1,6 +1,8 @@
+// FBXからGLBへのエクスポート処理の詳細デバッグおよびバイナリ検証スクリプト
 import fs from 'fs';
 import * as THREE from 'three';
 
+// Node.js環境用ProgressEventポリフィル
 if (typeof globalThis.ProgressEvent === 'undefined') {
   globalThis.ProgressEvent = class {
     constructor(type, init = {}) {
@@ -12,6 +14,7 @@ if (typeof globalThis.ProgressEvent === 'undefined') {
   };
 }
 
+// Node.js環境用FileReaderポリフィル
 if (typeof globalThis.FileReader === 'undefined') {
   class NodeFileReader {
     constructor() {
@@ -25,6 +28,7 @@ if (typeof globalThis.FileReader === 'undefined') {
         this[eventName]({ target: this });
       }
     }
+    // バイナリバッファ読み込み処理
     readAsArrayBuffer(blob) {
       blob.arrayBuffer()
         .then((buffer) => {
@@ -39,6 +43,7 @@ if (typeof globalThis.FileReader === 'undefined') {
           this._emit('onloadend');
         });
     }
+    // DataURL形式読み込み処理
     readAsDataURL(blob) {
       blob.arrayBuffer()
         .then((buffer) => {
@@ -59,12 +64,15 @@ if (typeof globalThis.FileReader === 'undefined') {
   globalThis.FileReader = NodeFileReader;
 }
 
+// Three.jsローダーとエクスポータの動的読み込み
 const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js');
 const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
 
+// 検証対象モデルのパス定義
 const inputPath = new URL('../public/models/Stand To Sit.fbx', import.meta.url);
 const outputPath = new URL('../public/models/human.glb', import.meta.url);
 
+// FBXファイル読み込みとアニメーション情報ログ出力
 const fileBuffer = fs.readFileSync(inputPath);
 const arrayBuffer = fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength);
 
@@ -72,6 +80,7 @@ const loader = new FBXLoader();
 const object = loader.parse(arrayBuffer, '');
 console.log('FBX object animations:', object.animations?.map((clip) => clip.name) ?? []);
 
+// GLBバイナリへのエクスポート実行
 const exporter = new GLTFExporter();
 const result = await exporter.parseAsync(object, {
   binary: true,
@@ -82,6 +91,7 @@ const result = await exporter.parseAsync(object, {
   animations: object.animations,
 });
 
+// エクスポート結果の型およびバイナリ長の詳細検証ログ
 console.log('callback result type:', result?.constructor?.name);
 console.log('typeof result:', typeof result);
 console.log('ArrayBuffer.isView:', ArrayBuffer.isView(result));
@@ -89,6 +99,8 @@ console.log('instanceof ArrayBuffer:', result instanceof ArrayBuffer);
 console.log('result byteLength:', result?.byteLength);
 console.log('result buffer.byteLength:', result?.buffer?.byteLength);
 console.log('result toString:', Object.prototype.toString.call(result));
+
+// 判定されたバイナリ型に応じたファイル出力処理
 if (result instanceof ArrayBuffer) {
   fs.writeFileSync(outputPath, Buffer.from(result));
   console.log('GLB exported to', outputPath.pathname);

@@ -1,9 +1,44 @@
+import argparse
+import hashlib
 import importlib
+import json
 import os
+import pickle
 import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.request
+from typing import Iterable, Optional, Tuple
+
+import numpy as np
+
+
+# ============================================================
+# 実行順
+# ============================================================
+# 1. create_skirt_body_context.py を通常実行し、skirt_body_context_for_dnn.pkl を作る。
+# 2. 実スカート教師データを使う場合だけ、同じファイルを teacher サブコマンドで実行し、
+#    skirt_teacher_dataset.pkl を作る。
+# 3. train_skirt_sitting_dnn.py を実行する。teacher PKL があれば新しい布教師特徴量、
+#    無ければ既存の9/12次元legacy特徴量で学習する。
+# 4. skirt_animation_dnn_morph_fixed.py を実行し、NPZ/GLB/BLENDを書き出す。
+# 5. 生成済みNPZだけを検査する場合は、skirt_animation_dnn_morph_fixed.py --validate-only を実行する。
+#
+# teacherサブコマンド例:
+#   python create_skirt_body_context.py teacher \
+#     --manifest /content/public/models/skirt_teacher_manifest.json \
+#     --body-context /content/public/models/skirt_body_context_for_dnn.pkl \
+#     --output /content/public/models/skirt_teacher_dataset.pkl
+# ============================================================
+
+
+FEATURE_VERSION = "skirt_cloth_teacher_v1"
+TRAINING_DATA_VERSION = 1
+STAGE_NAMES = ("standing", "descending", "contact", "settling", "seated")
+CONTACT_DISTANCE_RATIO = 0.025
+K_NEIGHBORS = 8
+EPSILON = 1.0e-8
 
 
 DEFAULT_ARGUMENTS = [
@@ -19,6 +54,356 @@ DEFAULT_ARGUMENTS = [
     os.environ.get("DNN_BODY_FRAME_COUNT", "120"),
     os.environ.get("DNN_BODY_PROGRESS_LIMIT", "0.85"),
 ]
+
+DEFAULT_TEACHER_MANIFEST_PATH = "/content/public/models/skirt_teacher_manifest.json"
+DEFAULT_TEACHER_OUTPUT_PATH = "/content/public/models/skirt_teacher_dataset.pkl"
+
+
+def load_pickle(path: str) -> dict:
+    with open(path, "rb") as file:
+        value = pickle.load(file)
+    if not isinstance(value, dict):
+        raise TypeError(f"PKLの内容がdictではありません: {path}")
+    return value
+
+
+def save_pickle(path: str, value: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as file:
+        pickle.dump(value, file, protocol=4)
+
+
+def load_json(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as file:
+        value = json.load(file)
+    if not isinstance(value, dict):
+        raise TypeError(f"JSONの内容がdictではありません: {path}")
+    return value
+
+
+def ensure_vertices(name: str, value: np.ndarray, dtype=np.float32) -> np.ndarray:
+    array = np.asarray(value, dtype=dtype)
+    if array.ndim != 2 or array.shape[1] != 3:
+        raise ValueError(f"{name}は(頂点数, 3)が必要です: {array.shape}")
+    if not np.isfinite(array).all():
+        raise ValueError(f"{name}にNaNまたはInfがあります。")
+    return array
+
+
+def ensure_vertex_sequence(name: str, value: np.ndarray, vertex_count: Optional[int] = None, dtype=np.float32) -> np.ndarray:
+    array = np.asarray(value, dtype=dtype)
+    if array.ndim != 3 or array.shape[2] != 3:
+        raise ValueError(f"{name}は(フレーム数, 頂点数, 3)が必要です: {array.shape}")
+    if vertex_count is not None and array.shape[1] != vertex_count:
+        raise ValueError(f"{name}の頂点数が一致しません: {array.shape[1]} != {vertex_count}")
+    if array.shape[0] < 2:
+        raise ValueError(f"{name}は2フレーム以上必要です。")
+    if not np.isfinite(array).all():
+        raise ValueError(f"{name}にNaNまたはInfがあります。")
+    return array
+
+
+def mesh_extent(vertices: np.ndarray) -> float:
+    vertices = np.asarray(vertices, dtype=np.float64)
+    return float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0)))
+
+
+def scale_reference_metrics(base_vertices: np.ndarray) -> dict:
+    base = np.asarray(base_vertices, dtype=np.float64)
+    size = base.max(axis=0) - base.min(axis=0)
+    return {
+        "extent": float(np.linalg.norm(size)),
+        "width": float(max(size[0], EPSILON)),
+        "height": float(max(size[1], EPSILON)),
+        "depth": float(max(size[2], EPSILON)),
+        "center": base.mean(axis=0).astype(np.float32),
+        "min": base.min(axis=0).astype(np.float32),
+        "max": base.max(axis=0).astype(np.float32),
+    }
+
+
+def validate_context_scale(base_vertices: np.ndarray, context: dict, label: str = "base_skirt_pc") -> None:
+    if "skirt_base_vertices" not in context:
+        return
+    context_vertices = ensure_vertices("context['skirt_base_vertices']", context["skirt_base_vertices"], dtype=np.float64)
+    base_extent = mesh_extent(base_vertices)
+    context_extent = mesh_extent(context_vertices)
+    if abs(base_extent - context_extent) > 0.2 * max(context_extent, EPSILON):
+        raise RuntimeError(
+            f"{label}の縮尺がbody_context PKLのskirt_base_verticesと一致しません。\n"
+            f"{label}対角長: {base_extent:.6f}, PKL skirt_base_vertices対角長: {context_extent:.6f}\n"
+            "スケール推測補正は行いません。PKL由来のskirt_base_vertices/skirt_facesを使い直してください。"
+        )
+
+
+def broadcast_motion(motion: np.ndarray, vertex_count: int, name: str = "body_motion") -> np.ndarray:
+    motion = np.asarray(motion, dtype=np.float32)
+    if motion.ndim == 2 and motion.shape[1] == 3:
+        motion = motion[:, None, :]
+    if motion.ndim != 3 or motion.shape[2] != 3:
+        raise ValueError(f"{name}は(F, 3)または(F, 頂点数, 3)が必要です: {motion.shape}")
+    if motion.shape[1] != vertex_count:
+        motion = np.mean(motion, axis=1, keepdims=True)
+    return np.broadcast_to(motion, (motion.shape[0], vertex_count, 3)).copy()
+
+
+def resolve_body_motion(context: dict, vertex_count: int) -> np.ndarray:
+    if "skirt_vertex_body_motion" in context:
+        motion = np.asarray(context["skirt_vertex_body_motion"], dtype=np.float32)
+        if motion.ndim == 3 and motion.shape[1:] == (vertex_count, 3):
+            return motion
+        print(
+            "[warn] skirt_vertex_body_motionの形状が不正なため、従来のbody_motionへフォールバックします。"
+            f" 形状: {motion.shape}, 期待値: (フレーム数, {vertex_count}, 3)"
+        )
+    if "body_motion" in context:
+        return broadcast_motion(context["body_motion"], vertex_count, "body_motion")
+    if {"body_base_vertices", "skinned_vertices"}.issubset(context):
+        body_base = ensure_vertices("body_base_vertices", context["body_base_vertices"], dtype=np.float64)
+        skinned = ensure_vertex_sequence("skinned_vertices", context["skinned_vertices"], body_base.shape[0], dtype=np.float64)
+        return broadcast_motion(np.mean(skinned - body_base[None, :, :], axis=1), vertex_count, "body_motion")
+    raise KeyError("身体特徴量にskirt_vertex_body_motion、body_motion、body_base_vertices/skinned_verticesのいずれもありません。")
+
+
+def interpolate_sequence(values: np.ndarray, progress: float) -> np.ndarray:
+    index = float(np.clip(progress, 0.0, 1.0)) * (len(values) - 1)
+    lower = int(np.floor(index))
+    upper = min(lower + 1, len(values) - 1)
+    weight = index - lower
+    return (1.0 - weight) * values[lower] + weight * values[upper]
+
+
+def resample_sequence(values: np.ndarray, target_progress: np.ndarray, source_progress: Optional[np.ndarray] = None) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float32)
+    target_progress = np.asarray(target_progress, dtype=np.float32).reshape(-1)
+    if source_progress is None:
+        source_progress = np.linspace(0.0, 1.0, values.shape[0], dtype=np.float32)
+    else:
+        source_progress = np.asarray(source_progress, dtype=np.float32).reshape(-1)
+    flat = values.reshape(values.shape[0], -1)
+    out = np.empty((len(target_progress), flat.shape[1]), dtype=np.float32)
+    for column in range(flat.shape[1]):
+        out[:, column] = np.interp(target_progress, source_progress, flat[:, column])
+    return out.reshape((len(target_progress),) + values.shape[1:])
+
+
+def progress_from_motion(motion: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(np.mean(motion, axis=1), axis=1)
+    if float(norms.max() - norms.min()) <= EPSILON:
+        return np.linspace(0.0, 1.0, motion.shape[0], dtype=np.float32)
+    monotonic = np.maximum.accumulate(norms)
+    return ((monotonic - monotonic[0]) / max(monotonic[-1] - monotonic[0], EPSILON)).astype(np.float32)
+
+
+def stages_from_progress(progress: np.ndarray) -> np.ndarray:
+    progress = np.asarray(progress, dtype=np.float32).reshape(-1)
+    stages = np.zeros((len(progress), len(STAGE_NAMES)), dtype=np.float32)
+    for index, value in enumerate(progress):
+        if value < 0.08:
+            stage_index = 0
+        elif value < 0.55:
+            stage_index = 1
+        elif value < 0.78:
+            stage_index = 2
+        elif value < 0.95:
+            stage_index = 3
+        else:
+            stage_index = 4
+        stages[index, stage_index] = 1.0
+    return stages
+
+
+def temporal_derivatives(vertices: np.ndarray, progress: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    vertices = ensure_vertex_sequence("skirt_teacher_vertices", vertices)
+    progress = np.asarray(progress, dtype=np.float32).reshape(-1)
+    if len(progress) != vertices.shape[0]:
+        raise ValueError("progressのフレーム数がverticesと一致しません。")
+    motion = (vertices - vertices[0:1]).astype(np.float32)
+    velocity = np.zeros_like(motion)
+    acceleration = np.zeros_like(motion)
+    for frame in range(1, vertices.shape[0]):
+        dt = max(float(progress[frame] - progress[frame - 1]), 1.0 / max(vertices.shape[0] - 1, 1))
+        velocity[frame] = (motion[frame] - motion[frame - 1]) / dt
+    for frame in range(1, vertices.shape[0]):
+        dt = max(float(progress[frame] - progress[frame - 1]), 1.0 / max(vertices.shape[0] - 1, 1))
+        acceleration[frame] = (velocity[frame] - velocity[frame - 1]) / dt
+    return motion, velocity.astype(np.float32), acceleration.astype(np.float32)
+
+
+def body_vertex_positions(context: dict) -> Optional[np.ndarray]:
+    if {"body_base_vertices", "body_motion_per_vertex"}.issubset(context):
+        base = ensure_vertices("body_base_vertices", context["body_base_vertices"], dtype=np.float32)
+        motion = ensure_vertex_sequence("body_motion_per_vertex", context["body_motion_per_vertex"], base.shape[0], dtype=np.float32)
+        return base[None, :, :] + motion
+    if {"body_base_vertices", "skinned_vertices"}.issubset(context):
+        base = ensure_vertices("body_base_vertices", context["body_base_vertices"], dtype=np.float32)
+        return ensure_vertex_sequence("skinned_vertices", context["skinned_vertices"], base.shape[0], dtype=np.float32)
+    return None
+
+
+def compute_contact_features(base_vertices: np.ndarray, context: dict, progress: np.ndarray) -> np.ndarray:
+    base_vertices = ensure_vertices("base_vertices", base_vertices, dtype=np.float32)
+    progress = np.asarray(progress, dtype=np.float32).reshape(-1)
+    metrics = scale_reference_metrics(base_vertices)
+    body_positions = body_vertex_positions(context)
+    if body_positions is None:
+        return np.zeros((len(progress), len(base_vertices), 8), dtype=np.float32)
+
+    body_base = body_positions[0].astype(np.float64)
+    distances_squared = np.sum((base_vertices[:, None, :].astype(np.float64) - body_base[None, :, :]) ** 2, axis=2)
+    neighbor_count = min(K_NEIGHBORS, body_base.shape[0])
+    neighbor_indices = np.argpartition(distances_squared, neighbor_count - 1, axis=1)[:, :neighbor_count]
+    neighbor_distances_squared = np.take_along_axis(distances_squared, neighbor_indices, axis=1)
+    weights = 1.0 / (neighbor_distances_squared + 1.0e-6)
+    weights /= np.sum(weights, axis=1, keepdims=True)
+    body_resampled = resample_sequence(body_positions, progress)
+    neighbors = body_resampled[:, neighbor_indices, :]
+    nearest_points = np.sum(neighbors * weights[None, :, :, None].astype(np.float32), axis=2)
+    vectors_to_body = nearest_points - base_vertices[None, :, :]
+    distances = np.linalg.norm(vectors_to_body, axis=2, keepdims=True)
+    directions = vectors_to_body / np.maximum(distances, EPSILON)
+    contact_threshold = max(metrics["extent"] * CONTACT_DISTANCE_RATIO, 1.0e-4)
+    contact = (distances <= contact_threshold).astype(np.float32)
+    normalized_distance = distances / max(metrics["extent"], EPSILON)
+
+    relative = (base_vertices - metrics["center"][None, :]).astype(np.float32)
+    height = ((relative[:, 1:2] - float(metrics["min"][1] - metrics["center"][1])) / max(metrics["height"], EPSILON)).astype(np.float32)
+    front = (relative[:, 2:3] / max(metrics["depth"], EPSILON)).astype(np.float32)
+    side = (relative[:, 0:1] / max(metrics["width"], EPSILON)).astype(np.float32)
+    region = np.broadcast_to(np.concatenate([height, front, side], axis=1), (len(progress), len(base_vertices), 3)).copy()
+    return np.concatenate([normalized_distance, directions.astype(np.float32), contact, region], axis=2).astype(np.float32)
+
+
+def build_feature_tensor(
+    base_vertices: np.ndarray,
+    body_motion: np.ndarray,
+    progress: np.ndarray,
+    contact_features: np.ndarray,
+    previous_displacement: np.ndarray,
+    previous_velocity: np.ndarray,
+) -> np.ndarray:
+    base_vertices = ensure_vertices("base_vertices", base_vertices, dtype=np.float32)
+    frame_count = len(progress)
+    vertex_count = len(base_vertices)
+    body_motion = ensure_vertex_sequence("body_motion", body_motion, vertex_count, dtype=np.float32)
+    contact_features = np.asarray(contact_features, dtype=np.float32)
+    if contact_features.shape[:2] != (frame_count, vertex_count):
+        raise ValueError(f"contact_featuresの形状が不正です: {contact_features.shape}")
+    previous_displacement = ensure_vertex_sequence("previous_displacement", previous_displacement, vertex_count, dtype=np.float32)
+    previous_velocity = ensure_vertex_sequence("previous_velocity", previous_velocity, vertex_count, dtype=np.float32)
+    if body_motion.shape[0] != frame_count or previous_displacement.shape[0] != frame_count or previous_velocity.shape[0] != frame_count:
+        raise ValueError("特徴量のフレーム数が一致しません。")
+
+    metrics = scale_reference_metrics(base_vertices)
+    extent = max(metrics["extent"], EPSILON)
+    normalized_base = (base_vertices - metrics["center"][None, :]) / extent
+    normalized_body_motion = body_motion / extent
+    body_position = (base_vertices[None, :, :] + body_motion - metrics["center"][None, None, :]) / extent
+    previous_displacement = previous_displacement / extent
+    previous_velocity = previous_velocity / extent
+    progress_column = np.broadcast_to(progress.reshape(frame_count, 1, 1), (frame_count, vertex_count, 1)).astype(np.float32)
+    stages = np.broadcast_to(stages_from_progress(progress)[:, None, :], (frame_count, vertex_count, len(STAGE_NAMES))).astype(np.float32)
+    base_column = np.broadcast_to(normalized_base[None, :, :], (frame_count, vertex_count, 3)).astype(np.float32)
+    return np.concatenate(
+        [
+            progress_column,
+            stages,
+            base_column,
+            normalized_body_motion.astype(np.float32),
+            body_position.astype(np.float32),
+            contact_features.astype(np.float32),
+            previous_displacement.astype(np.float32),
+            previous_velocity.astype(np.float32),
+        ],
+        axis=2,
+    ).astype(np.float32)
+
+
+def feature_schema(input_feature_count: int) -> dict:
+    return {
+        "feature_version": FEATURE_VERSION,
+        "training_data_version": TRAINING_DATA_VERSION,
+        "input_feature_count": int(input_feature_count),
+        "stage_names": list(STAGE_NAMES),
+        "layout": [
+            {"name": "progress", "size": 1},
+            {"name": "stage_one_hot", "size": len(STAGE_NAMES)},
+            {"name": "normalized_base_vertex", "size": 3},
+            {"name": "normalized_body_motion", "size": 3},
+            {"name": "normalized_body_follow_position", "size": 3},
+            {"name": "contact_distance_direction_flag_region", "size": 8},
+            {"name": "previous_skirt_displacement", "size": 3},
+            {"name": "previous_skirt_velocity", "size": 3},
+        ],
+    }
+
+
+def require_feature_schema(metadata: dict, expected_feature_count: int) -> None:
+    feature_version = metadata.get("feature_version")
+    input_feature_count = int(metadata.get("input_feature_count", -1))
+    if feature_version != FEATURE_VERSION or input_feature_count != int(expected_feature_count):
+        raise RuntimeError(
+            "DNNモデルの特徴量スキーマが現在の推論コードと一致しません。\n"
+            f"model feature_version={feature_version}, expected={FEATURE_VERSION}\n"
+            f"model input_feature_count={input_feature_count}, expected={expected_feature_count}"
+        )
+
+
+def edges_from_faces(faces: np.ndarray) -> np.ndarray:
+    faces = np.asarray(faces, dtype=np.int64)
+    edges = set()
+    for a, b, c in faces:
+        edges.add(tuple(sorted((int(a), int(b)))))
+        edges.add(tuple(sorted((int(b), int(c)))))
+        edges.add(tuple(sorted((int(c), int(a)))))
+    return np.asarray(sorted(edges), dtype=np.int64)
+
+
+def validate_animation_geometry(vertices: np.ndarray, faces: np.ndarray, base_vertices: np.ndarray, contact_features: Optional[np.ndarray] = None) -> dict:
+    vertices = ensure_vertex_sequence("vertices", vertices, len(base_vertices), dtype=np.float32)
+    faces = np.asarray(faces, dtype=np.int64)
+    base_vertices = ensure_vertices("base_vertices", base_vertices, dtype=np.float32)
+    metrics = scale_reference_metrics(base_vertices)
+    displacement = vertices - base_vertices[None, :, :]
+    displacement_norm = np.linalg.norm(displacement, axis=2)
+    edges = edges_from_faces(faces)
+    edge_ratio_max = 0.0
+    if len(edges) > 0:
+        base_edge = np.linalg.norm(base_vertices[edges[:, 0]] - base_vertices[edges[:, 1]], axis=1)
+        base_edge = np.maximum(base_edge, EPSILON)
+        for frame_vertices in vertices:
+            edge = np.linalg.norm(frame_vertices[edges[:, 0]] - frame_vertices[edges[:, 1]], axis=1)
+            edge_ratio_max = max(edge_ratio_max, float(np.max(edge / base_edge)))
+    up_axis_displacement = displacement[:, :, 1]
+    hem_y_limit = np.quantile(base_vertices[:, 1], 0.25)
+    hem_mask = base_vertices[:, 1] <= hem_y_limit
+    hem_up_max = float(np.max(up_axis_displacement[:, hem_mask])) if np.any(hem_mask) else float(np.max(up_axis_displacement))
+    diagnostics = {
+        "max_displacement": float(np.max(displacement_norm)),
+        "mean_displacement": float(np.mean(displacement_norm)),
+        "max_displacement_ratio": float(np.max(displacement_norm) / max(metrics["extent"], EPSILON)),
+        "max_edge_stretch_ratio": edge_ratio_max,
+        "hem_upward_displacement_max": hem_up_max,
+        "hem_upward_displacement_ratio": float(hem_up_max / max(metrics["height"], EPSILON)),
+    }
+    if contact_features is not None and contact_features.shape[:2] == vertices.shape[:2]:
+        diagnostics["contact_vertex_ratio"] = float(np.mean(contact_features[:, :, 4] > 0.5))
+    if diagnostics["max_displacement_ratio"] > 5.0:
+        raise RuntimeError(f"DNN出力の最大変位が大きすぎます: {diagnostics}")
+    if diagnostics["max_edge_stretch_ratio"] > 4.0:
+        raise RuntimeError(f"隣接頂点間の局所伸縮が大きすぎます: {diagnostics}")
+    if diagnostics["hem_upward_displacement_ratio"] > 0.55:
+        raise RuntimeError(
+            "裾周辺が過度に上方へ移動しています。太もも周辺のめくれ上がり回帰の可能性があります: "
+            f"{diagnostics}"
+        )
+    return diagnostics
+
+
+def allowed_license_name(value: str) -> bool:
+    normalized = value.strip().lower()
+    allowed_tokens: Iterable[str] = ("cc0", "cc-by", "cc-by-sa", "public domain", "custom-permission")
+    return any(token in normalized for token in allowed_tokens)
 
 
 def get_arguments():
@@ -40,7 +425,13 @@ def blender_source():
 import math
 import os
 import pickle
+import site
 import sys
+
+for path in [site.getusersitepackages(), f"/usr/local/lib/python{sys.version_info.major}.{sys.version_info.minor}/dist-packages"]:
+    if path and os.path.isdir(path) and path not in sys.path:
+        sys.path.insert(0, path)
+
 import numpy as np
 
 args = sys.argv[sys.argv.index("--") + 1:]
@@ -188,7 +579,45 @@ if animation_end <= animation_start:
     raise RuntimeError("有効な身体アニメーション範囲がありません。")
 print(f"[diag] animation_start={animation_start:.3f}, animation_end={animation_end:.3f}")
 
+def find_pose_bone(patterns):
+    if armature_object is None or not getattr(armature_object, "pose", None):
+        return None
+    lowered = [(bone.name.lower(), bone) for bone in armature_object.pose.bones]
+    for pattern in patterns:
+        for name, bone in lowered:
+            if pattern in name:
+                return bone
+    return None
+
+
+pose_feature_bones = {
+    "hip": find_pose_bone(["hips", "pelvis", "j_bip_c_hips"]),
+    "pelvis": find_pose_bone(["pelvis", "hips", "j_bip_c_hips"]),
+    "left_thigh": find_pose_bone(["leftupleg", "left thigh", "j_bip_l_upperleg", "l_upperleg"]),
+    "right_thigh": find_pose_bone(["rightupleg", "right thigh", "j_bip_r_upperleg", "r_upperleg"]),
+    "left_knee": find_pose_bone(["leftleg", "left knee", "j_bip_l_lowerleg", "l_lowerleg"]),
+    "right_knee": find_pose_bone(["rightleg", "right knee", "j_bip_r_lowerleg", "r_lowerleg"]),
+}
+
+
+def sample_pose_features():
+    features = {}
+    for key, bone in pose_feature_bones.items():
+        if bone is None or armature_object is None:
+            features[key] = None
+            continue
+        matrix = armature_object.matrix_world @ bone.matrix
+        location = matrix.to_translation()
+        rotation = matrix.to_quaternion()
+        features[key] = {
+            "location": [float(location.x), float(location.y), float(location.z)],
+            "rotation_quaternion": [float(rotation.w), float(rotation.x), float(rotation.y), float(rotation.z)],
+        }
+    return features
+
+
 skinned_vertices = []
+body_pose_features = []
 for index in range(frame_count):
     progress = index / float(frame_count - 1)
     body_progress = max(0.0, min(1.0, progress)) * progress_limit
@@ -221,6 +650,7 @@ for index in range(frame_count):
     if len(vertices) != vertex_count:
         raise RuntimeError("評価後Body/SKIN頂点数が一致しません。")
     skinned_vertices.append(vertices)
+    body_pose_features.append(sample_pose_features())
 
 skinned_array = np.asarray(skinned_vertices, dtype=np.float64)
 base_array = np.asarray(body_base_vertices, dtype=np.float64)
@@ -246,6 +676,7 @@ if peak_index < frame_count - 1:
         f"(採用フレーム数: {peak_index + 1}/{frame_count})。"
     )
     skinned_vertices = skinned_vertices[: peak_index + 1]
+    body_pose_features = body_pose_features[: peak_index + 1]
     skinned_array = skinned_array[: peak_index + 1]
     per_vertex_motion = per_vertex_motion[: peak_index + 1]
     body_motion_preview = body_motion_preview[: peak_index + 1]
@@ -343,6 +774,9 @@ with open(output_path, "wb") as file:
             "body_base_vertices": body_base_vertices,
             "body_vertex_indices": body_vertex_indices,
             "skinned_vertices": skinned_vertices,
+            # 各フレームに対応する身体姿勢。DNN教師データ側のprogressや接触状態と
+            # 紐づけて、hip/pelvis/thigh/knee回転を特徴量へ追加できるよう保存する。
+            "body_pose_features": body_pose_features,
             # 保存は従来互換のフレームごとの平均変位 (frames, 3)
             # 注意: 空間的な変化が失われるため、学習時は
             # skirt_vertex_body_motionが優先して使われる。
@@ -368,6 +802,68 @@ print("身体特徴量を保存しました: " + output_path)
 '''
 
 
+def blender_python_executable(blender_command):
+    result = subprocess.run(
+        [
+            blender_command,
+            "--background",
+            "--python-exit-code",
+            "1",
+            "--python-expr",
+            "import sys; print('PYTHON_EXECUTABLE=' + sys.executable)",
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "BlenderのPython実行パスを取得できませんでした。\n"
+            f"--- Blender output ---\n{result.stdout}"
+        )
+    for line in result.stdout.splitlines():
+        if line.startswith("PYTHON_EXECUTABLE="):
+            executable = line.split("=", 1)[1].strip()
+            if executable:
+                return executable
+    raise RuntimeError(
+        "BlenderのPython実行パスを出力から特定できませんでした。\n"
+        f"--- Blender output ---\n{result.stdout}"
+    )
+
+
+def blender_python_search_paths(blender_python):
+    result = subprocess.run(
+        [
+            blender_python,
+            "-c",
+            (
+                "import os, site, sys; "
+                "paths=[site.getusersitepackages(), "
+                "f'/usr/local/lib/python{sys.version_info.major}.{sys.version_info.minor}/dist-packages']; "
+                "print(os.pathsep.join(p for p in paths if p))"
+            ),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+    return [path for path in result.stdout.strip().split(os.pathsep) if path]
+
+
+def blender_environment(blender_command):
+    env = os.environ.copy()
+    search_paths = blender_python_search_paths(blender_python_executable(blender_command))
+    if search_paths:
+        current_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = os.pathsep.join(search_paths + ([current_pythonpath] if current_pythonpath else []))
+    return env
+
+
 def run_from_colab(arguments):
     blender_command = shutil.which("blender")
     if blender_command is None:
@@ -376,6 +872,7 @@ def run_from_colab(arguments):
             " !apt-get update -qq && !apt-get install -y -qq blender"
             " を実行してください。"
         )
+    env = blender_environment(blender_command)
     worker_file = tempfile.NamedTemporaryFile(
         mode="w",
         suffix="_body_context.py",
@@ -397,6 +894,7 @@ def run_from_colab(arguments):
                 *arguments,
             ],
             check=False,
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -435,5 +933,5 @@ def main():
         "実行してください。"
     )
 
-
-main()
+if __name__ == "__main__":
+    main()

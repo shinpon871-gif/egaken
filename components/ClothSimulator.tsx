@@ -101,6 +101,8 @@ interface MeshColorMapping {
 type ColorCategory = 'hair' | 'skin' | 'jacket' | 'skirt' | 'shoes' | 'default';
 
 const SAFE_SIT_CLIP_PROGRESS = 0.85; // 100%の座位ポーズはモデル上で体が不自然に折れ曲がるため85%程度までで止める
+const GENERATED_SKIRT_USER_DATA_KEY = 'clothSimGeneratedSkirtGlb';
+const ENABLE_GENERATED_SKIRT_GLB_REPLACEMENT = false;
 function inferMaterialCategory(materialName: string, meshName: string): ColorCategory {
   const search = `${materialName} ${meshName}`.toLowerCase();
   if (/hair/.test(search)) return 'hair';
@@ -109,6 +111,15 @@ function inferMaterialCategory(materialName: string, meshName: string): ColorCat
   if (/top|shirt|jacket|coat|blouse|dress|cloth/.test(search)) return 'jacket';
   if (/skin|face|body|mouth|eye|brow|hair/.test(search)) return 'skin';
   return 'default';
+}
+
+function hasGeneratedSkirtMarker(object: THREE.Object3D): boolean {
+  let current: THREE.Object3D | null = object;
+  while (current) {
+    if (current.userData?.[GENERATED_SKIRT_USER_DATA_KEY]) return true;
+    current = current.parent;
+  }
+  return false;
 }
 
 function inferMeshType(
@@ -1009,7 +1020,8 @@ function applyCustomMaterials(
   wireframe: boolean,
   customMapping: MeshColorMapping,
   colors: Record<ColorCategory, string>,
-  onDiscoverMeshes?: (meshes: { id: string; name: string; current: ColorCategory }[]) => void
+  onDiscoverMeshes?: (meshes: { id: string; name: string; current: ColorCategory }[]) => void,
+  hideSkirtMeshes = false
 ) {
   if (!root) return;
 
@@ -1059,6 +1071,7 @@ function applyCustomMaterials(
         .map((m) => ((m as THREE.MeshStandardMaterial)?.map?.name || ''))
         .join(' ');
       const parentName = mesh.parent?.name || "";
+      const isGeneratedSkirt = hasGeneratedSkirtMarker(mesh);
 
       // 毎回再分類（ユーザーデータ蓄積を避ける）識別子は複製/再読込で変わるため
       // カスタム割り当ては識別子とメッシュ名の両方を許可する
@@ -1087,9 +1100,19 @@ function applyCustomMaterials(
       mesh.userData.clothSimMaterialCategories = materialCategories;
 
       const nextMaterials = originalMaterials.map((sourceMaterial, index) => {
-        return createMaterial(mesh, sourceMaterial, materialCategories[index]);
+        const nextMaterial = createMaterial(mesh, sourceMaterial, materialCategories[index]);
+        const shouldHideOriginalSkirt = hideSkirtMeshes && !isGeneratedSkirt && materialCategories[index] === 'skirt';
+        nextMaterial.visible = !shouldHideOriginalSkirt;
+        if (shouldHideOriginalSkirt) {
+          nextMaterial.transparent = true;
+          nextMaterial.opacity = 0;
+          nextMaterial.colorWrite = false;
+          nextMaterial.depthWrite = false;
+        }
+        return nextMaterial;
       });
       mesh.material = nextMaterials.length === 1 ? nextMaterials[0] : nextMaterials;
+      mesh.visible = !(hideSkirtMeshes && !isGeneratedSkirt && meshType === 'skirt' && !materialCategories.includes('skin'));
     }
   });
 
@@ -1099,8 +1122,123 @@ function applyCustomMaterials(
   }
 }
 
+function findSkirtReferenceMesh(root: THREE.Object3D | null): THREE.Mesh | null {
+  if (!root) return null;
+
+  let found: THREE.Mesh | null = null;
+  let bodyFallback: THREE.Mesh | null = null;
+  root.traverse((obj) => {
+    if (found) return;
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh) return;
+
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const storedCategories = Array.isArray(mesh.userData.clothSimMaterialCategories)
+      ? mesh.userData.clothSimMaterialCategories as ColorCategory[]
+      : [];
+    const hasSkirtMaterial = materials.some((material) =>
+      inferMaterialCategory(material?.name || '', mesh.name || '') === 'skirt'
+    ) || storedCategories.includes('skirt');
+    const meshType = inferMeshType(
+      mesh.name || '',
+      mesh.parent?.name || '',
+      materials.map((material) => material?.name || '').join(' '),
+      ''
+    );
+
+    if (hasSkirtMaterial || meshType === 'skirt') {
+      found = mesh;
+      return;
+    }
+
+    if (!bodyFallback && /body|female[_-]?avartar|female[_-]?avatar|avatar|avartar|zbrush|default_group|defualt_group/i.test(mesh.name || '')) {
+      bodyFallback = mesh;
+    }
+  });
+
+  return found ?? bodyFallback;
+}
+
+function getReferenceSkirtWorldBox(mesh: THREE.Mesh): THREE.Box3 | null {
+  const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
+  const position = geometry?.getAttribute('position') as THREE.BufferAttribute | undefined;
+  if (!geometry || !position) return null;
+
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  const storedCategories = Array.isArray(mesh.userData.clothSimMaterialCategories)
+    ? mesh.userData.clothSimMaterialCategories as ColorCategory[]
+    : [];
+  const materialCategories = materials.map((material, index) => {
+    const storedCategory = storedCategories[index];
+    if (storedCategory && storedCategory !== 'default') return storedCategory;
+    return inferMaterialCategory(material?.name || '', mesh.name || '');
+  });
+
+  const box = new THREE.Box3();
+  const localVertex = new THREE.Vector3();
+  const worldVertex = new THREE.Vector3();
+  const index = geometry.index;
+  const groups = geometry.groups.length > 0
+    ? geometry.groups
+    : [{ start: 0, count: index ? index.count : position.count, materialIndex: 0 }];
+
+  groups.forEach((group) => {
+    if (materialCategories[group.materialIndex ?? 0] !== 'skirt') return;
+
+    const end = group.start + group.count;
+    for (let itemIndex = group.start; itemIndex < end; itemIndex += 1) {
+      const vertexIndex = index ? index.getX(itemIndex) : itemIndex;
+      localVertex.fromBufferAttribute(position, vertexIndex);
+      worldVertex.copy(localVertex).applyMatrix4(mesh.matrixWorld);
+      box.expandByPoint(worldVertex);
+    }
+  });
+
+  return box.isEmpty() ? null : box;
+}
+
+function getBasisWorldBox(object: THREE.Object3D): THREE.Box3 | null {
+  const box = new THREE.Box3();
+  const localVertex = new THREE.Vector3();
+  const worldVertex = new THREE.Vector3();
+
+  object.updateMatrixWorld(true);
+  object.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    const position = mesh.isMesh
+      ? mesh.geometry?.getAttribute('position') as THREE.BufferAttribute | undefined
+      : undefined;
+    if (!position) return;
+
+    for (let vertexIndex = 0; vertexIndex < position.count; vertexIndex += 1) {
+      localVertex.fromBufferAttribute(position, vertexIndex);
+      worldVertex.copy(localVertex).applyMatrix4(mesh.matrixWorld);
+      box.expandByPoint(worldVertex);
+    }
+  });
+
+  return box.isEmpty() ? null : box;
+}
+
+function alignGeneratedSkirtToReference(skirtObject: THREE.Object3D, referenceMesh: THREE.Mesh): void {
+  const referenceBox = getReferenceSkirtWorldBox(referenceMesh);
+  const generatedBox = getBasisWorldBox(skirtObject);
+  const parent = skirtObject.parent;
+  if (!referenceBox || !generatedBox || !parent) return;
+
+  const referenceCenter = referenceBox.getCenter(new THREE.Vector3());
+  const generatedCenter = generatedBox.getCenter(new THREE.Vector3());
+  const deltaWorld = referenceCenter.sub(generatedCenter);
+  const parentWorldQ = parent.getWorldQuaternion(new THREE.Quaternion());
+  const parentWorldScale = parent.getWorldScale(new THREE.Vector3());
+  const deltaLocal = deltaWorld.applyQuaternion(parentWorldQ.invert()).divide(parentWorldScale);
+  skirtObject.position.add(deltaLocal);
+  skirtObject.updateMatrixWorld(true);
+}
+
 function SceneWithFBX({
   fbxPath,
+  skirtGlbPath,
   modelBasePosition,
   progress,
   onProgressChange,
@@ -1112,6 +1250,7 @@ function SceneWithFBX({
   onDiscoverMeshes
 }: {
   fbxPath: string;
+  skirtGlbPath: string;
   modelBasePosition: [number, number, number];
   progress: number;
   onProgressChange: (p: number) => void;
@@ -1129,6 +1268,7 @@ function SceneWithFBX({
   }, [SIT_CLIP_PROGRESS]);
 
   const fbx = useFBX(fbxPath) as THREE.Group & { animations?: THREE.AnimationClip[] };
+  const skirtGltf = useGLTF(skirtGlbPath) as { scene: THREE.Group; animations?: THREE.AnimationClip[] };
   
   // スケルトンのクローンを作成
   const cloned = useMemo(() => {
@@ -1137,8 +1277,22 @@ function SceneWithFBX({
     return clonedGroup;
   }, [fbx]);
 
+  const skirtObject = useMemo(() => {
+    if (!ENABLE_GENERATED_SKIRT_GLB_REPLACEMENT || !skirtGltf?.scene) return null;
+    const clonedSkirt = skirtGltf.scene.clone(true) as THREE.Group;
+    clonedSkirt.userData[GENERATED_SKIRT_USER_DATA_KEY] = true;
+    clonedSkirt.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.userData[GENERATED_SKIRT_USER_DATA_KEY] = true;
+      mesh.frustumCulled = false;
+    });
+    return clonedSkirt;
+  }, [skirtGltf]);
+
   const { camera } = useThree();
   const actionRef = useRef<THREE.AnimationAction | null>(null);
+  const skirtActionRef = useRef<THREE.AnimationAction | null>(null);
   const progressRef = useRef(progress);
   const armRestPoseRef = useRef<Array<{ bone: THREE.Object3D; quaternion: THREE.Quaternion }>>([]);
   const armSpreadBonesRef = useRef<ArmSpreadBones>({
@@ -1177,6 +1331,11 @@ function SceneWithFBX({
     return new THREE.AnimationMixer(cloned);
   }, [cloned]);
 
+  const skirtMixer = useMemo(() => {
+    if (!skirtObject) return null;
+    return new THREE.AnimationMixer(skirtObject);
+  }, [skirtObject]);
+
   // アニメーションクリップの選択と初期化
   const selectedClip = useMemo(() => {
     if (!fbx?.animations || fbx.animations.length === 0) return null;
@@ -1186,6 +1345,13 @@ function SceneWithFBX({
     return new THREE.AnimationClip(`${clip.name}_renderable`, clip.duration, renderTracks);
   }, [fbx]);
 
+  const skirtClip = useMemo(() => {
+    if (!skirtGltf?.animations || skirtGltf.animations.length === 0) return null;
+    return skirtGltf.animations.find((candidate) =>
+      candidate.tracks.some((track) => track.name.includes('morphTargetInfluences'))
+    ) || skirtGltf.animations[0];
+  }, [skirtGltf]);
+
   const applyPoseAtProgress = useCallback(
     (uiProgress: number) => {
       if (!mixer || !selectedClip || !cloned) return;
@@ -1193,6 +1359,11 @@ function SceneWithFBX({
       const clipTime = uiProgressToClipProgress(uiProgress) * duration;
       mixer.setTime(clipTime);
       mixer.update(0);
+
+      if (skirtMixer && skirtClip) {
+        skirtMixer.setTime(THREE.MathUtils.clamp(uiProgress, 0, 1) * (skirtClip.duration || 1));
+        skirtMixer.update(0);
+      }
 
       if (legCloseBonesRef.current.hips && hipRestPositionRef.current) {
         legCloseBonesRef.current.hips.position.copy(hipRestPositionRef.current);
@@ -1231,14 +1402,41 @@ function SceneWithFBX({
         }
       }
     },
-    [cloned, mixer, modelBasePosition, selectedClip, uiProgressToClipProgress]
+    [cloned, mixer, modelBasePosition, selectedClip, skirtClip, skirtMixer, uiProgressToClipProgress]
   );
 
   // マテリアルの適用とメッシュ検出
   useEffect(() => {
     if (!cloned) return;
-    applyCustomMaterials(cloned, wireframe, customMapping, colors, onDiscoverMeshes);
-  }, [cloned, wireframe, customMapping, colors, onDiscoverMeshes]);
+    applyCustomMaterials(cloned, wireframe, customMapping, colors, onDiscoverMeshes, ENABLE_GENERATED_SKIRT_GLB_REPLACEMENT && Boolean(skirtObject));
+  }, [cloned, wireframe, customMapping, colors, onDiscoverMeshes, skirtObject]);
+
+  useEffect(() => {
+    if (!skirtObject) return;
+    applyCustomMaterials(skirtObject, wireframe, customMapping, colors);
+  }, [skirtObject, wireframe, customMapping, colors]);
+
+  useEffect(() => {
+    if (!cloned || !skirtObject) return;
+
+    const referenceMesh = findSkirtReferenceMesh(cloned);
+    const referenceParent = referenceMesh?.parent ?? null;
+    if (!referenceMesh || !referenceParent) {
+      console.warn('[ClothSimulator] 生成GLBスカートの位置合わせ元になるFBXスカートメッシュが見つかりません。');
+      return;
+    }
+
+    skirtObject.position.copy(referenceMesh.position);
+    skirtObject.quaternion.copy(referenceMesh.quaternion);
+    skirtObject.scale.copy(referenceMesh.scale);
+    referenceParent.add(skirtObject);
+    referenceParent.updateMatrixWorld(true);
+    alignGeneratedSkirtToReference(skirtObject, referenceMesh);
+
+    return () => {
+      referenceParent.remove(skirtObject);
+    };
+  }, [cloned, skirtObject]);
 
   // アクションの設定と一時停止（自動再生の競合を徹底排除）
   useEffect(() => {
@@ -1358,6 +1556,21 @@ function SceneWithFBX({
     };
   }, [SIT_CLIP_PROGRESS, mixer, cloned, fbx, selectedClip]);
 
+  useEffect(() => {
+    if (!skirtMixer || !skirtClip) return;
+    const action = skirtMixer.clipAction(skirtClip);
+    action.reset();
+    action.setEffectiveWeight(1.0);
+    action.play();
+    skirtActionRef.current = action;
+    skirtMixer.setTime(0);
+    skirtMixer.update(0);
+    return () => {
+      skirtMixer.stopAllAction();
+      skirtActionRef.current = null;
+    };
+  }, [skirtClip, skirtMixer]);
+
   // 初期ポーズ適用と外部変更時の即時反映
   useEffect(() => {
     applyPoseAtProgress(progress);
@@ -1465,6 +1678,7 @@ export default function ClothSimulator() {
 
   const modelBasePosition: [number, number, number] = [0, 0, 0];
   const fbxPath = '/models/StandToSit_model.fbx';
+  const skirtGlbPath = '/models/skirt_mesh_sitting_animation.glb';
 
   const customMapping = useMemo<MeshColorMapping>(() => ({}), []);
 
@@ -1498,6 +1712,7 @@ export default function ClothSimulator() {
 
         <SceneWithFBX
           fbxPath={fbxPath}
+          skirtGlbPath={skirtGlbPath}
           modelBasePosition={modelBasePosition}
           progress={progress}
           onProgressChange={setProgress}

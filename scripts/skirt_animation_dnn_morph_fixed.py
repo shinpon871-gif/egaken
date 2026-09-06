@@ -37,6 +37,7 @@ blend_path = str(globals().get(
     os.path.join(output_dir, "skirt_mesh_sitting_animation.blend"),
 ))
 npz_path = os.path.join(output_dir, "skirt_animation_vertices.npz")
+mapping_path = os.path.join(output_dir, "skirt_animation_pose_mapping.json")
 blender_data_path = os.path.join(output_dir, "skirt_animation_vertices_for_blender.pkl")
 
 # Colabの%run -iはセルを再実行してもカーネルの変数(globals())が残り続ける。
@@ -166,6 +167,83 @@ vertices = np.asarray([predict_vertices(float(progress)) for progress in progres
 vertices[0] = base_vertices
 if not np.isfinite(vertices).all():
     raise RuntimeError("DNN出力にNaNまたはInfがあります。")
+
+source_body_progresses = np.asarray(
+    context.get("source_body_progresses", []),
+    dtype=np.float32,
+)
+source_frames = np.asarray(context.get("source_frames", []), dtype=np.float32)
+source_motion_progresses = np.linspace(
+    0.0,
+    1.0,
+    len(body_motion),
+    dtype=np.float32,
+)
+if source_body_progresses.shape[0] == len(body_motion):
+    mapped_body_progresses = np.interp(
+        progresses,
+        source_motion_progresses,
+        source_body_progresses,
+    ).astype(np.float32)
+else:
+    mapped_body_progresses = np.full_like(progresses, np.nan, dtype=np.float32)
+if source_frames.shape[0] == len(body_motion):
+    mapped_source_frames = np.interp(
+        progresses,
+        source_motion_progresses,
+        source_frames,
+    ).astype(np.float32)
+else:
+    mapped_source_frames = np.full_like(progresses, np.nan, dtype=np.float32)
+
+with open(mapping_path, "w", encoding="utf-8") as file:
+    context_progress_limit = context.get("progress_limit", float("nan"))
+    context_original_frame_count = context.get("original_frame_count", 0)
+    context_adopted_frame_count = context.get(
+        "adopted_frame_count",
+        len(body_motion),
+    )
+    json.dump(
+        {
+            "format_version": 1,
+            "source": "skirt_animation_dnn_morph_fixed.py",
+            "glb_path": glb_path,
+            "body_context_path": body_context_path,
+            "frame_count": int(num_animation_frames),
+            "max_sit_angle_rad": float(max_sit_angle),
+            "body_context_progress_limit": float(context_progress_limit),
+            "body_context_original_frame_count": int(
+                context_original_frame_count,
+            ),
+            "body_context_adopted_frame_count": int(
+                context_adopted_frame_count,
+            ),
+            "pose_mapping": [
+                {
+                    "key_index": int(index),
+                    "shape_key": (
+                        "Basis" if index == 0 else f"Pose_{index:03d}"
+                    ),
+                    "dnn_progress": float(progress),
+                    "pose_y_rad": float(progress * max_sit_angle),
+                    "source_body_progress": (
+                        None
+                        if not np.isfinite(mapped_body_progresses[index])
+                        else float(mapped_body_progresses[index])
+                    ),
+                    "source_frame": (
+                        None
+                        if not np.isfinite(mapped_source_frames[index])
+                        else float(mapped_source_frames[index])
+                    ),
+                }
+                for index, progress in enumerate(progresses)
+            ],
+        },
+        file,
+        indent=2,
+        ensure_ascii=False,
+    )
 
 # 異常に大きい変位はThree.jsのバウンディングボックスをモーフ込みで
 # 極端に膨張させ、ビューアでモデルが見えなくなる原因になる。

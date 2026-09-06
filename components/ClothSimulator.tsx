@@ -124,10 +124,63 @@ const SKIRT_ASSET_VERSION = [
 
 const SKIRT_MORPH_WEIGHT_EPSILON = 1e-6;
 
+// モデルと生成済みスカートアセットの参照先
+const FBX_MODEL_PATH = '/models/StandToSit_model.fbx';
+const SKIRT_GLB_PATH = '/models/skirt_mesh_sitting_animation.glb';
+
+// 画面全体と照明で共有する色
+const SCENE_BACKGROUND_COLOR = '#0f172a';
+const HEMISPHERE_SKY_COLOR = '#ffffff';
+const HEMISPHERE_GROUND_COLOR = '#334155';
+
+// 初期カメラとモデル配置
+const CAMERA_INITIAL_POSITION: [number, number, number] = [0, 0, 4.5];
+const CAMERA_FOV = 32;
+const MODEL_BASE_POSITION: [number, number, number] = [0, 0, 0];
+const ORBIT_CONTROLS_TARGET: [number, number, number] = [0, 0, 0];
+
+// ライト設定
+const HEMISPHERE_LIGHT_INTENSITY = 0.7;
+const AMBIENT_LIGHT_INTENSITY = 0.5;
+const DIRECTIONAL_LIGHT_POSITION: [number, number, number] = [5, 10, 6];
+const DIRECTIONAL_LIGHT_INTENSITY = 1.5;
+const SPOT_LIGHT_POSITION: [number, number, number] = [-5, 8, 4];
+const SPOT_LIGHT_INTENSITY = 0.8;
+const SPOT_LIGHT_PENUMBRA = 0.5;
+
+// UI表示と操作量
+const CONTROL_PANEL_WIDTH = 340;
+const PROGRESS_MIN = 0;
+const PROGRESS_MAX = 1;
+const PROGRESS_STEP = 0.001;
+const AUTO_SEEK_SPEED = 1.2;
+const TARGET_EPSILON = 1e-4;
+
+// モデルを画面内へ収めるための表示比率
+const MODEL_VIEW_HEIGHT_FRACTION = 0.85;
+const FALLBACK_OBJECT_SCALE = 0.01;
+
+// マテリアル設定
+const FBX_MATERIAL_ROUGHNESS = 0.5;
+const FBX_MATERIAL_METALNESS = 0.1;
+const SKIRT_MATERIAL_ROUGHNESS = 0.55;
+const SKIRT_MATERIAL_METALNESS = 0.05;
+
+// 初期配色
+const DEFAULT_COLORS: Record<ColorCategory, string> = {
+  hair: '#3b2418',
+  skin: '#f5dcc0',
+  jacket: '#7dd3fc',
+  skirt: '#1e293b',
+  shoes: '#171717',
+  default: '#d1d5db',
+};
+
 function getSkirtMorphWeightTracks(clip: THREE.AnimationClip): THREE.KeyframeTrack[] {
   return clip.tracks.filter((track) => /morphTargetInfluences|\.weights$/i.test(track.name));
 }
 
+// GLB終端ぴったりを踏むと先頭姿勢へ巻き戻るため有効morphの直前時刻を使う
 function resolveLastValidSkirtMorphTime(clip: THREE.AnimationClip): number {
   const morphTracks = getSkirtMorphWeightTracks(clip);
   let lastValidTime: number | null = null;
@@ -176,7 +229,8 @@ function resolveSkirtClipTime(clip: THREE.AnimationClip, uiProgress: number): nu
   );
 }
 
-const SAFE_SIT_CLIP_PROGRESS = 0.85; // 100%の座位ポーズはモデル上で体が不自然に折れ曲がるため85%程度までで止める
+// 100%の座位ポーズはモデル上で体が不自然に折れ曲がるため85%程度までで止める
+const SAFE_SIT_CLIP_PROGRESS = 0.85;
 function inferMaterialCategory(materialName: string, meshName: string): ColorCategory {
   const search = `${materialName} ${meshName}`.toLowerCase();
   if (/hair/.test(search)) return 'hair';
@@ -232,13 +286,13 @@ type ArmSpreadBones = {
   rightForearm: THREE.Object3D | null;
 };
 
-// 立位区間でのみ腕広げ補正を有効化する終了進捗（これを超えると補正しない）
+// 立位区間でのみ腕広げ補正を有効化する終了進捗
 const STANDING_ARM_SPREAD_END_PROGRESS = 0.18;
-// 現在腕方向を目標方向へ寄せる補間率（大きいほど強く目標へ寄る）
+// 現在腕方向を目標方向へ寄せる補間率
 const STANDING_ARM_OUTWARD_BLEND = 0.38;
-// 目標腕方向を作る際の左右成分の重み（大きいほど外側へ開く）
+// 目標腕方向を作る際の左右成分の重み
 const STANDING_ARM_OUTWARD_LATERAL_WEIGHT = 0.34;
-// 1フレームあたりの最大回転角（正値）回転軸側で向きを決める
+// 1フレームあたりの最大回転角
 const STANDING_ARM_OUTWARD_MAX_ANGLE = THREE.MathUtils.degToRad(4);
 
 type LegCloseBones = {
@@ -264,94 +318,97 @@ type ResolvedLegAdductionCalibration = {
 const THIGH_CLOSE_START_PROGRESS = 0.12;
 const THIGH_CLOSE_FULL_PROGRESS = 0.58;
 
-// ★座位時の脚閉じ密着化定義（目標は股間が見えないほどぴったり太もも同士を閉じた状態）
+// 座位時の脚閉じ密着化定義
+// 目標は股間が見えないほど太もも同士を閉じた状態
 
-//【座位脚閉じ関連の各パラメータ定義】
-// 内腿サンプリング位置の補間係数（太ももから膝へのパス上での相対位置: 0.0=太もも, 1.0=膝）
+// 座位脚閉じ関連の各パラメータ定義
+// 内腿サンプリング位置の補間係数
+// 0が太もも側 1が膝側
 const INNER_THIGH_SAMPLE_T = 0.34;
-// ターゲット時の内腿間隔の比率（基本座位ポーズの内腿ギャップに対する縮小目標）
+// ターゲット時の内腿間隔の比率
 const TARGET_INNER_THIGH_GAP_RATIO_AT_FULL_CLOSE = 0.010;
-// ターゲット時の膝間隔の比率（基本座位ポーズの膝ギャップに対する縮小目標）
+// ターゲット時の膝間隔の比率
 const TARGET_KNEE_GAP_RATIO_AT_FULL_CLOSE = 0.07;
-// ターゲット時の足首間隔の比率（基本座位ポーズの足首ギャップに対する縮小目標）
+// ターゲット時の足首間隔の比率
 const TARGET_ANKLE_GAP_RATIO_AT_FULL_CLOSE = 0.42;
-// 内腿ギャップの厳格な下限（これ以上閉じるとメッシュが破綻する安全限界）
+// 内腿ギャップの厳格な下限
 const HARD_MIN_INNER_THIGH_GAP_RATIO_FROM_SIT_POSE = 0.010;
-// 膝ギャップの厳格な下限（脚交差を防ぐ安全限界）
+// 膝ギャップの厳格な下限
 const HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE = 0.05;
-// 足首ギャップの厳格な下限（足首の不自然な動きを防ぐ安全限界）
+// 足首ギャップの厳格な下限
 const HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE = 0.22;
-// 太もも内転の最大回転角（脚交差を防ぐため過度に上げない）
+// 太もも内転の最大回転角
 const MAX_THIGH_ADDUCTION_LOCAL_ANGLE = THREE.MathUtils.degToRad(17.5);
-// 膝の世界座標調整の最大回転角（内転後の膝微調整に使用）
+// 膝の世界座標調整の最大回転角
 const MAX_WORLD_KNEE_ALIGN_ANGLE = THREE.MathUtils.degToRad(4.0);
 // 軸キャリブレーション時のテスト回転角度
 const CALIBRATION_TEST_ANGLE = THREE.MathUtils.degToRad(2.5);
 
-//【脚閉じ探索で使用する数値的な閾値】
-// ギャップ値の下限（比率計算の退化を防止）
+// 脚閉じ探索で使用する数値的な閾値
+// ギャップ値の下限
 const GAP_EPSILON_MIN = 0.001;
-// 左右脚が元の側に留まる判定用閾値（脚交差を防止）
+// 左右脚が元の側に留まる判定用閾値
 const LEG_SIDE_KEEP_EPSILON = 0.001;
-// 脚閉じ進行度がほぼゼロと見なす閾値（微小値判定に使用）
+// 脚閉じ進行度がほぼゼロと見なす閾値
 const LEG_CLOSE_PROGRESS_ACTIVE_EPSILON = 0.0001;
-// ベクトル外積の長さ二乗の下限（軸代替判定に使用）
+// ベクトル外積の長さ二乗の下限
 const CROSS_AXIS_MIN_LENGTH_SQ = 1e-8;
-// 方向ベクトル間の角度の下限（微小差分を無視して数値ノイズを低減）
+// 方向ベクトル間の角度の下限
 const DIRECTION_ALIGNMENT_MIN_ANGLE = 1e-5;
 
-//【軸キャリブレーション評価における重み係数】
-// 膝の上下ずれペナルティ重み（大きいほど膝の上下動を抑制）
+// 軸キャリブレーション評価における重み係数
+// 膝の上下ずれペナルティ重み
 const AXIS_CALIBRATION_Y_PENALTY_WEIGHT = 0.25;
-// 膝の前後ずれペナルティ重み（大きいほど膝の前後動を抑制）
+// 膝の前後ずれペナルティ重み
 const AXIS_CALIBRATION_Z_PENALTY_WEIGHT = 0.25;
-// 足首の側方ずれペナルティ重み（足首の不自然な動きを抑制）
+// 足首の側方ずれペナルティ重み
 const AXIS_CALIBRATION_FOOT_LATERAL_PENALTY_WEIGHT = 0.12;
-// 脚交差検出時のペナルティ（脚交差を強く抑止）
+// 脚交差検出時のペナルティ
 const AXIS_CALIBRATION_SIDE_BREAK_PENALTY = 0.4;
-// 軸キャリブレーション時の最小受け入れスコア（これ以下は不採用）
+// 軸キャリブレーション時の最小受け入れスコア
 const AXIS_CALIBRATION_MIN_ACCEPTABLE_SCORE = -0.05;
-// 軸の方向パターン数（左右各軸について正逆2方向を評価）
+// 軸の方向パターン数
 const AXIS_SIGN_VARIANTS = 2;
 
-//【ターゲット値の微調整を開始・終了する判定用マージン】
-// 内腜ギャップがターゲット超過時の許容値（超過で微調整開始）
+// ターゲット値の微調整を開始する判定用マージン
+// 内腿ギャップがターゲット超過時の許容値
 const REFINE_TRIGGER_INNER_GAP_MARGIN = 0.002;
-// 膝ギャップがターゲット超過時の許容値（超過で膝微調整開始）
+// 膝ギャップがターゲット超過時の許容値
 const REFINE_TRIGGER_KNEE_GAP_MARGIN = 0.01;
-// 脚が交差しないよう制限する値（ハード下限として機能）
+// 脚が交差しないよう制限する値
 const TARGET_SIDE_CLAMP_EPSILON = 0.001;
 
-//【脚閉じ探索時の対称・非対称な内転スケール候補】
-// 太もも内転の回転スケール候補（大きいほど内転が強い）
+// 脚閉じ探索時の対称と非対称な内転スケール候補
+// 太もも内転の回転スケール候補
 const LEG_CLOSE_BASE_SCALES = [2.40, 2.20, 2.00, 1.80, 1.60, 1.40, 1.20, 1.00, 0.80, 0.60, 0.40, 0.20];
-// 左右非対称な内転を試す際のオフセット（左右異なる強度での閉じを可能にする）
+// 左右非対称な内転を試す際のオフセット
 const LEG_CLOSE_ASYMMETRY_OFFSETS = [0.0, -0.12, 0.12, -0.22, 0.22];
 
-//【スコア計算における重み係数（内腜密着→膝密着→足首自然さの優先順）】
-// 内腜ギャップの小ささ重視重み（大きいほど密着を優先）
+// スコア計算における重み係数
+// 優先順は内腿密着 膝密着 足首自然さ
+// 内腿ギャップの小ささ重視重み
 const SCORE_INNER_GAP_WEIGHT = 1400;
-// 内腿ギャップがターゲット超過時のペナルティ重み制御の強さ
+// 内腿ギャップがターゲット超過時のペナルティ重み
 const SCORE_INNER_EXCESS_WEIGHT = 600;
-// 膝ギャップの小ささ重視重み（大きいほど膝を寄せるポーズを優先）
+// 膝ギャップの小ささ重視重み
 const SCORE_KNEE_GAP_WEIGHT = 55;
-// 膝ギャップがターゲット超過時のペナルティ重み（過度な開きを抑制）
+// 膝ギャップがターゲット超過時のペナルティ重み
 const SCORE_KNEE_EXCESS_WEIGHT = 20;
-// 足首ギャップがターゲット以下の場合のボーナス重み（過度な密着を防止）
+// 足首ギャップがターゲット以下の場合のボーナス重み
 const SCORE_ANKLE_BONUS_WEIGHT = 0.5;
-// 左右内転スケール差異のペナルティ重み（歪んだ座り方を避ける）
+// 左右内転スケール差異のペナルティ重み
 const SCORE_ASYMMETRY_WEIGHT = 0.15;
 
-//【探索の早期終了判定用品質閾値】
-// 内腿ギャップがターゲット以下となる許容値（充分な密着度）
+// 探索の早期終了判定用品質閾値
+// 内腿ギャップがターゲット以下となる許容値
 const EARLY_ACCEPT_INNER_GAP_MARGIN = 0.0015;
-// 膝ギャップがターゲット以下となる許容値（充分な膝の寄せ度）
+// 膝ギャップがターゲット以下となる許容値
 const EARLY_ACCEPT_KNEE_GAP_MARGIN = 0.004;
-// 探索早期終了判定時のスコア計算における内腿重み指数
+// 探索早期終了判定時の内腿重み指数
 const EARLY_BREAK_INNER_WEIGHT = 1000;
-// 探索早期終了判定時のスコア計算における膝重み指数
+// 探索早期終了判定時の膝重み指数
 const EARLY_BREAK_KNEE_WEIGHT = 40;
-// 探索早期終了判定時のスコアベースオフセット（判定感度の調整値）
+// 探索早期終了判定時のスコアベースオフセット
 const EARLY_BREAK_SCORE_BIAS = 2.0;
 
 const LEG_ADDUCTION_AXIS_RECOVERY_MAX_LOGS = 0;
@@ -410,7 +467,7 @@ function createAdductionAxisCandidates(): THREE.Vector3[] {
       for (let z = -1; z <= 1; z += 1) {
         if (x === 0 && y === 0 && z === 0) continue;
         const nonZero = Math.abs(x) + Math.abs(y) + Math.abs(z);
-        if (nonZero === 1) continue; // 単軸方向は基本候補側で既に列挙済み
+        if (nonZero === 1) continue; // 単軸方向は基本候補側で列挙済み
         diagonal.push(new THREE.Vector3(x, y, z).normalize());
       }
     }
@@ -723,7 +780,7 @@ function evaluateThighAdductionAxis(
 }
 
 function fallbackAdductionAxisFromSide(side: 'left' | 'right'): THREE.Vector3 {
-  // 軸キャリブレーション失敗時は股関節ローカルの左右回頭方向を緊急代替として使う
+  // 軸キャリブレーション失敗時は股関節ローカルの左右回頭方向を代替として使う
   return side === 'left' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, -1, 0);
 }
 
@@ -1045,7 +1102,7 @@ function applyStandingUpperArmSpread(
       STANDING_ARM_OUTWARD_BLEND * standT
     ).normalize();
 
-    // 正角度で外開きになるように回転軸の向きをここで決める
+    // 正角度で外開きになるよう回転軸の向きをここで決める
     const axisWorld = new THREE.Vector3().crossVectors(desiredDir, currentDir);
     const axisLenSq = axisWorld.lengthSq();
     const angle = currentDir.angleTo(desiredDir);
@@ -1074,9 +1131,8 @@ function applyStandingUpperArmSpread(
   root.updateMatrixWorld(true);
 }
 
-/**
- * モデル内の全メッシュに対してマテリアルを強制上書き適用する関数
- */
+// モデル内の全メッシュへカテゴリ別マテリアルを適用する
+// 色変更とワイヤーフレーム切り替えを即時反映するため再生成する
 function applyCustomMaterials(
   root: THREE.Object3D | null,
   wireframe: boolean,
@@ -1088,14 +1144,14 @@ function applyCustomMaterials(
   if (!root) return;
 
   const createMaterial = (mesh: THREE.Mesh, sourceMaterial: THREE.Material | null, category: ColorCategory) => {
-    // 色変更を確実に即時反映させるため毎回新しいマテリアルを生成する
-    // 使い回すと古い色状態が残ることがあるため再利用しない
+    // 色変更を即時反映するため毎回新しいマテリアルを生成する
+    // 使い回すと古い色状態が残るため再利用しない
 
     const newMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(colors[category] || colors.default),
       side: THREE.DoubleSide,
-      roughness: 0.5,
-      metalness: 0.1,
+      roughness: FBX_MATERIAL_ROUGHNESS,
+      metalness: FBX_MATERIAL_METALNESS,
       wireframe: wireframe,
       vertexColors: false,
       map: null,
@@ -1110,7 +1166,7 @@ function applyCustomMaterials(
     newMat.userData.fromClothSim = true;
 
     if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
-      // Skinned vertices can move outside the FBX bind-pose bounds while posing.
+      // ポーズ中のスキン頂点はバインドポーズの範囲外へ出るためカリングしない
       mesh.frustumCulled = false;
     }
 
@@ -1134,8 +1190,8 @@ function applyCustomMaterials(
         .join(' ');
       const parentName = mesh.parent?.name || "";
 
-      // 毎回再分類（ユーザーデータ蓄積を避ける）識別子は複製/再読込で変わるため
-      // カスタム割り当ては識別子とメッシュ名の両方を許可する
+      // 毎回再分類してユーザーデータ蓄積を避ける
+      // 識別子は複製と再読込で変わるためメッシュ名でも割り当て可能にする
       const meshType = inferMeshType(
         meshName,
         parentName,
@@ -1168,7 +1224,8 @@ function applyCustomMaterials(
     }
   });
 
-  // メッシュ一覧をUI側へ通知（一度だけまたは変更時のみ走るよう親で制御）
+  // メッシュ一覧をUI側へ通知する
+  // 一度だけまたは変更時のみ走る制御は親側に置く
   if (onDiscoverMeshes) {
     onDiscoverMeshes(discovered);
   }
@@ -1191,8 +1248,8 @@ function applyAnimatedSkirtMaterial(
     const material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(skirtColor),
       side: THREE.DoubleSide,
-      roughness: 0.55,
-      metalness: 0.05,
+      roughness: SKIRT_MATERIAL_ROUGHNESS,
+      metalness: SKIRT_MATERIAL_METALNESS,
       wireframe,
       vertexColors: false,
     });
@@ -1240,7 +1297,7 @@ function SceneWithFBX({
   const fbx = useFBX(fbxPath) as THREE.Group & { animations?: THREE.AnimationClip[] };
   const skirtGltf = useGLTF(skirtGlbPath) as AnimatedSkirtGltf;
   
-  // スケルトンのクローンを作成
+  // FBX元データを直接汚さないようスケルトンを複製する
   const cloned = useMemo(() => {
     if (!fbx) return null;
     const clonedGroup = skeletonClone(fbx) as THREE.Group;
@@ -1282,14 +1339,13 @@ function SceneWithFBX({
   const standingFootLocalYRef = useRef<number | null>(null);
   const modelRootRef = useRef<THREE.Group>(null);
   const skirtRootMotionRef = useRef<THREE.Group>(null);
-  const TARGET_EPSILON = 1e-4;
   const hiddenFbxCategories = useMemo(() => new Set<ColorCategory>(['skirt']), []);
 
   useEffect(() => {
     progressRef.current = progress;
   }, [progress]);
 
-  // 【原因解決①】外部のアニメーション補助を廃止し独自管理へ統一
+  // 外部のアニメーション補助を使わずAnimationMixerを独自管理する
   const mixer = useMemo(() => {
     if (!cloned) return null;
     return new THREE.AnimationMixer(cloned);
@@ -1303,7 +1359,7 @@ function SceneWithFBX({
   // アニメーションクリップの選択と初期化
   const selectedClip = useMemo(() => {
     if (!fbx?.animations || fbx.animations.length === 0) return null;
-    // 一般的なテイク名を含むクリップを優先して探索
+    // 一般的なテイク名を含むクリップを優先して探索する
     const clip = fbx.animations.find((candidate) => /mixamo.com|Take|take/i.test(candidate.name)) || fbx.animations[0];
     const renderTracks = clip.tracks.filter((track) => !/^egaken\.(position|quaternion|scale)$/.test(track.name));
     return new THREE.AnimationClip(`${clip.name}_renderable`, clip.duration, renderTracks);
@@ -1346,8 +1402,8 @@ function SceneWithFBX({
         skirtRootMotionRef.current.position.copy(rootMotionOffset);
       }
 
-      // 立位時の腕基準ポーズを安定して維持しつつ立位区間だけ上腕を少し外側へ開いて
-      // 手が衣装へ食い込まないようにする
+      // 立位時の腕基準ポーズを安定して維持する
+      // 立位区間だけ上腕を外側へ開き手の衣装食い込みを避ける
       if (armRestPoseRef.current.length > 0) {
         armRestPoseRef.current.forEach(({ bone, quaternion }) => {
           bone.quaternion.copy(quaternion);
@@ -1407,7 +1463,8 @@ function SceneWithFBX({
     };
   }, [clonedSkirt, selectedSkirtClip, skirtMixer]);
 
-  // アクションの設定と一時停止（自動再生の競合を徹底排除）
+  // アクションの設定と一時停止
+  // 自動再生との競合を排除する
   useEffect(() => {
     if (!mixer || !cloned || !selectedClip) return;
     const action = mixer.clipAction(selectedClip);
@@ -1416,8 +1473,8 @@ function SceneWithFBX({
     action.play();
     actionRef.current = action;
 
-    // 立位の腕ポーズを一度だけ記録する座位側のサンプリング後に腕ボーンのみ復元し
-    // 100%ポーズで両手が太ももへ押し込まれるのを防ぐ
+    // 立位の腕ポーズを一度だけ記録する
+    // 座位側のサンプリング後に腕ボーンのみ復元し手の太もも食い込みを防ぐ
     mixer.setTime(0);
     mixer.update(0);
     const armBones: Array<{ bone: THREE.Object3D; quaternion: THREE.Quaternion }> = [];
@@ -1528,9 +1585,10 @@ function SceneWithFBX({
     applyPoseAtProgress(progress);
   }, [applyPoseAtProgress, progress]);
 
-  // 【指定維持】上手くいったサイズと位置の自動計算ロジックを100%完全キープ
+  // サイズと位置の自動計算ロジック
+  // 既存の見え方を維持するため計算式は変更しない
   const { objectScale, modelOffsetY } = useMemo(() => {
-    if (!cloned) return { objectScale: 0.01, modelOffsetY: 0 };
+    if (!cloned) return { objectScale: FALLBACK_OBJECT_SCALE, modelOffsetY: 0 };
 
     const box = new THREE.Box3();
     cloned.traverse((obj) => {
@@ -1550,17 +1608,16 @@ function SceneWithFBX({
 
     const distance = cam.position.distanceTo(new THREE.Vector3(...modelBasePosition));
     const camHeightAtDist = 2 * distance * Math.tan((cam.fov * Math.PI) / 360);
-    const desiredFraction = 0.85;
-    const desiredHeight = camHeightAtDist * desiredFraction;
+    const desiredHeight = camHeightAtDist * MODEL_VIEW_HEIGHT_FRACTION;
 
-    const scale = size.y > 0 ? desiredHeight / size.y : 0.01;
+    const scale = size.y > 0 ? desiredHeight / size.y : FALLBACK_OBJECT_SCALE;
     const centerY = (box.min.y + box.max.y) / 2;
     const offsetY = -centerY * scale;
 
     return { objectScale: scale, modelOffsetY: offsetY };
   }, [cloned, camera, modelBasePosition]);
 
-  // 【原因解決②】ボタン操作およびスライダーによるポーズ変更をボーンへリアルタイム反映
+  // ボタン操作とスライダーによるポーズ変更をボーンへ即時反映する
   // 目標到達後は姿勢値を固定し勝手に戻らないようにする
   useFrame((_, delta) => {
     if (!mixer || !actionRef.current || !selectedClip) return;
@@ -1568,14 +1625,13 @@ function SceneWithFBX({
     const currentProgress = progressRef.current;
 
     if (playTarget !== null) {
-      // 立つ/座るボタン押下時の滑らかな自動シーク
-      const speed = 1.2; // アニメーションの再生速度倍率
+      // 立つ座るボタン押下時の滑らかな自動シーク
       let nextProgress = currentProgress;
 
       if (currentProgress < playTarget) {
-        nextProgress = Math.min(currentProgress + delta * speed, playTarget);
+        nextProgress = Math.min(currentProgress + delta * AUTO_SEEK_SPEED, playTarget);
       } else if (currentProgress > playTarget) {
-        nextProgress = Math.max(currentProgress - delta * speed, playTarget);
+        nextProgress = Math.max(currentProgress - delta * AUTO_SEEK_SPEED, playTarget);
       }
 
       // 目標に非常に接近したらスナップして確定させる
@@ -1588,19 +1644,17 @@ function SceneWithFBX({
         onProgressChange(nextProgress);
       }
 
-      applyPoseAtProgress(nextProgress); // デルタ0で即時ポーズをメッシュに反映
+      applyPoseAtProgress(nextProgress);
 
-      // 目標に到達したら目標値を空にしてアニメーション停止
-      // これにより姿勢値は固定される（外部更新がない限り変わらない）
+      // 目標に到達したら目標値を空にしてアニメーション停止する
+      // 姿勢値自体は保持されるため座り状態が続く
       const distToTarget = Math.abs(nextProgress - playTarget);
       if (distToTarget <= TARGET_EPSILON) {
-        // ここで目標値を空にしてフレーム毎の動きを止める
-        // ただし姿勢値自体は保持されるので座り状態が続く
         onFinished();
       }
     } else {
-      // スライダー（ポーズバー）の手動操作時または目標到達後
-      applyPoseAtProgress(currentProgress); // 即時ボーン反映
+      // スライダーの手動操作時または目標到達後
+      applyPoseAtProgress(currentProgress);
     }
   });
 
@@ -1620,20 +1674,13 @@ function SceneWithFBX({
 
 export default function ClothSimulator() {
   const [wireframe, setWireframe] = useState(false);
-  const [progress, setProgress] = useState(0); // 0: 立位, 1: 座位
+  const [progress, setProgress] = useState(PROGRESS_MIN);
   const [playTarget, setPlayTarget] = useState<number | null>(null);
-  const [colors, setColors] = useState<Record<ColorCategory, string>>({
-    hair: '#3b2418',
-    skin: '#f5dcc0',
-    jacket: '#7dd3fc',
-    skirt: '#1e293b',
-    shoes: '#171717',
-    default: '#d1d5db',
-  });
+  const [colors, setColors] = useState<Record<ColorCategory, string>>(DEFAULT_COLORS);
 
-  const modelBasePosition: [number, number, number] = [0, 0, 0];
-  const fbxPath = '/models/StandToSit_model.fbx';
-  const skirtGlbPath = `/models/skirt_mesh_sitting_animation.glb?v=${SKIRT_ASSET_VERSION}`;
+  const modelBasePosition = MODEL_BASE_POSITION;
+  const fbxPath = FBX_MODEL_PATH;
+  const skirtGlbPath = `${SKIRT_GLB_PATH}?v=${SKIRT_ASSET_VERSION}`;
 
   const customMapping = useMemo<MeshColorMapping>(() => ({}), []);
 
@@ -1644,26 +1691,25 @@ export default function ClothSimulator() {
     setColors((current) => ({ ...current, [category]: value }));
   }, []);
 
-  // パーツのタイプ（服・肌・その他）を手動で切り替えるトグル関数
-  // ※ 救済UIを統合したため個別トグルは廃止
+  // パーツのタイプを手動で切り替えるトグルは救済UI統合により廃止
 
   return (
     <div className="absolute inset-0 w-full h-full bg-[#0f172a] overflow-hidden select-none">
       {/* 3次元キャンバス領域 */}
       <Canvas
         shadows
-        camera={{ position: [0, 0, 4.5], fov: 32 }}
+        camera={{ position: CAMERA_INITIAL_POSITION, fov: CAMERA_FOV }}
         className="w-full h-full"
         gl={{ alpha: false }}
         onCreated={({ gl }) => {
           gl.shadowMap.type = THREE.PCFShadowMap;
         }}
       >
-        <color attach="background" args={["#0f172a"]} />
-        <hemisphereLight args={["#ffffff", "#334155", 0.7]} />
-        <ambientLight intensity={0.5} />
-        <directionalLight position={[5, 10, 6]} intensity={1.5} castShadow />
-        <spotLight position={[-5, 8, 4]} intensity={0.8} penumbra={0.5} />
+        <color attach="background" args={[SCENE_BACKGROUND_COLOR]} />
+        <hemisphereLight args={[HEMISPHERE_SKY_COLOR, HEMISPHERE_GROUND_COLOR, HEMISPHERE_LIGHT_INTENSITY]} />
+        <ambientLight intensity={AMBIENT_LIGHT_INTENSITY} />
+        <directionalLight position={DIRECTIONAL_LIGHT_POSITION} intensity={DIRECTIONAL_LIGHT_INTENSITY} castShadow />
+        <spotLight position={SPOT_LIGHT_POSITION} intensity={SPOT_LIGHT_INTENSITY} penumbra={SPOT_LIGHT_PENUMBRA} />
 
         <SceneWithFBX
           fbxPath={fbxPath}
@@ -1679,36 +1725,36 @@ export default function ClothSimulator() {
           onDiscoverMeshes={handleDiscoverMeshes}
         />
 
-        <OrbitControls makeDefault enablePan={true} enableZoom={true} enableRotate={true} target={[0, 0, 0]} />
+        <OrbitControls makeDefault enablePan={true} enableZoom={true} enableRotate={true} target={ORBIT_CONTROLS_TARGET} />
       </Canvas>
 
-      {/* 右側：メイン操作コントロールパネル */}
+      {/* 右側のメイン操作コントロールパネル */}
       <div className="pointer-events-none absolute inset-0 flex items-start justify-end p-4">
-        <div className="pointer-events-auto rounded-2xl border border-slate-700/40 bg-slate-900/90 p-4 shadow-2xl backdrop-blur-md style-panel" style={{ width: 340 }}>
-          {/* 2. 座る/立つアニメーションボタン */}
+        <div className="pointer-events-auto rounded-2xl border border-slate-700/40 bg-slate-900/90 p-4 shadow-2xl backdrop-blur-md style-panel" style={{ width: CONTROL_PANEL_WIDTH }}>
+          {/* 座る立つアニメーションボタン */}
           <div className="mb-4 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800">
             <div className="text-xs font-medium text-slate-400 mb-2">Animation Triggers</div>
             <div className="flex items-center gap-2">
-              {/* 立位ボタン：0（立ち状態）へ向けてアニメーション停止まで移行 */}
+              {/* 立位ボタン */}
               <button
                 className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all border ${
-                  progress <= 0.001
+                  progress <= PROGRESS_STEP
                     ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg' 
                     : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-750'
                 }`}
-                onClick={() => setPlayTarget(0)}
+                onClick={() => setPlayTarget(PROGRESS_MIN)}
               >
                 🧍 Stand (立)
               </button>
               
-              {/* 座位ボタン：1（座り状態）へ向けてアニメーション停止まで移行 */}
+              {/* 座位ボタン */}
               <button
                 className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all border ${
-                  progress >= 0.999
+                  progress >= PROGRESS_MAX - PROGRESS_STEP
                     ? 'bg-sky-600 text-white border-sky-500 shadow-lg' 
                     : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-750'
                 }`}
-                onClick={() => setPlayTarget(1)}
+                onClick={() => setPlayTarget(PROGRESS_MAX)}
               >
                 🧎 Sit (座)
               </button>
@@ -1717,12 +1763,12 @@ export default function ClothSimulator() {
             <div className="mt-3 flex items-center justify-between text-xs text-slate-400 border-t border-slate-800/60 pt-2 font-mono">
               <span>Status:</span>
               <span className="text-slate-200 font-bold">
-                {playTarget !== null ? '⏳ Moving...' : progress >= 0.999 ? '✅ Sitting' : progress <= 0.001 ? '✅ Standing' : '⏸️ Paused'}
+                {playTarget !== null ? '⏳ Moving...' : progress >= PROGRESS_MAX - PROGRESS_STEP ? '✅ Sitting' : progress <= PROGRESS_STEP ? '✅ Standing' : '⏸️ Paused'}
               </span>
             </div>
           </div>
 
-          {/* 3. ポーズバー（タイムラインスライダー） */}
+          {/* ポーズバー */}
           <div className="mb-4 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800">
             <div className="flex items-center justify-between text-xs font-medium text-slate-400 mb-1.5">
               <span>Pose バー (Manual Seek)</span>
@@ -1730,12 +1776,13 @@ export default function ClothSimulator() {
             </div>
             <input
               type="range"
-              min={0}
-              max={1}
-              step={0.001}
+              min={PROGRESS_MIN}
+              max={PROGRESS_MAX}
+              step={PROGRESS_STEP}
               value={progress}
               onChange={(e) => {
-                setPlayTarget(null); // スライダー操作時は自動移行を即時キャンセル
+                // スライダー操作時は自動移行を即時キャンセル
+                setPlayTarget(null);
                 setProgress(parseFloat(e.target.value));
               }}
               className="w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-700 rounded-lg appearance-none"
@@ -1746,7 +1793,7 @@ export default function ClothSimulator() {
             </div>
           </div>
 
-          {/* 3. 色コントロール */}
+          {/* 色コントロール */}
           <div className="mb-4 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800">
             <div className="text-xs font-medium text-slate-400 mb-2">Color Controls</div>
             {([
@@ -1769,7 +1816,7 @@ export default function ClothSimulator() {
             ))}
           </div>
 
-          {/* 4. 表示オプション */}
+          {/* 表示オプション */}
           <div className="mb-2 space-y-2 px-1">
             <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer select-none">
               <input

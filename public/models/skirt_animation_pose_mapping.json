@@ -1,22 +1,23 @@
 {
   "format_version": 1,
-  "source": "generated from current skirt_body_context_for_dnn.pkl and skirt_mesh_sitting_animation.glb",
-  "glb_path": "public/models/skirt_mesh_sitting_animation.glb",
-  "body_context_path": "public/models/skirt_body_context_for_dnn.pkl",
-  "animation_name": "KeyAction",
-  "node_name": "Skirt_Animated_Bottoms",
-  "mesh_name": "BottomsSkirtAnimationMesh",
+  "source": "skirt_animation_dnn_morph_fixed.py",
+  "glb_path": "/content/public/models/skirt_mesh_sitting_animation.glb",
+  "body_context_path": "/content/public/models/skirt_body_context_for_dnn.pkl",
   "frame_count": 120,
   "max_sit_angle_rad": 1.3089969389957472,
   "body_context_progress_limit": 0.85,
   "body_context_apply_runtime_leg_close": true,
+  "body_context_has_skirt_after_runtime_leg_close": true,
+  "skirt_teacher_source": "skirt_skinned_vertices",
+  "body_context_motion_norm_peak_index": 78,
+  "body_context_motion_norm_peak_body_progress": 0.5571428571428572,
   "body_context_original_frame_count": 120,
   "body_context_adopted_frame_count": 120,
   "pose_mapping": [
     {
       "key_index": 0,
       "shape_key": "Basis",
-      "glb_time": 0.0416666679084301,
+      "glb_time": 0.041666666666666664,
       "dnn_progress": 0.0,
       "pose_y_rad": 0.0,
       "source_body_progress": 0.0,
@@ -25,7 +26,7 @@
     {
       "key_index": 1,
       "shape_key": "Pose_001",
-      "glb_time": 0.0833333358168602,
+      "glb_time": 0.08333333333333333,
       "dnn_progress": 0.008403361774981022,
       "pose_y_rad": 0.01099997479468584,
       "source_body_progress": 0.0071428571827709675,
@@ -43,7 +44,7 @@
     {
       "key_index": 3,
       "shape_key": "Pose_003",
-      "glb_time": 0.1666666716337204,
+      "glb_time": 0.16666666666666666,
       "dnn_progress": 0.02521008439362049,
       "pose_y_rad": 0.0329999215900898,
       "source_body_progress": 0.02142857201397419,
@@ -52,7 +53,7 @@
     {
       "key_index": 4,
       "shape_key": "Pose_004",
-      "glb_time": 0.2083333283662796,
+      "glb_time": 0.20833333333333334,
       "dnn_progress": 0.03361344709992409,
       "pose_y_rad": 0.04399989917874336,
       "source_body_progress": 0.02857142873108387,
@@ -70,7 +71,7 @@
     {
       "key_index": 6,
       "shape_key": "Pose_006",
-      "glb_time": 0.2916666567325592,
+      "glb_time": 0.2916666666666667,
       "dnn_progress": 0.05042016878724098,
       "pose_y_rad": 0.0659998431801796,
       "source_body_progress": 0.04285714402794838,
@@ -79,7 +80,7 @@
     {
       "key_index": 7,
       "shape_key": "Pose_007",
-      "glb_time": 0.3333333432674408,
+      "glb_time": 0.3333333333333333,
       "dnn_progress": 0.05882352963089943,
       "pose_y_rad": 0.07699982076883316,
       "source_body_progress": 0.05000000074505806,
@@ -97,7 +98,7 @@
     {
       "key_index": 9,
       "shape_key": "Pose_009",
-      "glb_time": 0.4166666567325592,
+      "glb_time": 0.4166666666666667,
       "dnn_progress": 0.07563025504350662,
       "pose_y_rad": 0.09899976849555969,
       "source_body_progress": 0.06428571790456772,
@@ -106,7 +107,7 @@
     {
       "key_index": 10,
       "shape_key": "Pose_010",
-      "glb_time": 0.4583333432674408,
+      "glb_time": 0.4583333333333333,
       "dnn_progress": 0.08403361588716507,
       "pose_y_rad": 0.10999974608421326,
       "source_body_progress": 0.0714285746216774,
@@ -124,7 +125,7 @@
     {
       "key_index": 12,
       "shape_key": "Pose_012",
-      "glb_time": 0.5416666865348816,
+      "glb_time": 0.5416666666666666,
       "dnn_progress": 0.10084033757448196,
       "pose_y_rad": 0.1319996863603592,
       "source_body_progress": 0.08571428805589676,
@@ -133,7 +134,7 @@
     {
       "key_index": 13,
       "shape_key": "Pose_013",
-      "glb_time": 0.5833333134651184,
+      "glb_time": 0.5833333333333334,
       "dnn_progress": 0.10924369841814041,
       "pose_y_rad": 0.14299966394901276,
       "source_body_progress": 0.09285714477300644,
@@ -151,7 +152,7 @@
     {
       "key_index": 15,
       "shape_key": "Pose_015",
-      "glb_time": 0.6666666865348816,
+      "glb_time": 0.6666666666666666,
       "dnn_progress": 0.1260504275560379,
       "pose_y_rad": 0.16499961912631989,
       "source_body_progress": 0.1071428582072258,
@@ -160,7 +161,7 @@
     {
       "key_index": 16,
       "shape_key": "Pose_016",
-      "glb_time": 0.7083333134651184,
+      "glb_time": 0.7083333333333334,
       "dnn_progress": 0.13445378839969635,
       "pose_y_rad": 0.17599959671497345,
       "source_body_progress": 0.11428571492433548,
@@ -178,7 +179,7 @@
     {
       "key_index": 18,
       "shape_key": "Pose_018",
-      "glb_time": 0.7916666865348816,
+      "glb_time": 0.7916666666666666,
       "dnn_progress": 0.15126051008701324,
       "pose_y_rad": 0.19799953699111938,
       "source_body_progress": 0.12857143580913544,
@@ -187,7 +188,7 @@
     {
       "key_index": 19,
       "shape_key": "Pose_019",
-      "glb_time": 0.8333333134651184,
+      "glb_time": 0.8333333333333334,
       "dnn_progress": 0.1596638709306717,
       "pose_y_rad": 0.20899951457977295,
       "source_body_progress": 0.13571429252624512,
@@ -205,7 +206,7 @@
     {
       "key_index": 21,
       "shape_key": "Pose_021",
-      "glb_time": 0.9166666865348816,
+      "glb_time": 0.9166666666666666,
       "dnn_progress": 0.1764705926179886,
       "pose_y_rad": 0.23099945485591888,
       "source_body_progress": 0.15000000596046448,
@@ -214,7 +215,7 @@
     {
       "key_index": 22,
       "shape_key": "Pose_022",
-      "glb_time": 0.9583333134651184,
+      "glb_time": 0.9583333333333334,
       "dnn_progress": 0.18487395346164703,
       "pose_y_rad": 0.24199943244457245,
       "source_body_progress": 0.15714286267757416,
@@ -232,7 +233,7 @@
     {
       "key_index": 24,
       "shape_key": "Pose_024",
-      "glb_time": 1.0416666269302368,
+      "glb_time": 1.0416666666666667,
       "dnn_progress": 0.20168067514896393,
       "pose_y_rad": 0.2639993727207184,
       "source_body_progress": 0.17142857611179352,
@@ -241,7 +242,7 @@
     {
       "key_index": 25,
       "shape_key": "Pose_025",
-      "glb_time": 1.0833333730697632,
+      "glb_time": 1.0833333333333333,
       "dnn_progress": 0.21008403599262238,
       "pose_y_rad": 0.27499935030937195,
       "source_body_progress": 0.1785714328289032,
@@ -259,7 +260,7 @@
     {
       "key_index": 27,
       "shape_key": "Pose_027",
-      "glb_time": 1.1666666269302368,
+      "glb_time": 1.1666666666666667,
       "dnn_progress": 0.22689075767993927,
       "pose_y_rad": 0.2969993054866791,
       "source_body_progress": 0.19285714626312256,
@@ -268,7 +269,7 @@
     {
       "key_index": 28,
       "shape_key": "Pose_028",
-      "glb_time": 1.2083333730697632,
+      "glb_time": 1.2083333333333333,
       "dnn_progress": 0.23529411852359772,
       "pose_y_rad": 0.30799928307533264,
       "source_body_progress": 0.20000000298023224,
@@ -286,7 +287,7 @@
     {
       "key_index": 30,
       "shape_key": "Pose_030",
-      "glb_time": 1.2916666269302368,
+      "glb_time": 1.2916666666666667,
       "dnn_progress": 0.2521008551120758,
       "pose_y_rad": 0.32999923825263977,
       "source_body_progress": 0.2142857164144516,
@@ -295,7 +296,7 @@
     {
       "key_index": 31,
       "shape_key": "Pose_031",
-      "glb_time": 1.3333333730697632,
+      "glb_time": 1.3333333333333333,
       "dnn_progress": 0.26050421595573425,
       "pose_y_rad": 0.34099921584129333,
       "source_body_progress": 0.22142857313156128,
@@ -313,7 +314,7 @@
     {
       "key_index": 33,
       "shape_key": "Pose_033",
-      "glb_time": 1.4166666269302368,
+      "glb_time": 1.4166666666666667,
       "dnn_progress": 0.27731093764305115,
       "pose_y_rad": 0.36299917101860046,
       "source_body_progress": 0.23571428656578064,
@@ -322,7 +323,7 @@
     {
       "key_index": 34,
       "shape_key": "Pose_034",
-      "glb_time": 1.4583333730697632,
+      "glb_time": 1.4583333333333333,
       "dnn_progress": 0.2857142984867096,
       "pose_y_rad": 0.37399914860725403,
       "source_body_progress": 0.24285714328289032,
@@ -340,7 +341,7 @@
     {
       "key_index": 36,
       "shape_key": "Pose_036",
-      "glb_time": 1.5416666269302368,
+      "glb_time": 1.5416666666666667,
       "dnn_progress": 0.3025210201740265,
       "pose_y_rad": 0.39599907398223877,
       "source_body_progress": 0.2571428716182709,
@@ -349,7 +350,7 @@
     {
       "key_index": 37,
       "shape_key": "Pose_037",
-      "glb_time": 1.5833333730697632,
+      "glb_time": 1.5833333333333333,
       "dnn_progress": 0.31092438101768494,
       "pose_y_rad": 0.40699905157089233,
       "source_body_progress": 0.26428571343421936,
@@ -367,7 +368,7 @@
     {
       "key_index": 39,
       "shape_key": "Pose_039",
-      "glb_time": 1.6666666269302368,
+      "glb_time": 1.6666666666666667,
       "dnn_progress": 0.32773110270500183,
       "pose_y_rad": 0.42899900674819946,
       "source_body_progress": 0.2785714268684387,
@@ -376,7 +377,7 @@
     {
       "key_index": 40,
       "shape_key": "Pose_040",
-      "glb_time": 1.7083333730697632,
+      "glb_time": 1.7083333333333333,
       "dnn_progress": 0.3361344635486603,
       "pose_y_rad": 0.439998984336853,
       "source_body_progress": 0.2857142984867096,
@@ -394,7 +395,7 @@
     {
       "key_index": 42,
       "shape_key": "Pose_042",
-      "glb_time": 1.7916666269302368,
+      "glb_time": 1.7916666666666667,
       "dnn_progress": 0.3529411852359772,
       "pose_y_rad": 0.46199890971183777,
       "source_body_progress": 0.30000001192092896,
@@ -403,7 +404,7 @@
     {
       "key_index": 43,
       "shape_key": "Pose_043",
-      "glb_time": 1.8333333730697632,
+      "glb_time": 1.8333333333333333,
       "dnn_progress": 0.3613445460796356,
       "pose_y_rad": 0.47299888730049133,
       "source_body_progress": 0.30714285373687744,
@@ -421,7 +422,7 @@
     {
       "key_index": 45,
       "shape_key": "Pose_045",
-      "glb_time": 1.9166666269302368,
+      "glb_time": 1.9166666666666667,
       "dnn_progress": 0.3781512677669525,
       "pose_y_rad": 0.49499884247779846,
       "source_body_progress": 0.3214285671710968,
@@ -430,7 +431,7 @@
     {
       "key_index": 46,
       "shape_key": "Pose_046",
-      "glb_time": 1.9583333730697632,
+      "glb_time": 1.9583333333333333,
       "dnn_progress": 0.38655462861061096,
       "pose_y_rad": 0.5059987902641296,
       "source_body_progress": 0.3285714387893677,
@@ -448,7 +449,7 @@
     {
       "key_index": 48,
       "shape_key": "Pose_048",
-      "glb_time": 2.0416667461395264,
+      "glb_time": 2.0416666666666665,
       "dnn_progress": 0.40336135029792786,
       "pose_y_rad": 0.5279987454414368,
       "source_body_progress": 0.34285715222358704,
@@ -457,7 +458,7 @@
     {
       "key_index": 49,
       "shape_key": "Pose_049",
-      "glb_time": 2.0833332538604736,
+      "glb_time": 2.0833333333333335,
       "dnn_progress": 0.4117647111415863,
       "pose_y_rad": 0.5389987230300903,
       "source_body_progress": 0.3499999940395355,
@@ -475,7 +476,7 @@
     {
       "key_index": 51,
       "shape_key": "Pose_051",
-      "glb_time": 2.1666667461395264,
+      "glb_time": 2.1666666666666665,
       "dnn_progress": 0.4285714328289032,
       "pose_y_rad": 0.5609986782073975,
       "source_body_progress": 0.3642857074737549,
@@ -484,7 +485,7 @@
     {
       "key_index": 52,
       "shape_key": "Pose_052",
-      "glb_time": 2.2083332538604736,
+      "glb_time": 2.2083333333333335,
       "dnn_progress": 0.43697479367256165,
       "pose_y_rad": 0.571998655796051,
       "source_body_progress": 0.37142857909202576,
@@ -502,7 +503,7 @@
     {
       "key_index": 54,
       "shape_key": "Pose_054",
-      "glb_time": 2.2916667461395264,
+      "glb_time": 2.2916666666666665,
       "dnn_progress": 0.45378151535987854,
       "pose_y_rad": 0.5939986109733582,
       "source_body_progress": 0.3857142925262451,
@@ -511,7 +512,7 @@
     {
       "key_index": 55,
       "shape_key": "Pose_055",
-      "glb_time": 2.3333332538604736,
+      "glb_time": 2.3333333333333335,
       "dnn_progress": 0.462184876203537,
       "pose_y_rad": 0.6049985885620117,
       "source_body_progress": 0.3928571343421936,
@@ -529,7 +530,7 @@
     {
       "key_index": 57,
       "shape_key": "Pose_057",
-      "glb_time": 2.4166667461395264,
+      "glb_time": 2.4166666666666665,
       "dnn_progress": 0.4789915978908539,
       "pose_y_rad": 0.6269985437393188,
       "source_body_progress": 0.40714284777641296,
@@ -538,7 +539,7 @@
     {
       "key_index": 58,
       "shape_key": "Pose_058",
-      "glb_time": 2.4583332538604736,
+      "glb_time": 2.4583333333333335,
       "dnn_progress": 0.48739495873451233,
       "pose_y_rad": 0.6379985213279724,
       "source_body_progress": 0.41428571939468384,
@@ -556,7 +557,7 @@
     {
       "key_index": 60,
       "shape_key": "Pose_060",
-      "glb_time": 2.5416667461395264,
+      "glb_time": 2.5416666666666665,
       "dnn_progress": 0.5042017102241516,
       "pose_y_rad": 0.6599984765052795,
       "source_body_progress": 0.4285714328289032,
@@ -565,7 +566,7 @@
     {
       "key_index": 61,
       "shape_key": "Pose_061",
-      "glb_time": 2.5833332538604736,
+      "glb_time": 2.5833333333333335,
       "dnn_progress": 0.5126050710678101,
       "pose_y_rad": 0.6709984540939331,
       "source_body_progress": 0.4357142746448517,
@@ -583,7 +584,7 @@
     {
       "key_index": 63,
       "shape_key": "Pose_063",
-      "glb_time": 2.6666667461395264,
+      "glb_time": 2.6666666666666665,
       "dnn_progress": 0.529411792755127,
       "pose_y_rad": 0.6929984092712402,
       "source_body_progress": 0.44999998807907104,
@@ -592,7 +593,7 @@
     {
       "key_index": 64,
       "shape_key": "Pose_064",
-      "glb_time": 2.7083332538604736,
+      "glb_time": 2.7083333333333335,
       "dnn_progress": 0.5378151535987854,
       "pose_y_rad": 0.7039983868598938,
       "source_body_progress": 0.4571428596973419,
@@ -610,7 +611,7 @@
     {
       "key_index": 66,
       "shape_key": "Pose_066",
-      "glb_time": 2.7916667461395264,
+      "glb_time": 2.7916666666666665,
       "dnn_progress": 0.5546218752861023,
       "pose_y_rad": 0.7259983420372009,
       "source_body_progress": 0.4714285731315613,
@@ -619,7 +620,7 @@
     {
       "key_index": 67,
       "shape_key": "Pose_067",
-      "glb_time": 2.8333332538604736,
+      "glb_time": 2.8333333333333335,
       "dnn_progress": 0.5630252361297607,
       "pose_y_rad": 0.7369983196258545,
       "source_body_progress": 0.47857141494750977,
@@ -637,7 +638,7 @@
     {
       "key_index": 69,
       "shape_key": "Pose_069",
-      "glb_time": 2.9166667461395264,
+      "glb_time": 2.9166666666666665,
       "dnn_progress": 0.5798319578170776,
       "pose_y_rad": 0.7589982151985168,
       "source_body_progress": 0.4928571283817291,
@@ -646,7 +647,7 @@
     {
       "key_index": 70,
       "shape_key": "Pose_070",
-      "glb_time": 2.9583332538604736,
+      "glb_time": 2.9583333333333335,
       "dnn_progress": 0.5882353186607361,
       "pose_y_rad": 0.7699981927871704,
       "source_body_progress": 0.5,
@@ -664,7 +665,7 @@
     {
       "key_index": 72,
       "shape_key": "Pose_072",
-      "glb_time": 3.0416667461395264,
+      "glb_time": 3.0416666666666665,
       "dnn_progress": 0.605042040348053,
       "pose_y_rad": 0.7919981479644775,
       "source_body_progress": 0.5142857432365417,
@@ -673,7 +674,7 @@
     {
       "key_index": 73,
       "shape_key": "Pose_073",
-      "glb_time": 3.0833332538604736,
+      "glb_time": 3.0833333333333335,
       "dnn_progress": 0.6134454011917114,
       "pose_y_rad": 0.8029981255531311,
       "source_body_progress": 0.5214285850524902,
@@ -691,7 +692,7 @@
     {
       "key_index": 75,
       "shape_key": "Pose_075",
-      "glb_time": 3.1666667461395264,
+      "glb_time": 3.1666666666666665,
       "dnn_progress": 0.6302521228790283,
       "pose_y_rad": 0.8249980807304382,
       "source_body_progress": 0.5357142686843872,
@@ -700,7 +701,7 @@
     {
       "key_index": 76,
       "shape_key": "Pose_076",
-      "glb_time": 3.2083332538604736,
+      "glb_time": 3.2083333333333335,
       "dnn_progress": 0.6386554837226868,
       "pose_y_rad": 0.8359980583190918,
       "source_body_progress": 0.5428571701049805,
@@ -718,7 +719,7 @@
     {
       "key_index": 78,
       "shape_key": "Pose_078",
-      "glb_time": 3.2916667461395264,
+      "glb_time": 3.2916666666666665,
       "dnn_progress": 0.6554622054100037,
       "pose_y_rad": 0.8579980134963989,
       "source_body_progress": 0.5571428537368774,
@@ -727,7 +728,7 @@
     {
       "key_index": 79,
       "shape_key": "Pose_079",
-      "glb_time": 3.3333332538604736,
+      "glb_time": 3.3333333333333335,
       "dnn_progress": 0.6638655662536621,
       "pose_y_rad": 0.8689979910850525,
       "source_body_progress": 0.5642856955528259,
@@ -745,7 +746,7 @@
     {
       "key_index": 81,
       "shape_key": "Pose_081",
-      "glb_time": 3.4166667461395264,
+      "glb_time": 3.4166666666666665,
       "dnn_progress": 0.680672287940979,
       "pose_y_rad": 0.8909979462623596,
       "source_body_progress": 0.5785714387893677,
@@ -754,7 +755,7 @@
     {
       "key_index": 82,
       "shape_key": "Pose_082",
-      "glb_time": 3.4583332538604736,
+      "glb_time": 3.4583333333333335,
       "dnn_progress": 0.6890756487846375,
       "pose_y_rad": 0.9019979238510132,
       "source_body_progress": 0.5857142806053162,
@@ -772,7 +773,7 @@
     {
       "key_index": 84,
       "shape_key": "Pose_084",
-      "glb_time": 3.5416667461395264,
+      "glb_time": 3.5416666666666665,
       "dnn_progress": 0.7058823704719543,
       "pose_y_rad": 0.9239978194236755,
       "source_body_progress": 0.6000000238418579,
@@ -781,7 +782,7 @@
     {
       "key_index": 85,
       "shape_key": "Pose_085",
-      "glb_time": 3.5833332538604736,
+      "glb_time": 3.5833333333333335,
       "dnn_progress": 0.7142857313156128,
       "pose_y_rad": 0.9349977970123291,
       "source_body_progress": 0.6071428656578064,
@@ -799,7 +800,7 @@
     {
       "key_index": 87,
       "shape_key": "Pose_087",
-      "glb_time": 3.6666667461395264,
+      "glb_time": 3.6666666666666665,
       "dnn_progress": 0.7310924530029297,
       "pose_y_rad": 0.9569977521896362,
       "source_body_progress": 0.6214285492897034,
@@ -808,7 +809,7 @@
     {
       "key_index": 88,
       "shape_key": "Pose_088",
-      "glb_time": 3.7083332538604736,
+      "glb_time": 3.7083333333333335,
       "dnn_progress": 0.7394958138465881,
       "pose_y_rad": 0.9679977297782898,
       "source_body_progress": 0.6285714507102966,
@@ -826,7 +827,7 @@
     {
       "key_index": 90,
       "shape_key": "Pose_090",
-      "glb_time": 3.7916667461395264,
+      "glb_time": 3.7916666666666665,
       "dnn_progress": 0.756302535533905,
       "pose_y_rad": 0.9899976849555969,
       "source_body_progress": 0.6428571343421936,
@@ -835,7 +836,7 @@
     {
       "key_index": 91,
       "shape_key": "Pose_091",
-      "glb_time": 3.8333332538604736,
+      "glb_time": 3.8333333333333335,
       "dnn_progress": 0.7647058963775635,
       "pose_y_rad": 1.0009976625442505,
       "source_body_progress": 0.6499999761581421,
@@ -853,7 +854,7 @@
     {
       "key_index": 93,
       "shape_key": "Pose_093",
-      "glb_time": 3.9166667461395264,
+      "glb_time": 3.9166666666666665,
       "dnn_progress": 0.7815126180648804,
       "pose_y_rad": 1.0229976177215576,
       "source_body_progress": 0.6642857193946838,
@@ -862,7 +863,7 @@
     {
       "key_index": 94,
       "shape_key": "Pose_094",
-      "glb_time": 3.9583332538604736,
+      "glb_time": 3.9583333333333335,
       "dnn_progress": 0.7899159789085388,
       "pose_y_rad": 1.0339975357055664,
       "source_body_progress": 0.6714285612106323,
@@ -880,7 +881,7 @@
     {
       "key_index": 96,
       "shape_key": "Pose_096",
-      "glb_time": 4.041666507720947,
+      "glb_time": 4.041666666666667,
       "dnn_progress": 0.8067227005958557,
       "pose_y_rad": 1.0559974908828735,
       "source_body_progress": 0.6857143044471741,
@@ -889,7 +890,7 @@
     {
       "key_index": 97,
       "shape_key": "Pose_097",
-      "glb_time": 4.083333492279053,
+      "glb_time": 4.083333333333333,
       "dnn_progress": 0.8151260614395142,
       "pose_y_rad": 1.0669975280761719,
       "source_body_progress": 0.6928571462631226,
@@ -907,7 +908,7 @@
     {
       "key_index": 99,
       "shape_key": "Pose_099",
-      "glb_time": 4.166666507720947,
+      "glb_time": 4.166666666666667,
       "dnn_progress": 0.831932783126831,
       "pose_y_rad": 1.088997483253479,
       "source_body_progress": 0.7071428298950195,
@@ -916,7 +917,7 @@
     {
       "key_index": 100,
       "shape_key": "Pose_100",
-      "glb_time": 4.208333492279053,
+      "glb_time": 4.208333333333333,
       "dnn_progress": 0.8403361439704895,
       "pose_y_rad": 1.0999974012374878,
       "source_body_progress": 0.7142857313156128,
@@ -934,7 +935,7 @@
     {
       "key_index": 102,
       "shape_key": "Pose_102",
-      "glb_time": 4.291666507720947,
+      "glb_time": 4.291666666666667,
       "dnn_progress": 0.8571428656578064,
       "pose_y_rad": 1.121997356414795,
       "source_body_progress": 0.7285714149475098,
@@ -943,7 +944,7 @@
     {
       "key_index": 103,
       "shape_key": "Pose_103",
-      "glb_time": 4.333333492279053,
+      "glb_time": 4.333333333333333,
       "dnn_progress": 0.8655462265014648,
       "pose_y_rad": 1.1329973936080933,
       "source_body_progress": 0.7357142567634583,
@@ -961,7 +962,7 @@
     {
       "key_index": 105,
       "shape_key": "Pose_105",
-      "glb_time": 4.416666507720947,
+      "glb_time": 4.416666666666667,
       "dnn_progress": 0.8823529481887817,
       "pose_y_rad": 1.1549972295761108,
       "source_body_progress": 0.75,
@@ -970,7 +971,7 @@
     {
       "key_index": 106,
       "shape_key": "Pose_106",
-      "glb_time": 4.458333492279053,
+      "glb_time": 4.458333333333333,
       "dnn_progress": 0.8907563090324402,
       "pose_y_rad": 1.1659972667694092,
       "source_body_progress": 0.7571428418159485,
@@ -988,7 +989,7 @@
     {
       "key_index": 108,
       "shape_key": "Pose_108",
-      "glb_time": 4.541666507720947,
+      "glb_time": 4.541666666666667,
       "dnn_progress": 0.9075630307197571,
       "pose_y_rad": 1.1879972219467163,
       "source_body_progress": 0.7714285850524902,
@@ -997,7 +998,7 @@
     {
       "key_index": 109,
       "shape_key": "Pose_109",
-      "glb_time": 4.583333492279053,
+      "glb_time": 4.583333333333333,
       "dnn_progress": 0.9159663915634155,
       "pose_y_rad": 1.198997139930725,
       "source_body_progress": 0.7785714268684387,
@@ -1015,7 +1016,7 @@
     {
       "key_index": 111,
       "shape_key": "Pose_111",
-      "glb_time": 4.666666507720947,
+      "glb_time": 4.666666666666667,
       "dnn_progress": 0.9327731132507324,
       "pose_y_rad": 1.2209970951080322,
       "source_body_progress": 0.7928571701049805,
@@ -1024,7 +1025,7 @@
     {
       "key_index": 112,
       "shape_key": "Pose_112",
-      "glb_time": 4.708333492279053,
+      "glb_time": 4.708333333333333,
       "dnn_progress": 0.9411764740943909,
       "pose_y_rad": 1.2319971323013306,
       "source_body_progress": 0.800000011920929,
@@ -1042,7 +1043,7 @@
     {
       "key_index": 114,
       "shape_key": "Pose_114",
-      "glb_time": 4.791666507720947,
+      "glb_time": 4.791666666666667,
       "dnn_progress": 0.9579831957817078,
       "pose_y_rad": 1.2539970874786377,
       "source_body_progress": 0.8142856955528259,
@@ -1051,7 +1052,7 @@
     {
       "key_index": 115,
       "shape_key": "Pose_115",
-      "glb_time": 4.833333492279053,
+      "glb_time": 4.833333333333333,
       "dnn_progress": 0.9663865566253662,
       "pose_y_rad": 1.2649970054626465,
       "source_body_progress": 0.8214285969734192,
@@ -1069,7 +1070,7 @@
     {
       "key_index": 117,
       "shape_key": "Pose_117",
-      "glb_time": 4.916666507720947,
+      "glb_time": 4.916666666666667,
       "dnn_progress": 0.9831932783126831,
       "pose_y_rad": 1.2869969606399536,
       "source_body_progress": 0.8357142806053162,
@@ -1078,7 +1079,7 @@
     {
       "key_index": 118,
       "shape_key": "Pose_118",
-      "glb_time": 4.958333492279053,
+      "glb_time": 4.958333333333333,
       "dnn_progress": 0.9915966391563416,
       "pose_y_rad": 1.297996997833252,
       "source_body_progress": 0.8428571224212646,

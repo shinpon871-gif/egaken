@@ -993,9 +993,49 @@ if apply_runtime_leg_close:
 
 skinned_vertices = []
 skirt_skinned_vertices = []
+skirt_skinned_vertices_after_runtime_leg_close = []
 sampled_body_progresses = []
 sampled_source_frames = []
 progress_log(f"Body/SKIN評価を開始します: frames={frame_count}")
+
+
+def read_evaluated_vertices(body_object, vertex_indices):
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    evaluated_object = body_object.evaluated_get(depsgraph)
+    evaluated_mesh = evaluated_object.to_mesh(
+        preserve_all_data_layers=False,
+        depsgraph=depsgraph,
+    )
+    try:
+        # body_base_vertices/skirt_base_verticesと同じローカル座標系に揃える。
+        # matrix_worldを掛けるとFBXのスケール・位置オフセットが混入し、
+        # body_motionが実際のポーズ変化ではなくその定数ズレ主体になってしまう。
+        return [[
+            float(evaluated_mesh.vertices[index].co.x),
+            float(evaluated_mesh.vertices[index].co.y),
+            float(evaluated_mesh.vertices[index].co.z),
+        ] for index in vertex_indices]
+    finally:
+        evaluated_object.to_mesh_clear()
+
+
+def capture_leg_pose_quaternions(bones):
+    snapshots = []
+    for name in ("leftThigh", "rightThigh"):
+        bone = bones.get(name)
+        if bone is None:
+            continue
+        ensure_pose_bone_quaternion(bone)
+        snapshots.append((bone, bone.rotation_quaternion.copy()))
+    return snapshots
+
+
+def restore_leg_pose_quaternions(snapshots):
+    for bone, quaternion in snapshots:
+        set_pose_bone_quaternion(bone, quaternion)
+    bpy.context.view_layer.update()
+
+
 for index in range(frame_count):
     if should_log_progress(index, frame_count):
         progress_log(f"Body/SKIN評価 {index + 1}/{frame_count}")
@@ -1012,6 +1052,15 @@ for index in range(frame_count):
         subframe=float(source_frame - frame_floor),
     )
     bpy.context.view_layer.update()
+    frame_leg_pose_quaternions = capture_leg_pose_quaternions(
+        leg_close_bones,
+    ) if apply_runtime_leg_close else []
+
+    # skirt_skinned_verticesは教師スカート形状として使うため、元FBXの
+    # Bottoms動作から取得する。脚閉じ補正後に採ると、布ではなく
+    # 追加ボーン回転の跳ね上がりまで教師として焼き込んでしまう。
+    skirt_vertices = read_evaluated_vertices(body_object, skirt_vertex_indices)
+
     if apply_runtime_leg_close:
         apply_runtime_leg_close_to_pose(
             leg_close_bones,
@@ -1019,35 +1068,50 @@ for index in range(frame_count):
             leg_adduction_calibration,
             progress,
         )
-    depsgraph = bpy.context.evaluated_depsgraph_get()
-    evaluated_object = body_object.evaluated_get(depsgraph)
-    evaluated_mesh = evaluated_object.to_mesh(
-        preserve_all_data_layers=False,
-        depsgraph=depsgraph,
-    )
-    try:
-        # body_base_vertices/skirt_base_verticesと同じローカル座標系に揃える。
-        # matrix_worldを掛けるとFBXのスケール・位置オフセットが混入し、
-        # body_motionが実際のポーズ変化ではなくその定数ズレ主体になってしまう。
-        vertices = [[
-            float(evaluated_mesh.vertices[index].co.x),
-            float(evaluated_mesh.vertices[index].co.y),
-            float(evaluated_mesh.vertices[index].co.z),
-        ] for index in body_vertex_indices]
-        skirt_vertices = [[
-            float(evaluated_mesh.vertices[index].co.x),
-            float(evaluated_mesh.vertices[index].co.y),
-            float(evaluated_mesh.vertices[index].co.z),
-        ] for index in skirt_vertex_indices]
-    finally:
-        evaluated_object.to_mesh_clear()
+
+    vertices = read_evaluated_vertices(body_object, body_vertex_indices)
+    if apply_runtime_leg_close:
+        skirt_vertices_after_leg_close = read_evaluated_vertices(
+            body_object,
+            skirt_vertex_indices,
+        )
+    else:
+        skirt_vertices_after_leg_close = skirt_vertices
+
     if len(vertices) != vertex_count:
         raise RuntimeError("評価後Body/SKIN頂点数が一致しません。")
     if len(skirt_vertices) != len(skirt_vertex_indices):
         raise RuntimeError("評価後Body/Bottoms頂点数が一致しません。")
+    if len(skirt_vertices_after_leg_close) != len(skirt_vertex_indices):
+        raise RuntimeError("脚閉じ後Body/Bottoms頂点数が一致しません。")
     skinned_vertices.append(vertices)
     skirt_skinned_vertices.append(skirt_vertices)
+    skirt_skinned_vertices_after_runtime_leg_close.append(
+        skirt_vertices_after_leg_close,
+    )
+    restore_leg_pose_quaternions(frame_leg_pose_quaternions)
 progress_log("Body/SKIN評価が完了しました。")
+
+if apply_runtime_leg_close:
+    skirt_leg_close_differences = []
+    for before_frame, after_frame in zip(
+        skirt_skinned_vertices,
+        skirt_skinned_vertices_after_runtime_leg_close,
+    ):
+        frame_differences = [
+            vector_norm(vector_sub(after_vertex, before_vertex))
+            for before_vertex, after_vertex in zip(before_frame, after_frame)
+        ]
+        skirt_leg_close_differences.extend(frame_differences)
+    mean_skirt_leg_close_difference = (
+        sum(skirt_leg_close_differences)
+        / len(skirt_leg_close_differences)
+    )
+    print(
+        "[diag] skirt before/after runtime_leg_close displacement: "
+        f"max={max(skirt_leg_close_differences):.6f}, "
+        f"mean={mean_skirt_leg_close_difference:.6f}"
+    )
 
 # per-vertex, per-frame displacement: (frames, vertices, 3)
 progress_log("Body/SKIN変位計算を開始します。")
@@ -1090,6 +1154,9 @@ if truncate_after_motion_peak and peak_index < frame_count - 1:
     )
     skinned_vertices = skinned_vertices[: peak_index + 1]
     skirt_skinned_vertices = skirt_skinned_vertices[: peak_index + 1]
+    skirt_skinned_vertices_after_runtime_leg_close = (
+        skirt_skinned_vertices_after_runtime_leg_close[: peak_index + 1]
+    )
     per_vertex_motion = per_vertex_motion[: peak_index + 1]
     body_motion_preview = body_motion_preview[: peak_index + 1]
     motion_norms = motion_norms[: peak_index + 1]
@@ -1239,6 +1306,9 @@ with open(output_path, "wb") as file:
             "body_vertex_indices": body_vertex_indices,
             "skinned_vertices": skinned_vertices,
             "skirt_skinned_vertices": skirt_skinned_vertices,
+            "skirt_skinned_vertices_after_runtime_leg_close": (
+                skirt_skinned_vertices_after_runtime_leg_close
+            ),
             # 保存は従来互換のフレームごとの平均変位 (frames, 3)
             # 注意: 空間的な変化が失われるため、学習時は
             # skirt_vertex_body_motionが優先して使われる。

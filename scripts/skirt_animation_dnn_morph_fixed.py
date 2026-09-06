@@ -42,6 +42,7 @@ blend_path = str(globals().get(
 npz_path = os.path.join(output_dir, "skirt_animation_vertices.npz")
 mapping_path = os.path.join(output_dir, "skirt_animation_pose_mapping.json")
 blender_data_path = os.path.join(output_dir, "skirt_animation_vertices_for_blender.pkl")
+BLENDER_DEFAULT_FPS = 24.0
 
 # Colabの%run -iはセルを再実行してもカーネルの変数(globals())が残り続ける。
 # 「まだ無ければ読み込む」だと、前回の実行(あるいは別のPKLに対する実行)で
@@ -218,6 +219,10 @@ with open(mapping_path, "w", encoding="utf-8") as file:
             "body_context_apply_runtime_leg_close": bool(
                 context.get("apply_runtime_leg_close", False),
             ),
+            "body_context_has_skirt_after_runtime_leg_close": bool(
+                "skirt_skinned_vertices_after_runtime_leg_close" in context
+            ),
+            "skirt_teacher_source": "skirt_skinned_vertices",
             "body_context_motion_norm_peak_index": context.get(
                 "motion_norm_peak_index",
                 None,
@@ -238,6 +243,7 @@ with open(mapping_path, "w", encoding="utf-8") as file:
                     "shape_key": (
                         "Basis" if index == 0 else f"Pose_{index:03d}"
                     ),
+                    "glb_time": float((index + 1) / BLENDER_DEFAULT_FPS),
                     "dnn_progress": float(progress),
                     "pose_y_rad": float(progress * max_sit_angle),
                     "source_body_progress": (
@@ -495,4 +501,5 @@ if result.returncode != 0:
 if not os.path.isfile(glb_path) or os.path.getsize(glb_path) == 0:
     raise RuntimeError(f"GLBが生成されませんでした: {glb_path}")
 print(f"スカートGLBを保存しました: {glb_path}")
+print(f"姿勢対応情報を保存しました: {mapping_path}")
 print(f"頂点数: {len(base_vertices):,}, 面数: {len(faces):,}, フレーム数: {num_animation_frames}")

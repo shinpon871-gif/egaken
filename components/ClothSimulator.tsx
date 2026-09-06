@@ -324,19 +324,19 @@ const THIGH_CLOSE_FULL_PROGRESS = 0.58;
 // 座位脚閉じ関連の各パラメータ定義
 // 内腿サンプリング位置の補間係数
 // 0が太もも側 1が膝側
-const INNER_THIGH_SAMPLE_T = 0.34;
+const INNER_THIGH_SAMPLE_T = 0.22;
 // ターゲット時の内腿間隔の比率
 const TARGET_INNER_THIGH_GAP_RATIO_AT_FULL_CLOSE = 0.010;
 // ターゲット時の膝間隔の比率
-const TARGET_KNEE_GAP_RATIO_AT_FULL_CLOSE = 0.07;
+const TARGET_KNEE_GAP_RATIO_AT_FULL_CLOSE = 0.02;
 // ターゲット時の足首間隔の比率
-const TARGET_ANKLE_GAP_RATIO_AT_FULL_CLOSE = 0.42;
+const TARGET_ANKLE_GAP_RATIO_AT_FULL_CLOSE = 0.20;
 // 内腿ギャップの厳格な下限
 const HARD_MIN_INNER_THIGH_GAP_RATIO_FROM_SIT_POSE = 0.010;
 // 膝ギャップの厳格な下限
-const HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE = 0.05;
+const HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE = 0.02;
 // 足首ギャップの厳格な下限
-const HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE = 0.22;
+const HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE = 0.10;
 // 太もも内転の最大回転角
 const MAX_THIGH_ADDUCTION_LOCAL_ANGLE = THREE.MathUtils.degToRad(17.5);
 // 膝の世界座標調整の最大回転角
@@ -391,9 +391,9 @@ const SCORE_INNER_GAP_WEIGHT = 1400;
 // 内腿ギャップがターゲット超過時のペナルティ重み
 const SCORE_INNER_EXCESS_WEIGHT = 600;
 // 膝ギャップの小ささ重視重み
-const SCORE_KNEE_GAP_WEIGHT = 55;
+const SCORE_KNEE_GAP_WEIGHT = 180;
 // 膝ギャップがターゲット超過時のペナルティ重み
-const SCORE_KNEE_EXCESS_WEIGHT = 20;
+const SCORE_KNEE_EXCESS_WEIGHT = 80;
 // 足首ギャップがターゲット以下の場合のボーナス重み
 const SCORE_ANKLE_BONUS_WEIGHT = 0.5;
 // 左右内転スケール差異のペナルティ重み
@@ -407,7 +407,7 @@ const EARLY_ACCEPT_KNEE_GAP_MARGIN = 0.004;
 // 探索早期終了判定時の内腿重み指数
 const EARLY_BREAK_INNER_WEIGHT = 1000;
 // 探索早期終了判定時の膝重み指数
-const EARLY_BREAK_KNEE_WEIGHT = 40;
+const EARLY_BREAK_KNEE_WEIGHT = 120;
 // 探索早期終了判定時のスコアベースオフセット
 const EARLY_BREAK_SCORE_BIAS = 2.0;
 

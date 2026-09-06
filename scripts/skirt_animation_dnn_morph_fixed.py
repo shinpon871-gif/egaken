@@ -1,3 +1,6 @@
+# scripts\skirt_animation_dnn_morph_fixed.py
+# スカートアニメーション用DNNのMorph固定スクリプト
+# Colab環境でBlender付属Pythonから実行することを想定している
 import json
 import os
 import pickle
@@ -212,6 +215,17 @@ with open(mapping_path, "w", encoding="utf-8") as file:
             "frame_count": int(num_animation_frames),
             "max_sit_angle_rad": float(max_sit_angle),
             "body_context_progress_limit": float(context_progress_limit),
+            "body_context_apply_runtime_leg_close": bool(
+                context.get("apply_runtime_leg_close", False),
+            ),
+            "body_context_motion_norm_peak_index": context.get(
+                "motion_norm_peak_index",
+                None,
+            ),
+            "body_context_motion_norm_peak_body_progress": context.get(
+                "motion_norm_peak_body_progress",
+                None,
+            ),
             "body_context_original_frame_count": int(
                 context_original_frame_count,
             ),

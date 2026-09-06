@@ -1,3 +1,6 @@
+# scripts\predict_skirt_deformation.py
+# スカートアニメーション用のDNN予測スクリプト
+# Colab環境でBlender付属Pythonから実行することを想定している   
 import json
 import os
 import pickle

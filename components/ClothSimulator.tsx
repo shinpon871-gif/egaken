@@ -109,21 +109,72 @@ type AnimatedSkirtGltf = {
 type SkirtDeformationMetadata = {
   progress?: number;
   vertex_count?: number;
-  displacements?: unknown[];
+  displacements?: number[][];
 };
 
 const skirtDeformationMetadata = skirtDeformation as SkirtDeformationMetadata;
-const SKIRT_DEFORMATION_FULL_PROGRESS = Number.isFinite(skirtDeformationMetadata.progress)
-  ? THREE.MathUtils.clamp(skirtDeformationMetadata.progress as number, 0.0001, 1)
-  : 1;
+const SKIRT_ASSET_VERSION = [
+  skirtDeformationMetadata.progress ?? 0,
+  skirtDeformationMetadata.vertex_count ?? 0,
+  skirtDeformationMetadata.displacements?.[0]?.[0] ?? 0,
+  skirtDeformationMetadata.displacements?.at(-1)?.[2] ?? 0,
+]
+  .map((value) => Number(value).toFixed(4))
+  .join('_');
 
-const SKIRT_HIP_ROTATION_FOLLOW_BLEND = 0.45;
-const SKIRT_COVERAGE_CORRECTION_START_PROGRESS = 0.50;
-const SKIRT_SEATED_WIDTH_SCALE = 1.08;
-const SKIRT_SEATED_HEIGHT_SCALE = 1.08;
-const SKIRT_SEATED_DEPTH_SCALE = 1.10;
-const SKIRT_SEATED_LIFT = 1.2;
-const SKIRT_SEATED_BACK_OFFSET = -4.8;
+const SKIRT_MORPH_WEIGHT_EPSILON = 1e-6;
+
+function getSkirtMorphWeightTracks(clip: THREE.AnimationClip): THREE.KeyframeTrack[] {
+  return clip.tracks.filter((track) => /morphTargetInfluences|\.weights$/i.test(track.name));
+}
+
+function resolveLastValidSkirtMorphTime(clip: THREE.AnimationClip): number {
+  const morphTracks = getSkirtMorphWeightTracks(clip);
+  let lastValidTime: number | null = null;
+  let lastValidTimeBeforeClipEnd: number | null = null;
+
+  morphTracks.forEach((track) => {
+    const times = Array.from(track.times);
+    const values = Array.from(track.values as ArrayLike<number>);
+    const valueSize = times.length > 0 ? values.length / times.length : 0;
+    if (!Number.isInteger(valueSize) || valueSize <= 0) return;
+
+    times.forEach((time, keyIndex) => {
+      const start = keyIndex * valueSize;
+      const hasActiveMorph = values
+        .slice(start, start + valueSize)
+        .some((value) => Math.abs(value) > SKIRT_MORPH_WEIGHT_EPSILON);
+      if (hasActiveMorph) {
+        lastValidTime = Math.max(lastValidTime ?? time, time);
+        if (time < clip.duration) {
+          lastValidTimeBeforeClipEnd = Math.max(lastValidTimeBeforeClipEnd ?? time, time);
+        }
+      }
+    });
+  });
+
+  if (lastValidTime !== null && lastValidTime >= clip.duration && lastValidTimeBeforeClipEnd !== null) {
+    return lastValidTimeBeforeClipEnd;
+  }
+
+  return lastValidTime ?? clip.duration;
+}
+
+function resolveSkirtClipTime(clip: THREE.AnimationClip, uiProgress: number): number {
+  const morphTracks = getSkirtMorphWeightTracks(clip);
+  const startTime = morphTracks.reduce((minTime, track) => {
+    const firstTime = track.times[0];
+    return Number.isFinite(firstTime) ? Math.min(minTime, firstTime) : minTime;
+  }, Number.POSITIVE_INFINITY);
+  const validStartTime = Number.isFinite(startTime) ? startTime : 0;
+  const validEndTime = resolveLastValidSkirtMorphTime(clip);
+
+  return THREE.MathUtils.lerp(
+    validStartTime,
+    validEndTime,
+    THREE.MathUtils.clamp(uiProgress, 0, 1)
+  );
+}
 
 const SAFE_SIT_CLIP_PROGRESS = 0.85; // 100%の座位ポーズはモデル上で体が不自然に折れ曲がるため85%程度までで止める
 function inferMaterialCategory(materialName: string, meshName: string): ColorCategory {
@@ -1230,9 +1281,7 @@ function SceneWithFBX({
   const rootMotionInitialZRef = useRef(0);
   const standingFootLocalYRef = useRef<number | null>(null);
   const modelRootRef = useRef<THREE.Group>(null);
-  const skirtFollowRootRef = useRef<THREE.Group>(null);
-  const skirtInitialHipsLocalRef = useRef<THREE.Vector3 | null>(null);
-  const skirtInitialHipsLocalQuaternionRef = useRef<THREE.Quaternion | null>(null);
+  const skirtRootMotionRef = useRef<THREE.Group>(null);
   const TARGET_EPSILON = 1e-4;
   const hiddenFbxCategories = useMemo(() => new Set<ColorCategory>(['skirt']), []);
 
@@ -1274,75 +1323,27 @@ function SceneWithFBX({
       mixer.update(0);
 
       if (skirtMixer && selectedSkirtClip) {
-        const skirtDuration = selectedSkirtClip.duration || 1;
-        const skirtProgress = THREE.MathUtils.clamp(
-          uiProgressToClipProgress(uiProgress) / SKIRT_DEFORMATION_FULL_PROGRESS,
-          0,
-          1
-        );
-        skirtMixer.setTime(skirtProgress * skirtDuration);
+        skirtMixer.setTime(resolveSkirtClipTime(selectedSkirtClip, uiProgress));
         skirtMixer.update(0);
       }
 
+      const rootMotionOffset = new THREE.Vector3(0, 0, 0);
       if (legCloseBonesRef.current.hips && hipRestPositionRef.current) {
         legCloseBonesRef.current.hips.position.copy(hipRestPositionRef.current);
         const rootMotion = rootMotionInterpolantRef.current?.evaluate(clipTime);
         if (rootMotion) {
-          legCloseBonesRef.current.hips.position.y += rootMotion[1] - rootMotionInitialYRef.current;
-          legCloseBonesRef.current.hips.position.z += rootMotion[2] - rootMotionInitialZRef.current;
+          rootMotionOffset.set(
+            0,
+            rootMotion[1] - rootMotionInitialYRef.current,
+            rootMotion[2] - rootMotionInitialZRef.current
+          );
+          legCloseBonesRef.current.hips.position.y += rootMotionOffset.y;
+          legCloseBonesRef.current.hips.position.z += rootMotionOffset.z;
         }
       }
 
-      if (
-        skirtFollowRootRef.current &&
-        legCloseBonesRef.current.hips &&
-        skirtInitialHipsLocalRef.current &&
-        skirtInitialHipsLocalQuaternionRef.current
-      ) {
-        cloned.updateMatrixWorld(true);
-        const currentHipsWorldPosition = legCloseBonesRef.current.hips.getWorldPosition(new THREE.Vector3());
-        const currentHipsLocalPosition = cloned.worldToLocal(currentHipsWorldPosition);
-        const rootWorldQuaternion = cloned.getWorldQuaternion(new THREE.Quaternion());
-        const currentHipsLocalQuaternion = rootWorldQuaternion
-          .clone()
-          .invert()
-          .multiply(legCloseBonesRef.current.hips.getWorldQuaternion(new THREE.Quaternion()))
-          .normalize();
-        const hipsRotationDelta = currentHipsLocalQuaternion
-          .multiply(skirtInitialHipsLocalQuaternionRef.current.clone().invert())
-          .normalize();
-        const blendedHipsRotationDelta = new THREE.Quaternion().slerp(
-          hipsRotationDelta,
-          SKIRT_HIP_ROTATION_FOLLOW_BLEND
-        );
-        const seatedCoverageT = smoothstep01(
-          (uiProgress - SKIRT_COVERAGE_CORRECTION_START_PROGRESS) /
-          (1 - SKIRT_COVERAGE_CORRECTION_START_PROGRESS)
-        );
-        const coverageScale = new THREE.Vector3(
-          THREE.MathUtils.lerp(1, SKIRT_SEATED_WIDTH_SCALE, seatedCoverageT),
-          THREE.MathUtils.lerp(1, SKIRT_SEATED_HEIGHT_SCALE, seatedCoverageT),
-          THREE.MathUtils.lerp(1, SKIRT_SEATED_DEPTH_SCALE, seatedCoverageT)
-        );
-        const coverageOffset = new THREE.Vector3(
-          0,
-          SKIRT_SEATED_LIFT * seatedCoverageT,
-          SKIRT_SEATED_BACK_OFFSET * seatedCoverageT
-        );
-
-        const pivotMatrix = new THREE.Matrix4().compose(
-          currentHipsLocalPosition.add(coverageOffset),
-          blendedHipsRotationDelta,
-          coverageScale
-        );
-        const offsetMatrix = new THREE.Matrix4().makeTranslation(
-          -skirtInitialHipsLocalRef.current.x,
-          -skirtInitialHipsLocalRef.current.y,
-          -skirtInitialHipsLocalRef.current.z
-        );
-
-        skirtFollowRootRef.current.matrixAutoUpdate = false;
-        skirtFollowRootRef.current.matrix.copy(pivotMatrix.multiply(offsetMatrix));
+      if (skirtRootMotionRef.current) {
+        skirtRootMotionRef.current.position.copy(rootMotionOffset);
       }
 
       // 立位時の腕基準ポーズを安定して維持しつつ立位区間だけ上腕を少し外側へ開いて
@@ -1430,20 +1431,6 @@ function SceneWithFBX({
     legCloseBonesRef.current = collectLegCloseBones(cloned);
     standingFootLocalYRef.current = getLowestFootLocalY(cloned, legCloseBonesRef.current);
     hipRestPositionRef.current = legCloseBonesRef.current.hips?.position.clone() ?? null;
-    if (legCloseBonesRef.current.hips) {
-      cloned.updateMatrixWorld(true);
-      skirtInitialHipsLocalRef.current = cloned.worldToLocal(
-        legCloseBonesRef.current.hips.getWorldPosition(new THREE.Vector3())
-      );
-      skirtInitialHipsLocalQuaternionRef.current = cloned
-        .getWorldQuaternion(new THREE.Quaternion())
-        .invert()
-        .multiply(legCloseBonesRef.current.hips.getWorldQuaternion(new THREE.Quaternion()))
-        .normalize();
-    } else {
-      skirtInitialHipsLocalRef.current = null;
-      skirtInitialHipsLocalQuaternionRef.current = null;
-    }
     const sourceClip = fbx.animations?.find((candidate) => /mixamo.com|Take|take/i.test(candidate.name)) || fbx.animations?.[0];
     const rootPositionTrack = sourceClip?.tracks.find((track) => track.name === 'egaken.position') as THREE.VectorKeyframeTrack | undefined;
     rootMotionInterpolantRef.current = rootPositionTrack
@@ -1520,8 +1507,6 @@ function SceneWithFBX({
       seatedLegReferenceRef.current = null;
       legAdductionCalibrationRef.current = null;
       hipRestPositionRef.current = null;
-      skirtInitialHipsLocalRef.current = null;
-      skirtInitialHipsLocalQuaternionRef.current = null;
       rootMotionInterpolantRef.current = null;
       rootMotionInitialYRef.current = 0;
       rootMotionInitialZRef.current = 0;
@@ -1624,7 +1609,7 @@ function SceneWithFBX({
       <group scale={[objectScale, objectScale, objectScale]} position={[0, modelOffsetY, 0]}>
         {cloned && <primitive object={cloned} />}
         {clonedSkirt && (
-          <group ref={skirtFollowRootRef}>
+          <group ref={skirtRootMotionRef}>
             <primitive object={clonedSkirt} rotation={[Math.PI / 2, 0, 0]} />
           </group>
         )}
@@ -1648,7 +1633,7 @@ export default function ClothSimulator() {
 
   const modelBasePosition: [number, number, number] = [0, 0, 0];
   const fbxPath = '/models/StandToSit_model.fbx';
-  const skirtGlbPath = '/models/skirt_mesh_sitting_animation.glb';
+  const skirtGlbPath = `/models/skirt_mesh_sitting_animation.glb?v=${SKIRT_ASSET_VERSION}`;
 
   const customMapping = useMemo<MeshColorMapping>(() => ({}), []);
 

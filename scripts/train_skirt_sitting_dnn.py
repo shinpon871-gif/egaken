@@ -1,3 +1,6 @@
+# scripts\train_skirt_sitting_dnn.py
+# スカートアニメーション用のDNN学習スクリプト
+# Colab環境でBlender付属Pythonから実行することを想定している
 import json
 import os
 import random
@@ -331,6 +334,30 @@ provided_training_vertices = globals().get("DNN_TRAINING_VERTICES", None)
 provided_sitting_vertices = globals().get("DNN_SITTING_VERTICES", None)
 provided_pose_angles = globals().get("DNN_TRAINING_POSE_ANGLES", None)
 max_sit_angle = float(np.deg2rad(MAX_SIT_ANGLE_DEGREES))
+
+if provided_training_vertices is None and os.path.isfile(BODY_CONTEXT_PATH):
+    import pickle
+
+    with open(BODY_CONTEXT_PATH, "rb") as file:
+        teacher_context = pickle.load(file)
+    if (
+        isinstance(teacher_context, dict)
+        and "skirt_skinned_vertices" in teacher_context
+    ):
+        provided_training_vertices = np.asarray(
+            teacher_context["skirt_skinned_vertices"],
+            dtype=np.float32,
+        )
+        provided_pose_angles = np.linspace(
+            0.0,
+            max_sit_angle,
+            len(provided_training_vertices),
+            dtype=np.float32,
+        )
+        print(
+            "教師スカート頂点の入力元: "
+            f"{BODY_CONTEXT_PATH} skirt_skinned_vertices"
+        )
 
 
 def smoothstep(value: np.ndarray) -> np.ndarray:

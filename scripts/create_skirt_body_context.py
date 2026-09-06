@@ -1,3 +1,6 @@
+# scripts\create_skirt_body_context.py
+# スカートアニメーション用のBodyコンテキスト作成スクリプト
+# Colab環境でBlender付属Pythonから実行することを想定している
 import importlib
 import os
 import shutil
@@ -19,6 +22,7 @@ DEFAULT_ARGUMENTS = [
     os.environ.get("DNN_BODY_FRAME_COUNT", "120"),
     os.environ.get("DNN_BODY_PROGRESS_LIMIT", "0.85"),
     os.environ.get("DNN_TRUNCATE_AFTER_MOTION_PEAK", "0"),
+    os.environ.get("DNN_APPLY_RUNTIME_LEG_CLOSE", "1"),
 ]
 
 
@@ -35,7 +39,9 @@ def get_arguments():
         )
     if len(arguments) < 6:
         arguments = [*arguments[:5], "0"]
-    return arguments[:6]
+    if len(arguments) < 7:
+        arguments = [*arguments[:6], "1"]
+    return arguments[:7]
 
 
 def blender_source():
@@ -43,7 +49,53 @@ def blender_source():
 import math
 import os
 import pickle
+import re
 import sys
+
+from mathutils import Quaternion, Vector
+
+
+THIGH_CLOSE_START_PROGRESS = 0.12
+THIGH_CLOSE_FULL_PROGRESS = 0.58
+INNER_THIGH_SAMPLE_T = 0.34
+TARGET_INNER_THIGH_GAP_RATIO_AT_FULL_CLOSE = 0.010
+TARGET_KNEE_GAP_RATIO_AT_FULL_CLOSE = 0.07
+TARGET_ANKLE_GAP_RATIO_AT_FULL_CLOSE = 0.42
+HARD_MIN_INNER_THIGH_GAP_RATIO_FROM_SIT_POSE = 0.010
+HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE = 0.05
+HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE = 0.22
+MAX_THIGH_ADDUCTION_LOCAL_ANGLE = math.radians(17.5)
+MAX_WORLD_KNEE_ALIGN_ANGLE = math.radians(4.0)
+CALIBRATION_TEST_ANGLE = math.radians(2.5)
+GAP_EPSILON_MIN = 0.001
+LEG_SIDE_KEEP_EPSILON = 0.001
+LEG_CLOSE_PROGRESS_ACTIVE_EPSILON = 0.0001
+CROSS_AXIS_MIN_LENGTH_SQ = 1.0e-8
+DIRECTION_ALIGNMENT_MIN_ANGLE = 1.0e-5
+AXIS_CALIBRATION_Y_PENALTY_WEIGHT = 0.25
+AXIS_CALIBRATION_Z_PENALTY_WEIGHT = 0.25
+AXIS_CALIBRATION_FOOT_LATERAL_PENALTY_WEIGHT = 0.12
+AXIS_CALIBRATION_SIDE_BREAK_PENALTY = 0.4
+AXIS_CALIBRATION_MIN_ACCEPTABLE_SCORE = -0.05
+REFINE_TRIGGER_INNER_GAP_MARGIN = 0.002
+REFINE_TRIGGER_KNEE_GAP_MARGIN = 0.01
+TARGET_SIDE_CLAMP_EPSILON = 0.001
+LEG_CLOSE_BASE_SCALES = [
+    2.40, 2.20, 2.00, 1.80, 1.60, 1.40,
+    1.20, 1.00, 0.80, 0.60, 0.40, 0.20,
+]
+LEG_CLOSE_ASYMMETRY_OFFSETS = [0.0, -0.12, 0.12, -0.22, 0.22]
+SCORE_INNER_GAP_WEIGHT = 1400
+SCORE_INNER_EXCESS_WEIGHT = 600
+SCORE_KNEE_GAP_WEIGHT = 55
+SCORE_KNEE_EXCESS_WEIGHT = 20
+SCORE_ANKLE_BONUS_WEIGHT = 0.5
+SCORE_ASYMMETRY_WEIGHT = 0.15
+
+
+def smoothstep01(value):
+    t = max(0.0, min(1.0, value))
+    return t * t * (3.0 - 2.0 * t)
 
 
 def vector_sub(left, right):
@@ -84,6 +136,654 @@ def bbox_extent(points):
     maximum = [max(point[axis] for point in points) for axis in range(3)]
     return minimum, maximum
 
+
+def progress_log(message):
+    print(f"[progress] {message}", flush=True)
+
+
+def should_log_progress(index, total):
+    if total <= 1:
+        return True
+    if index == 0 or index == total - 1:
+        return True
+    interval = max(1, total // 10)
+    return index % interval == 0
+
+
+def find_pose_bone_by_name_pattern(armature_object, patterns):
+    if armature_object is None:
+        return None
+    for bone in armature_object.pose.bones:
+        if any(pattern.search(bone.name) for pattern in patterns):
+            return bone
+    return None
+
+
+def collect_leg_close_bones(armature_object):
+    return {
+        "hips": find_pose_bone_by_name_pattern(
+            armature_object,
+            [re.compile(pattern, re.I) for pattern in (
+                r"^J_Bip_C_Hips$", r"^mixamorigHips$", r"^Hips$", r"pelvis",
+            )],
+        ),
+        "leftThigh": find_pose_bone_by_name_pattern(
+            armature_object,
+            [re.compile(pattern, re.I) for pattern in (
+                r"^J_Bip_L_UpperLeg$", r"^mixamorigLeftUpLeg$",
+                r"^LeftUpLeg$", r"left.*up.*leg", r"left.*thigh",
+            )],
+        ),
+        "rightThigh": find_pose_bone_by_name_pattern(
+            armature_object,
+            [re.compile(pattern, re.I) for pattern in (
+                r"^J_Bip_R_UpperLeg$", r"^mixamorigRightUpLeg$",
+                r"^RightUpLeg$", r"right.*up.*leg", r"right.*thigh",
+            )],
+        ),
+        "leftKnee": find_pose_bone_by_name_pattern(
+            armature_object,
+            [re.compile(pattern, re.I) for pattern in (
+                r"^J_Bip_L_LowerLeg$", r"^mixamorigLeftLeg$",
+                r"^LeftLeg$", r"left(?!.*up).*leg", r"left.*knee",
+            )],
+        ),
+        "rightKnee": find_pose_bone_by_name_pattern(
+            armature_object,
+            [re.compile(pattern, re.I) for pattern in (
+                r"^J_Bip_R_LowerLeg$", r"^mixamorigRightLeg$",
+                r"^RightLeg$", r"right(?!.*up).*leg", r"right.*knee",
+            )],
+        ),
+        "leftFoot": find_pose_bone_by_name_pattern(
+            armature_object,
+            [re.compile(pattern, re.I) for pattern in (
+                r"^J_Bip_L_Foot$", r"^mixamorigLeftFoot$",
+                r"^LeftFoot$", r"left.*foot", r"left.*ankle",
+            )],
+        ),
+        "rightFoot": find_pose_bone_by_name_pattern(
+            armature_object,
+            [re.compile(pattern, re.I) for pattern in (
+                r"^J_Bip_R_Foot$", r"^mixamorigRightFoot$",
+                r"^RightFoot$", r"right.*foot", r"right.*ankle",
+            )],
+        ),
+    }
+
+
+def bone_object_location(bone):
+    return bone.matrix.translation.copy()
+
+
+def bone_position_in_hips(hips, bone):
+    return hips.matrix.inverted() @ bone_object_location(bone)
+
+
+def inner_thigh_sample_in_hips(hips, thigh, knee):
+    sample = bone_object_location(thigh).lerp(
+        bone_object_location(knee),
+        INNER_THIGH_SAMPLE_T,
+    )
+    return hips.matrix.inverted() @ sample
+
+
+def signed_lateral_value(position, lateral_axis):
+    return position.dot(lateral_axis)
+
+
+def resolve_lateral_axis(hips, left_candidate, right_candidate, bones):
+    axis = right_candidate - left_candidate
+    if (
+        axis.length_squared < 1.0e-8
+        and bones["leftThigh"]
+        and bones["rightThigh"]
+    ):
+        axis = (
+            bone_position_in_hips(hips, bones["rightThigh"])
+            - bone_position_in_hips(hips, bones["leftThigh"])
+        )
+    if axis.length_squared < 1.0e-8:
+        return Vector((1.0, 0.0, 0.0))
+    axis.normalize()
+    return axis
+
+
+def capture_seated_leg_reference(bones):
+    required = ["hips", "leftThigh", "rightThigh", "leftKnee", "rightKnee"]
+    if any(bones[name] is None for name in required):
+        return None
+    hips = bones["hips"]
+    left_thigh = bone_position_in_hips(hips, bones["leftThigh"])
+    right_thigh = bone_position_in_hips(hips, bones["rightThigh"])
+    left_inner = inner_thigh_sample_in_hips(
+        hips,
+        bones["leftThigh"],
+        bones["leftKnee"],
+    )
+    right_inner = inner_thigh_sample_in_hips(
+        hips,
+        bones["rightThigh"],
+        bones["rightKnee"],
+    )
+    left_knee = bone_position_in_hips(hips, bones["leftKnee"])
+    right_knee = bone_position_in_hips(hips, bones["rightKnee"])
+    has_ankles = bool(bones["leftFoot"] and bones["rightFoot"])
+    left_ankle = (
+        bone_position_in_hips(hips, bones["leftFoot"])
+        if has_ankles
+        else left_knee.copy()
+    )
+    right_ankle = (
+        bone_position_in_hips(hips, bones["rightFoot"])
+        if has_ankles
+        else right_knee.copy()
+    )
+    lateral_axis = resolve_lateral_axis(hips, left_knee, right_knee, bones)
+    return {
+        "lateralAxis": lateral_axis,
+        "innerThighGap": max(
+            0.001,
+            signed_lateral_value(right_inner, lateral_axis)
+            - signed_lateral_value(left_inner, lateral_axis),
+        ),
+        "kneeGap": max(
+            0.001,
+            signed_lateral_value(right_knee, lateral_axis)
+            - signed_lateral_value(left_knee, lateral_axis),
+        ),
+        "ankleGap": max(
+            0.001,
+            signed_lateral_value(right_ankle, lateral_axis)
+            - signed_lateral_value(left_ankle, lateral_axis),
+        ),
+        "hasAnkleReference": has_ankles,
+    }
+
+
+def measure_leg_gaps(bones, seated_reference):
+    hips = bones["hips"]
+    lateral_axis = seated_reference["lateralAxis"]
+    left_inner = inner_thigh_sample_in_hips(
+        hips,
+        bones["leftThigh"],
+        bones["leftKnee"],
+    )
+    right_inner = inner_thigh_sample_in_hips(
+        hips,
+        bones["rightThigh"],
+        bones["rightKnee"],
+    )
+    left_knee = bone_position_in_hips(hips, bones["leftKnee"])
+    right_knee = bone_position_in_hips(hips, bones["rightKnee"])
+    if (
+        seated_reference["hasAnkleReference"]
+        and bones["leftFoot"]
+        and bones["rightFoot"]
+    ):
+        left_ankle = bone_position_in_hips(hips, bones["leftFoot"])
+        right_ankle = bone_position_in_hips(hips, bones["rightFoot"])
+    else:
+        left_ankle = left_knee.copy()
+        right_ankle = right_knee.copy()
+    return {
+        "leftInner": left_inner,
+        "rightInner": right_inner,
+        "leftKnee": left_knee,
+        "rightKnee": right_knee,
+        "leftAnkle": left_ankle,
+        "rightAnkle": right_ankle,
+        "innerThighGap": max(
+            0.001,
+            signed_lateral_value(right_inner, lateral_axis)
+            - signed_lateral_value(left_inner, lateral_axis),
+        ),
+        "kneeGap": max(
+            0.001,
+            signed_lateral_value(right_knee, lateral_axis)
+            - signed_lateral_value(left_knee, lateral_axis),
+        ),
+        "ankleGap": max(
+            0.001,
+            signed_lateral_value(right_ankle, lateral_axis)
+            - signed_lateral_value(left_ankle, lateral_axis),
+        ),
+    }
+
+
+def set_pose_bone_quaternion(bone, quaternion):
+    bone.rotation_mode = "QUATERNION"
+    bone.rotation_quaternion = quaternion
+    bone.rotation_quaternion.normalize()
+
+
+def ensure_pose_bone_quaternion(bone):
+    bone.rotation_mode = "QUATERNION"
+    bone.rotation_quaternion.normalize()
+
+
+def rotate_pose_bone_local(bone, axis, angle):
+    bone.rotation_mode = "QUATERNION"
+    bone.rotation_quaternion = (
+        bone.rotation_quaternion @ Quaternion(axis, angle)
+    )
+    bone.rotation_quaternion.normalize()
+
+
+def apply_object_rotation_to_bone(bone, delta_object):
+    bone.rotation_mode = "QUATERNION"
+    parent_quaternion = (
+        bone.parent.matrix.to_quaternion()
+        if bone.parent
+        else Quaternion((1.0, 0.0, 0.0, 0.0))
+    )
+    delta_local = (
+        parent_quaternion.inverted()
+        @ delta_object
+        @ parent_quaternion
+    )
+    bone.rotation_quaternion = delta_local @ bone.rotation_quaternion
+    bone.rotation_quaternion.normalize()
+
+
+def point_toward(hips, thigh, current_local, desired_local, fallback_axis, t):
+    thigh_object = bone_object_location(thigh)
+    current_object = hips.matrix @ current_local
+    desired_object = hips.matrix @ desired_local
+    current_direction = current_object - thigh_object
+    desired_direction = desired_object - thigh_object
+    if (
+        current_direction.length <= 1.0e-8
+        or desired_direction.length <= 1.0e-8
+    ):
+        return
+    current_direction.normalize()
+    desired_direction.normalize()
+    angle = current_direction.angle(desired_direction, 0.0)
+    if not math.isfinite(angle) or angle <= DIRECTION_ALIGNMENT_MIN_ANGLE:
+        return
+    axis_object = current_direction.cross(desired_direction)
+    if axis_object.length_squared > CROSS_AXIS_MIN_LENGTH_SQ:
+        axis_object.normalize()
+    else:
+        axis_object = fallback_axis.copy()
+        axis_object.rotate(thigh.matrix.to_quaternion())
+        if axis_object.length <= 1.0e-8:
+            return
+        axis_object.normalize()
+    delta = Quaternion(axis_object, min(angle, MAX_WORLD_KNEE_ALIGN_ANGLE * t))
+    apply_object_rotation_to_bone(thigh, delta)
+
+
+def create_adduction_axis_candidates():
+    candidates = [
+        Vector((1, 0, 0)), Vector((-1, 0, 0)),
+        Vector((0, 1, 0)), Vector((0, -1, 0)),
+        Vector((0, 0, 1)), Vector((0, 0, -1)),
+    ]
+    for x in (-1, 0, 1):
+        for y in (-1, 0, 1):
+            for z in (-1, 0, 1):
+                if x == 0 and y == 0 and z == 0:
+                    continue
+                if abs(x) + abs(y) + abs(z) == 1:
+                    continue
+                vector = Vector((x, y, z))
+                vector.normalize()
+                candidates.append(vector)
+    return candidates
+
+
+ADDUCTION_AXIS_CANDIDATES = create_adduction_axis_candidates()
+
+
+def evaluate_thigh_adduction_axis(bones, thigh, knee, foot, side):
+    if not bones["hips"] or not thigh or not knee:
+        return None
+    ensure_pose_bone_quaternion(thigh)
+    original_quaternion = thigh.rotation_quaternion.copy()
+    base_left_knee = bone_position_in_hips(bones["hips"], bones["leftKnee"])
+    base_right_knee = bone_position_in_hips(bones["hips"], bones["rightKnee"])
+    lateral_axis = resolve_lateral_axis(
+        bones["hips"],
+        base_left_knee,
+        base_right_knee,
+        bones,
+    )
+    base_knee = base_left_knee if side == "left" else base_right_knee
+    base_foot = (
+        bone_position_in_hips(bones["hips"], foot)
+        if foot
+        else base_knee.copy()
+    )
+    best_strict_axis = None
+    best_strict_score = -1.0e20
+    best_loose_axis = None
+    best_loose_score = -1.0e20
+    for candidate in ADDUCTION_AXIS_CANDIDATES:
+        for sign in (1.0, -1.0):
+            signed_axis = candidate.copy() * sign
+            set_pose_bone_quaternion(thigh, original_quaternion.copy())
+            rotate_pose_bone_local(thigh, signed_axis, CALIBRATION_TEST_ANGLE)
+            bpy.context.view_layer.update()
+            knee_local = bone_position_in_hips(bones["hips"], knee)
+            foot_local = (
+                bone_position_in_hips(bones["hips"], foot)
+                if foot
+                else knee_local
+            )
+            knee_lateral = signed_lateral_value(knee_local, lateral_axis)
+            base_knee_lateral = signed_lateral_value(base_knee, lateral_axis)
+            foot_lateral = signed_lateral_value(foot_local, lateral_axis)
+            base_foot_lateral = signed_lateral_value(base_foot, lateral_axis)
+            x_improvement = (
+                knee_lateral - base_knee_lateral
+                if side == "left"
+                else base_knee_lateral - knee_lateral
+            )
+            keeps_side = (
+                knee_lateral < -LEG_SIDE_KEEP_EPSILON
+                if side == "left"
+                else knee_lateral > LEG_SIDE_KEEP_EPSILON
+            )
+            foot_keeps_side = True if not foot else (
+                foot_lateral < -LEG_SIDE_KEEP_EPSILON
+                if side == "left"
+                else foot_lateral > LEG_SIDE_KEEP_EPSILON
+            )
+            y_penalty = (
+                abs(knee_local.y - base_knee.y)
+                * AXIS_CALIBRATION_Y_PENALTY_WEIGHT
+            )
+            z_penalty = (
+                abs(knee_local.z - base_knee.z)
+                * AXIS_CALIBRATION_Z_PENALTY_WEIGHT
+            )
+            foot_penalty = (
+                abs(foot_lateral - base_foot_lateral)
+                * AXIS_CALIBRATION_FOOT_LATERAL_PENALTY_WEIGHT
+                if foot
+                else 0.0
+            )
+            strict_score = x_improvement - y_penalty - z_penalty - foot_penalty
+            side_penalty = (
+                0.0
+                if keeps_side and foot_keeps_side
+                else AXIS_CALIBRATION_SIDE_BREAK_PENALTY
+            )
+            loose_score = strict_score - side_penalty
+            if (
+                keeps_side
+                and foot_keeps_side
+                and strict_score > best_strict_score
+            ):
+                best_strict_score = strict_score
+                best_strict_axis = signed_axis.copy()
+            if loose_score > best_loose_score:
+                best_loose_score = loose_score
+                best_loose_axis = signed_axis.copy()
+    set_pose_bone_quaternion(thigh, original_quaternion)
+    bpy.context.view_layer.update()
+    if (
+        best_strict_axis
+        and best_strict_score > AXIS_CALIBRATION_MIN_ACCEPTABLE_SCORE
+    ):
+        return best_strict_axis
+    if (
+        best_loose_axis
+        and best_loose_score > AXIS_CALIBRATION_MIN_ACCEPTABLE_SCORE
+    ):
+        return best_loose_axis
+    return Vector((0, 1, 0)) if side == "left" else Vector((0, -1, 0))
+
+
+def capture_leg_adduction_calibration(bones):
+    return {
+        "leftAxis": evaluate_thigh_adduction_axis(
+            bones,
+            bones["leftThigh"],
+            bones["leftKnee"],
+            bones["leftFoot"],
+            "left",
+        ),
+        "rightAxis": evaluate_thigh_adduction_axis(
+            bones,
+            bones["rightThigh"],
+            bones["rightKnee"],
+            bones["rightFoot"],
+            "right",
+        ),
+    }
+
+
+def apply_runtime_leg_close_to_pose(
+    bones,
+    seated_reference,
+    calibration,
+    ui_progress,
+):
+    if not seated_reference or not calibration:
+        return
+    required = ["hips", "leftThigh", "rightThigh", "leftKnee", "rightKnee"]
+    if any(bones[name] is None for name in required):
+        return
+    normalized = max(
+        0.0,
+        min(
+            1.0,
+            (ui_progress - THIGH_CLOSE_START_PROGRESS)
+            / (THIGH_CLOSE_FULL_PROGRESS - THIGH_CLOSE_START_PROGRESS),
+        ),
+    )
+    t = smoothstep01(normalized)
+    if t <= LEG_CLOSE_PROGRESS_ACTIVE_EPSILON:
+        return
+    left_thigh = bones["leftThigh"]
+    right_thigh = bones["rightThigh"]
+    ensure_pose_bone_quaternion(left_thigh)
+    ensure_pose_bone_quaternion(right_thigh)
+    original_left = left_thigh.rotation_quaternion.copy()
+    original_right = right_thigh.rotation_quaternion.copy()
+    current = measure_leg_gaps(bones, seated_reference)
+    hard_min_inner = max(
+        GAP_EPSILON_MIN,
+        seated_reference["innerThighGap"]
+        * HARD_MIN_INNER_THIGH_GAP_RATIO_FROM_SIT_POSE,
+    )
+    hard_min_knee = max(
+        GAP_EPSILON_MIN,
+        seated_reference["kneeGap"] * HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE,
+    )
+    hard_min_ankle = max(
+        GAP_EPSILON_MIN,
+        seated_reference["ankleGap"] * HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE,
+    )
+    desired_inner = max(
+        current["innerThighGap"]
+        * (1.0 + (TARGET_INNER_THIGH_GAP_RATIO_AT_FULL_CLOSE - 1.0) * t),
+        hard_min_inner,
+    )
+    desired_knee = max(
+        current["kneeGap"]
+        * (1.0 + (TARGET_KNEE_GAP_RATIO_AT_FULL_CLOSE - 1.0) * t),
+        hard_min_knee,
+    )
+    desired_ankle = max(
+        current["ankleGap"]
+        * (1.0 + (TARGET_ANKLE_GAP_RATIO_AT_FULL_CLOSE - 1.0) * t),
+        hard_min_ankle,
+    )
+    lateral_axis = seated_reference["lateralAxis"]
+    best_left = original_left.copy()
+    best_right = original_right.copy()
+    best_score = 1.0e20
+    found_valid = False
+
+    def is_valid_state(state):
+        left_inner = signed_lateral_value(state["leftInner"], lateral_axis)
+        right_inner = signed_lateral_value(state["rightInner"], lateral_axis)
+        left_knee = signed_lateral_value(state["leftKnee"], lateral_axis)
+        right_knee = signed_lateral_value(state["rightKnee"], lateral_axis)
+        left_ankle = signed_lateral_value(state["leftAnkle"], lateral_axis)
+        right_ankle = signed_lateral_value(state["rightAnkle"], lateral_axis)
+        keeps_sides = (
+            left_inner < -LEG_SIDE_KEEP_EPSILON
+            and right_inner > LEG_SIDE_KEEP_EPSILON
+            and left_knee < -LEG_SIDE_KEEP_EPSILON
+            and right_knee > LEG_SIDE_KEEP_EPSILON
+            and (
+                not seated_reference["hasAnkleReference"]
+                or (
+                    left_ankle < -LEG_SIDE_KEEP_EPSILON
+                    and right_ankle > LEG_SIDE_KEEP_EPSILON
+                )
+            )
+        )
+        return (
+            keeps_sides
+            and state["innerThighGap"] >= hard_min_inner
+            and state["kneeGap"] >= hard_min_knee
+            and state["ankleGap"] >= hard_min_ankle
+        )
+
+    for base_scale in LEG_CLOSE_BASE_SCALES:
+        for offset in LEG_CLOSE_ASYMMETRY_OFFSETS:
+            left_scale = max(0.0, base_scale + offset)
+            right_scale = max(0.0, base_scale - offset)
+            set_pose_bone_quaternion(left_thigh, original_left.copy())
+            set_pose_bone_quaternion(right_thigh, original_right.copy())
+            rotate_pose_bone_local(
+                left_thigh,
+                calibration["leftAxis"],
+                MAX_THIGH_ADDUCTION_LOCAL_ANGLE * t * left_scale,
+            )
+            rotate_pose_bone_local(
+                right_thigh,
+                calibration["rightAxis"],
+                MAX_THIGH_ADDUCTION_LOCAL_ANGLE * t * right_scale,
+            )
+            bpy.context.view_layer.update()
+            state = measure_leg_gaps(bones, seated_reference)
+            if (
+                state["innerThighGap"]
+                > desired_inner + REFINE_TRIGGER_INNER_GAP_MARGIN
+                or state["kneeGap"]
+                > desired_knee + REFINE_TRIGGER_KNEE_GAP_MARGIN
+            ):
+                left_inner_lateral = signed_lateral_value(
+                    state["leftInner"],
+                    lateral_axis,
+                )
+                right_inner_lateral = signed_lateral_value(
+                    state["rightInner"],
+                    lateral_axis,
+                )
+                left_knee_lateral = signed_lateral_value(
+                    state["leftKnee"],
+                    lateral_axis,
+                )
+                right_knee_lateral = signed_lateral_value(
+                    state["rightKnee"],
+                    lateral_axis,
+                )
+                inner_center = (left_inner_lateral + right_inner_lateral) * 0.5
+                knee_center = (left_knee_lateral + right_knee_lateral) * 0.5
+                desired_inner_half = desired_inner * 0.5
+                desired_knee_half = desired_knee * 0.5
+                desired_left_inner = state["leftInner"] + lateral_axis * (
+                    min(
+                        inner_center - desired_inner_half,
+                        -TARGET_SIDE_CLAMP_EPSILON,
+                    )
+                    - left_inner_lateral
+                )
+                desired_right_inner = state["rightInner"] + lateral_axis * (
+                    max(
+                        inner_center + desired_inner_half,
+                        TARGET_SIDE_CLAMP_EPSILON,
+                    )
+                    - right_inner_lateral
+                )
+                desired_left_knee = state["leftKnee"] + lateral_axis * (
+                    min(
+                        knee_center - desired_knee_half,
+                        -TARGET_SIDE_CLAMP_EPSILON,
+                    )
+                    - left_knee_lateral
+                )
+                desired_right_knee = state["rightKnee"] + lateral_axis * (
+                    max(
+                        knee_center + desired_knee_half,
+                        TARGET_SIDE_CLAMP_EPSILON,
+                    )
+                    - right_knee_lateral
+                )
+                point_toward(
+                    bones["hips"],
+                    left_thigh,
+                    state["leftInner"],
+                    desired_left_inner,
+                    calibration["leftAxis"],
+                    t,
+                )
+                point_toward(
+                    bones["hips"],
+                    right_thigh,
+                    state["rightInner"],
+                    desired_right_inner,
+                    calibration["rightAxis"],
+                    t,
+                )
+                bpy.context.view_layer.update()
+                state = measure_leg_gaps(bones, seated_reference)
+                point_toward(
+                    bones["hips"],
+                    left_thigh,
+                    state["leftKnee"],
+                    desired_left_knee,
+                    calibration["leftAxis"],
+                    t,
+                )
+                point_toward(
+                    bones["hips"],
+                    right_thigh,
+                    state["rightKnee"],
+                    desired_right_knee,
+                    calibration["rightAxis"],
+                    t,
+                )
+                bpy.context.view_layer.update()
+                state = measure_leg_gaps(bones, seated_reference)
+            if not is_valid_state(state):
+                continue
+            inner_penalty = max(0.0, state["innerThighGap"] - desired_inner)
+            knee_penalty = max(0.0, state["kneeGap"] - desired_knee)
+            ankle_bonus = state["ankleGap"] - desired_ankle
+            asym_penalty = (
+                abs(left_scale - right_scale)
+                * SCORE_ASYMMETRY_WEIGHT
+            )
+            score = (
+                state["innerThighGap"] * SCORE_INNER_GAP_WEIGHT
+                + inner_penalty * SCORE_INNER_EXCESS_WEIGHT
+                + state["kneeGap"] * SCORE_KNEE_GAP_WEIGHT
+                + knee_penalty * SCORE_KNEE_EXCESS_WEIGHT
+                - ankle_bonus * SCORE_ANKLE_BONUS_WEIGHT
+                + asym_penalty
+            )
+            if score < best_score:
+                best_score = score
+                best_left = left_thigh.rotation_quaternion.copy()
+                best_right = right_thigh.rotation_quaternion.copy()
+                found_valid = True
+    if found_valid:
+        set_pose_bone_quaternion(left_thigh, best_left)
+        set_pose_bone_quaternion(right_thigh, best_right)
+    else:
+        set_pose_bone_quaternion(left_thigh, original_left)
+        set_pose_bone_quaternion(right_thigh, original_right)
+    bpy.context.view_layer.update()
+
 args = sys.argv[sys.argv.index("--") + 1:]
 fbx_path = os.path.abspath(args[0])
 output_path = os.path.abspath(args[1])
@@ -91,7 +791,9 @@ requested_vertex_count = int(args[2])
 frame_count = int(args[3])
 progress_limit = float(args[4])
 truncate_after_motion_peak = args[5].lower() in {"1", "true", "yes", "on"}
+apply_runtime_leg_close = args[6].lower() in {"1", "true", "yes", "on"}
 print("[diag] body_context_worker_version=numpy_free_v2")
+print(f"[diag] apply_runtime_leg_close={apply_runtime_leg_close}")
 if frame_count < 2:
     raise RuntimeError("フレーム数は2以上にしてください。")
 if not os.path.isfile(fbx_path):
@@ -255,10 +957,48 @@ print(
     f"animation_end={animation_end:.3f}"
 )
 
+leg_close_bones = collect_leg_close_bones(armature_object)
+seated_leg_reference = None
+leg_adduction_calibration = None
+if apply_runtime_leg_close:
+    source_frame = animation_start + (
+        animation_end - animation_start
+    ) * progress_limit
+    frame_floor = math.floor(source_frame)
+    bpy.context.scene.frame_set(
+        int(frame_floor),
+        subframe=float(source_frame - frame_floor),
+    )
+    bpy.context.view_layer.update()
+    seated_leg_reference = capture_seated_leg_reference(leg_close_bones)
+    leg_adduction_calibration = capture_leg_adduction_calibration(
+        leg_close_bones,
+    )
+    print(
+        "[diag] runtime_leg_close bones: "
+        + ", ".join(
+            f"{name}={bone.name if bone else None}"
+            for name, bone in leg_close_bones.items()
+        )
+    )
+    if seated_leg_reference is None:
+        print("[warn] runtime_leg_closeの座位参照を取得できませんでした。")
+    else:
+        print(
+            "[diag] runtime_leg_close seated gaps: "
+            f"inner={seated_leg_reference['innerThighGap']:.6f}, "
+            f"knee={seated_leg_reference['kneeGap']:.6f}, "
+            f"ankle={seated_leg_reference['ankleGap']:.6f}"
+        )
+
 skinned_vertices = []
+skirt_skinned_vertices = []
 sampled_body_progresses = []
 sampled_source_frames = []
+progress_log(f"Body/SKIN評価を開始します: frames={frame_count}")
 for index in range(frame_count):
+    if should_log_progress(index, frame_count):
+        progress_log(f"Body/SKIN評価 {index + 1}/{frame_count}")
     progress = index / float(frame_count - 1)
     body_progress = max(0.0, min(1.0, progress)) * progress_limit
     source_frame = animation_start + (
@@ -272,6 +1012,13 @@ for index in range(frame_count):
         subframe=float(source_frame - frame_floor),
     )
     bpy.context.view_layer.update()
+    if apply_runtime_leg_close:
+        apply_runtime_leg_close_to_pose(
+            leg_close_bones,
+            seated_leg_reference,
+            leg_adduction_calibration,
+            progress,
+        )
     depsgraph = bpy.context.evaluated_depsgraph_get()
     evaluated_object = body_object.evaluated_get(depsgraph)
     evaluated_mesh = evaluated_object.to_mesh(
@@ -287,13 +1034,23 @@ for index in range(frame_count):
             float(evaluated_mesh.vertices[index].co.y),
             float(evaluated_mesh.vertices[index].co.z),
         ] for index in body_vertex_indices]
+        skirt_vertices = [[
+            float(evaluated_mesh.vertices[index].co.x),
+            float(evaluated_mesh.vertices[index].co.y),
+            float(evaluated_mesh.vertices[index].co.z),
+        ] for index in skirt_vertex_indices]
     finally:
         evaluated_object.to_mesh_clear()
     if len(vertices) != vertex_count:
         raise RuntimeError("評価後Body/SKIN頂点数が一致しません。")
+    if len(skirt_vertices) != len(skirt_vertex_indices):
+        raise RuntimeError("評価後Body/Bottoms頂点数が一致しません。")
     skinned_vertices.append(vertices)
+    skirt_skinned_vertices.append(skirt_vertices)
+progress_log("Body/SKIN評価が完了しました。")
 
 # per-vertex, per-frame displacement: (frames, vertices, 3)
+progress_log("Body/SKIN変位計算を開始します。")
 per_vertex_motion = [
     [
         vector_sub(vertex, body_base_vertices[vertex_index])
@@ -311,6 +1068,7 @@ per_vertex_norms_max = [
     max(vector_norm(motion) for motion in frame_motion)
     for frame_motion in per_vertex_motion
 ]
+progress_log("Body/SKIN変位計算が完了しました。")
 # 切り捨て後もsource_frame表示が元のサンプリング刻みと対応するよう、
 # 切り捨て前のframe_countを別名で保持しておく。
 original_frame_count = frame_count
@@ -331,6 +1089,7 @@ if truncate_after_motion_peak and peak_index < frame_count - 1:
         f"(採用フレーム数: {peak_index + 1}/{frame_count})。"
     )
     skinned_vertices = skinned_vertices[: peak_index + 1]
+    skirt_skinned_vertices = skirt_skinned_vertices[: peak_index + 1]
     per_vertex_motion = per_vertex_motion[: peak_index + 1]
     body_motion_preview = body_motion_preview[: peak_index + 1]
     motion_norms = motion_norms[: peak_index + 1]
@@ -415,7 +1174,17 @@ for sample_index in sample_indices:
 neighbor_count = min(8, len(body_base_vertices))
 neighbor_indices = []
 neighbor_weights = []
-for skirt_vertex in skirt_base_vertices:
+progress_log(
+    f"スカート頂点近傍探索を開始します: "
+    f"skirt_vertices={len(skirt_base_vertices)}, "
+    f"body_vertices={len(body_base_vertices)}, neighbors={neighbor_count}"
+)
+for skirt_index, skirt_vertex in enumerate(skirt_base_vertices):
+    if should_log_progress(skirt_index, len(skirt_base_vertices)):
+        progress_log(
+            f"スカート頂点近傍探索 "
+            f"{skirt_index + 1}/{len(skirt_base_vertices)}"
+        )
     distances = []
     for body_index, body_vertex in enumerate(body_base_vertices):
         distance_squared = sum(
@@ -428,9 +1197,19 @@ for skirt_vertex in skirt_base_vertices:
     weight_sum = sum(weights)
     neighbor_indices.append([body_index for _, body_index in nearest])
     neighbor_weights.append([weight / weight_sum for weight in weights])
+progress_log("スカート頂点近傍探索が完了しました。")
 
 skirt_vertex_body_motion = []
-for frame_motion in per_vertex_motion:
+progress_log(
+    f"スカート頂点別body_motion生成を開始します: "
+    f"frames={len(per_vertex_motion)}"
+)
+for frame_index, frame_motion in enumerate(per_vertex_motion):
+    if should_log_progress(frame_index, len(per_vertex_motion)):
+        progress_log(
+            f"スカート頂点別body_motion生成 "
+            f"{frame_index + 1}/{len(per_vertex_motion)}"
+        )
     skirt_frame_motion = []
     for indices, weights in zip(neighbor_indices, neighbor_weights):
         weighted = [0.0, 0.0, 0.0]
@@ -440,6 +1219,7 @@ for frame_motion in per_vertex_motion:
                 weighted[axis] += motion[axis] * weight
         skirt_frame_motion.append(weighted)
     skirt_vertex_body_motion.append(skirt_frame_motion)
+progress_log("スカート頂点別body_motion生成が完了しました。")
 
 nearest_body_indices = [indices[0] for indices in neighbor_indices]
 print(
@@ -451,12 +1231,14 @@ print(
 )
 
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
+progress_log(f"身体特徴量PKLを書き込みます: {output_path}")
 with open(output_path, "wb") as file:
     pickle.dump(
         {
             "body_base_vertices": body_base_vertices,
             "body_vertex_indices": body_vertex_indices,
             "skinned_vertices": skinned_vertices,
+            "skirt_skinned_vertices": skirt_skinned_vertices,
             # 保存は従来互換のフレームごとの平均変位 (frames, 3)
             # 注意: 空間的な変化が失われるため、学習時は
             # skirt_vertex_body_motionが優先して使われる。
@@ -474,6 +1256,7 @@ with open(output_path, "wb") as file:
             "animation_start": animation_start,
             "animation_end": animation_end,
             "progress_limit": progress_limit,
+            "apply_runtime_leg_close": apply_runtime_leg_close,
             "truncate_after_motion_peak": truncate_after_motion_peak,
             "motion_norm_peak_index": peak_index,
             "motion_norm_peak_body_progress": (
@@ -488,6 +1271,7 @@ with open(output_path, "wb") as file:
         file,
         protocol=4,
     )
+progress_log("身体特徴量PKLの書き込みが完了しました。")
 print("身体特徴量を保存しました: " + output_path)
 '''
 
@@ -509,21 +1293,47 @@ def run_from_colab(arguments):
     try:
         worker_file.write(blender_source())
         worker_file.close()
-        result = subprocess.run(
-            [
-                blender_command,
-                "--background",
-                "--python-exit-code",
-                "1",
-                "--python",
-                worker_file.name,
-                "--",
-                *arguments,
-            ],
-            check=False,
+        command = [
+            blender_command,
+            "--background",
+            "--python-exit-code",
+            "1",
+            "--python",
+            worker_file.name,
+            "--",
+            *arguments,
+        ]
+        process = subprocess.Popen(
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            bufsize=1,
+        )
+        output_lines = []
+        print("--- Blender output start ---", flush=True)
+        try:
+            if process.stdout is not None:
+                for line in process.stdout:
+                    print(line, end="", flush=True)
+                    output_lines.append(line)
+            return_code = process.wait()
+        except KeyboardInterrupt:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            raise
+        print("--- Blender output end ---", flush=True)
+
+        result = subprocess.CompletedProcess(
+            [
+                *command,
+            ],
+            return_code,
+            stdout="".join(output_lines),
         )
     finally:
         try:
@@ -535,10 +1345,6 @@ def run_from_colab(arguments):
         output = result.stdout
     except Exception:
         output = None
-    if output:
-        print("--- Blender output start ---")
-        print(output)
-        print("--- Blender output end ---")
     if result.returncode != 0:
         raise RuntimeError(
             "Blenderで身体特徴量を作成できませんでした。"

@@ -119,10 +119,11 @@ const SKIRT_DEFORMATION_FULL_PROGRESS = Number.isFinite(skirtDeformationMetadata
 
 const SKIRT_HIP_ROTATION_FOLLOW_BLEND = 0.45;
 const SKIRT_COVERAGE_CORRECTION_START_PROGRESS = 0.50;
-const SKIRT_SEATED_WIDTH_SCALE = 1.10;
-const SKIRT_SEATED_HEIGHT_SCALE = 1.20;
-const SKIRT_SEATED_DEPTH_SCALE = 1.34;
-const SKIRT_SEATED_LIFT = 5.6;
+const SKIRT_SEATED_WIDTH_SCALE = 1.08;
+const SKIRT_SEATED_HEIGHT_SCALE = 1.08;
+const SKIRT_SEATED_DEPTH_SCALE = 1.10;
+const SKIRT_SEATED_LIFT = 1.2;
+const SKIRT_SEATED_BACK_OFFSET = -4.8;
 
 const SAFE_SIT_CLIP_PROGRESS = 0.85; // 100%の座位ポーズはモデル上で体が不自然に折れ曲がるため85%程度までで止める
 function inferMaterialCategory(materialName: string, meshName: string): ColorCategory {
@@ -1323,10 +1324,14 @@ function SceneWithFBX({
           THREE.MathUtils.lerp(1, SKIRT_SEATED_HEIGHT_SCALE, seatedCoverageT),
           THREE.MathUtils.lerp(1, SKIRT_SEATED_DEPTH_SCALE, seatedCoverageT)
         );
-        const coverageLift = new THREE.Vector3(0, SKIRT_SEATED_LIFT * seatedCoverageT, 0);
+        const coverageOffset = new THREE.Vector3(
+          0,
+          SKIRT_SEATED_LIFT * seatedCoverageT,
+          SKIRT_SEATED_BACK_OFFSET * seatedCoverageT
+        );
 
         const pivotMatrix = new THREE.Matrix4().compose(
-          currentHipsLocalPosition.add(coverageLift),
+          currentHipsLocalPosition.add(coverageOffset),
           blendedHipsRotationDelta,
           coverageScale
         );

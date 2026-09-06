@@ -3,8 +3,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, useFBX } from '@react-three/drei';
+import { OrbitControls, useFBX, useGLTF } from '@react-three/drei';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils';
+import skirtDeformation from '../public/models/skirt_deformation.json';
 
 const SUPPRESSED_CONSOLE_PATTERNS = [
   'THREE.Clock: This module has been deprecated. Please use THREE.Timer instead.',
@@ -99,6 +100,22 @@ interface MeshColorMapping {
 }
 
 type ColorCategory = 'hair' | 'skin' | 'jacket' | 'skirt' | 'shoes' | 'default';
+
+type AnimatedSkirtGltf = {
+  scene: THREE.Group;
+  animations: THREE.AnimationClip[];
+};
+
+type SkirtDeformationMetadata = {
+  progress?: number;
+  vertex_count?: number;
+  displacements?: unknown[];
+};
+
+const skirtDeformationMetadata = skirtDeformation as SkirtDeformationMetadata;
+const SKIRT_DEFORMATION_FULL_PROGRESS = Number.isFinite(skirtDeformationMetadata.progress)
+  ? THREE.MathUtils.clamp(skirtDeformationMetadata.progress as number, 0.0001, 1)
+  : 1;
 
 const SAFE_SIT_CLIP_PROGRESS = 0.85; // 100%の座位ポーズはモデル上で体が不自然に折れ曲がるため85%程度までで止める
 function inferMaterialCategory(materialName: string, meshName: string): ColorCategory {
@@ -278,7 +295,6 @@ const EARLY_BREAK_KNEE_WEIGHT = 40;
 // 探索早期終了判定時のスコアベースオフセット（判定感度の調整値）
 const EARLY_BREAK_SCORE_BIAS = 2.0;
 
-const LEG_ADDUCTION_DEBUG_MAX_LOGS = 0;
 const LEG_ADDUCTION_AXIS_RECOVERY_MAX_LOGS = 0;
 const LEG_ADDUCTION_TRACE = false;
 const LEG_ADDUCTION_TRACE_MAX_LOGS = 0;
@@ -300,10 +316,8 @@ type SeatedLegReference = {
   hasAnkleReference: boolean;
 };
 
-let legAdductionDebugCount = 0;
 let legAdductionAxisRecoveryDebugCount = 0;
 let legAdductionTraceCount = 0;
-let legAdductionSkipBeforeWindowCount = 0;
 
 function logLegAdduction(
   event: string,
@@ -1009,7 +1023,8 @@ function applyCustomMaterials(
   wireframe: boolean,
   customMapping: MeshColorMapping,
   colors: Record<ColorCategory, string>,
-  onDiscoverMeshes?: (meshes: { id: string; name: string; current: ColorCategory }[]) => void
+  onDiscoverMeshes?: (meshes: { id: string; name: string; current: ColorCategory }[]) => void,
+  hiddenCategories?: ReadonlySet<ColorCategory>
 ) {
   if (!root) return;
 
@@ -1027,6 +1042,7 @@ function applyCustomMaterials(
       map: null,
       emissive: new THREE.Color(0x000000),
     });
+    newMat.visible = !hiddenCategories?.has(category);
 
     // スキンメッシュではスキニングを有効化し差し替え後もポーズ変形を維持する
     if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
@@ -1070,6 +1086,7 @@ function applyCustomMaterials(
       );
 
       mesh.userData.clothSimMeshType = meshType;
+  mesh.visible = !hiddenCategories?.has(meshType);
 
       discovered.push({ id: meshId, name: meshName, current: meshType });
 
@@ -1098,8 +1115,41 @@ function applyCustomMaterials(
   }
 }
 
+function applyAnimatedSkirtMaterial(
+  root: THREE.Object3D | null,
+  wireframe: boolean,
+  skirtColor: string
+): void {
+  if (!root) return;
+
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh) return;
+
+    const sourceMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    sourceMaterials.forEach((material) => material?.dispose());
+
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(skirtColor),
+      side: THREE.DoubleSide,
+      roughness: 0.55,
+      metalness: 0.05,
+      wireframe,
+      vertexColors: false,
+    });
+    (material as THREE.MeshStandardMaterial & { morphTargets?: boolean }).morphTargets = true;
+    material.userData.fromClothSim = true;
+
+    mesh.material = material;
+    mesh.frustumCulled = false;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+  });
+}
+
 function SceneWithFBX({
   fbxPath,
+  skirtGlbPath,
   modelBasePosition,
   progress,
   onProgressChange,
@@ -1111,6 +1161,7 @@ function SceneWithFBX({
   onDiscoverMeshes
 }: {
   fbxPath: string;
+  skirtGlbPath: string;
   modelBasePosition: [number, number, number];
   progress: number;
   onProgressChange: (p: number) => void;
@@ -1128,6 +1179,7 @@ function SceneWithFBX({
   }, [SIT_CLIP_PROGRESS]);
 
   const fbx = useFBX(fbxPath) as THREE.Group & { animations?: THREE.AnimationClip[] };
+  const skirtGltf = useGLTF(skirtGlbPath) as AnimatedSkirtGltf;
   
   // スケルトンのクローンを作成
   const cloned = useMemo(() => {
@@ -1136,8 +1188,14 @@ function SceneWithFBX({
     return clonedGroup;
   }, [fbx]);
 
+  const clonedSkirt = useMemo(() => {
+    if (!skirtGltf?.scene) return null;
+    return skeletonClone(skirtGltf.scene) as THREE.Group;
+  }, [skirtGltf]);
+
   const { camera } = useThree();
   const actionRef = useRef<THREE.AnimationAction | null>(null);
+  const skirtActionRef = useRef<THREE.AnimationAction | null>(null);
   const progressRef = useRef(progress);
   const armRestPoseRef = useRef<Array<{ bone: THREE.Object3D; quaternion: THREE.Quaternion }>>([]);
   const armSpreadBonesRef = useRef<ArmSpreadBones>({
@@ -1164,7 +1222,10 @@ function SceneWithFBX({
   const rootMotionInitialZRef = useRef(0);
   const standingFootLocalYRef = useRef<number | null>(null);
   const modelRootRef = useRef<THREE.Group>(null);
+  const skirtFollowRootRef = useRef<THREE.Group>(null);
+  const skirtInitialHipsLocalRef = useRef<THREE.Vector3 | null>(null);
   const TARGET_EPSILON = 1e-4;
+  const hiddenFbxCategories = useMemo(() => new Set<ColorCategory>(['skirt']), []);
 
   useEffect(() => {
     progressRef.current = progress;
@@ -1176,6 +1237,11 @@ function SceneWithFBX({
     return new THREE.AnimationMixer(cloned);
   }, [cloned]);
 
+  const skirtMixer = useMemo(() => {
+    if (!clonedSkirt) return null;
+    return new THREE.AnimationMixer(clonedSkirt);
+  }, [clonedSkirt]);
+
   // アニメーションクリップの選択と初期化
   const selectedClip = useMemo(() => {
     if (!fbx?.animations || fbx.animations.length === 0) return null;
@@ -1185,6 +1251,11 @@ function SceneWithFBX({
     return new THREE.AnimationClip(`${clip.name}_renderable`, clip.duration, renderTracks);
   }, [fbx]);
 
+  const selectedSkirtClip = useMemo(() => {
+    if (!skirtGltf?.animations || skirtGltf.animations.length === 0) return null;
+    return skirtGltf.animations.find((candidate) => /keyaction|take|skirt/i.test(candidate.name)) || skirtGltf.animations[0];
+  }, [skirtGltf]);
+
   const applyPoseAtProgress = useCallback(
     (uiProgress: number) => {
       if (!mixer || !selectedClip || !cloned) return;
@@ -1193,6 +1264,17 @@ function SceneWithFBX({
       mixer.setTime(clipTime);
       mixer.update(0);
 
+      if (skirtMixer && selectedSkirtClip) {
+        const skirtDuration = selectedSkirtClip.duration || 1;
+        const skirtProgress = THREE.MathUtils.clamp(
+          uiProgressToClipProgress(uiProgress) / SKIRT_DEFORMATION_FULL_PROGRESS,
+          0,
+          1
+        );
+        skirtMixer.setTime(skirtProgress * skirtDuration);
+        skirtMixer.update(0);
+      }
+
       if (legCloseBonesRef.current.hips && hipRestPositionRef.current) {
         legCloseBonesRef.current.hips.position.copy(hipRestPositionRef.current);
         const rootMotion = rootMotionInterpolantRef.current?.evaluate(clipTime);
@@ -1200,6 +1282,14 @@ function SceneWithFBX({
           legCloseBonesRef.current.hips.position.y += rootMotion[1] - rootMotionInitialYRef.current;
           legCloseBonesRef.current.hips.position.z += rootMotion[2] - rootMotionInitialZRef.current;
         }
+      }
+
+      if (skirtFollowRootRef.current && legCloseBonesRef.current.hips && skirtInitialHipsLocalRef.current) {
+        cloned.updateMatrixWorld(true);
+        const hipsLocal = cloned.worldToLocal(
+          legCloseBonesRef.current.hips.getWorldPosition(new THREE.Vector3())
+        );
+        skirtFollowRootRef.current.position.copy(hipsLocal.sub(skirtInitialHipsLocalRef.current));
       }
 
       // 立位時の腕基準ポーズを安定して維持しつつ立位区間だけ上腕を少し外側へ開いて
@@ -1230,14 +1320,36 @@ function SceneWithFBX({
         }
       }
     },
-    [cloned, mixer, modelBasePosition, selectedClip, uiProgressToClipProgress]
+    [cloned, mixer, modelBasePosition, selectedClip, selectedSkirtClip, skirtMixer, uiProgressToClipProgress]
   );
 
   // マテリアルの適用とメッシュ検出
   useEffect(() => {
     if (!cloned) return;
-    applyCustomMaterials(cloned, wireframe, customMapping, colors, onDiscoverMeshes);
-  }, [cloned, wireframe, customMapping, colors, onDiscoverMeshes]);
+    applyCustomMaterials(cloned, wireframe, customMapping, colors, onDiscoverMeshes, hiddenFbxCategories);
+  }, [cloned, wireframe, customMapping, colors, onDiscoverMeshes, hiddenFbxCategories]);
+
+  useEffect(() => {
+    if (!clonedSkirt) return;
+    applyAnimatedSkirtMaterial(clonedSkirt, wireframe, colors.skirt);
+  }, [clonedSkirt, wireframe, colors.skirt]);
+
+  useEffect(() => {
+    if (!skirtMixer || !clonedSkirt || !selectedSkirtClip) return;
+    const action = skirtMixer.clipAction(selectedSkirtClip);
+    action.reset();
+    action.setEffectiveWeight(1.0);
+    action.play();
+    skirtActionRef.current = action;
+    skirtMixer.setTime(0);
+    skirtMixer.update(0);
+    clonedSkirt.updateMatrixWorld(true);
+
+    return () => {
+      skirtMixer.stopAllAction();
+      skirtActionRef.current = null;
+    };
+  }, [clonedSkirt, selectedSkirtClip, skirtMixer]);
 
   // アクションの設定と一時停止（自動再生の競合を徹底排除）
   useEffect(() => {
@@ -1263,6 +1375,9 @@ function SceneWithFBX({
     legCloseBonesRef.current = collectLegCloseBones(cloned);
     standingFootLocalYRef.current = getLowestFootLocalY(cloned, legCloseBonesRef.current);
     hipRestPositionRef.current = legCloseBonesRef.current.hips?.position.clone() ?? null;
+    skirtInitialHipsLocalRef.current = legCloseBonesRef.current.hips
+      ? cloned.worldToLocal(legCloseBonesRef.current.hips.getWorldPosition(new THREE.Vector3()))
+      : null;
     const sourceClip = fbx.animations?.find((candidate) => /mixamo.com|Take|take/i.test(candidate.name)) || fbx.animations?.[0];
     const rootPositionTrack = sourceClip?.tracks.find((track) => track.name === 'egaken.position') as THREE.VectorKeyframeTrack | undefined;
     rootMotionInterpolantRef.current = rootPositionTrack
@@ -1270,10 +1385,8 @@ function SceneWithFBX({
       : null;
     rootMotionInitialYRef.current = rootPositionTrack?.values[1] ?? 0;
     rootMotionInitialZRef.current = rootPositionTrack?.values[2] ?? 0;
-    legAdductionDebugCount = 0;
     legAdductionAxisRecoveryDebugCount = 0;
     legAdductionTraceCount = 0;
-    legAdductionSkipBeforeWindowCount = 0;
 
     // 座位基準進捗時点の参照姿勢を股関節ローカル空間で取得する
     mixer.setTime(SIT_CLIP_PROGRESS * (selectedClip.duration || 1));
@@ -1341,6 +1454,7 @@ function SceneWithFBX({
       seatedLegReferenceRef.current = null;
       legAdductionCalibrationRef.current = null;
       hipRestPositionRef.current = null;
+      skirtInitialHipsLocalRef.current = null;
       rootMotionInterpolantRef.current = null;
       rootMotionInitialYRef.current = 0;
       rootMotionInitialZRef.current = 0;
@@ -1447,6 +1561,16 @@ function SceneWithFBX({
           position={[0, modelOffsetY, 0]}
         />
       )}
+      {clonedSkirt && (
+        <group scale={[objectScale, objectScale, objectScale]} position={[0, modelOffsetY, 0]}>
+          <group ref={skirtFollowRootRef}>
+            <primitive
+              object={clonedSkirt}
+              rotation={[Math.PI / 2, 0, 0]}
+            />
+          </group>
+        </group>
+      )}
     </group>
   );
 }
@@ -1466,6 +1590,7 @@ export default function ClothSimulator() {
 
   const modelBasePosition: [number, number, number] = [0, 0, 0];
   const fbxPath = '/models/StandToSit_model.fbx';
+  const skirtGlbPath = '/models/skirt_mesh_sitting_animation.glb';
 
   const customMapping = useMemo<MeshColorMapping>(() => ({}), []);
 
@@ -1499,6 +1624,7 @@ export default function ClothSimulator() {
 
         <SceneWithFBX
           fbxPath={fbxPath}
+          skirtGlbPath={skirtGlbPath}
           modelBasePosition={modelBasePosition}
           progress={progress}
           onProgressChange={setProgress}

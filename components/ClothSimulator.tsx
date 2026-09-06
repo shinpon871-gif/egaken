@@ -117,6 +117,13 @@ const SKIRT_DEFORMATION_FULL_PROGRESS = Number.isFinite(skirtDeformationMetadata
   ? THREE.MathUtils.clamp(skirtDeformationMetadata.progress as number, 0.0001, 1)
   : 1;
 
+const SKIRT_HIP_ROTATION_FOLLOW_BLEND = 0.45;
+const SKIRT_COVERAGE_CORRECTION_START_PROGRESS = 0.50;
+const SKIRT_SEATED_WIDTH_SCALE = 1.10;
+const SKIRT_SEATED_HEIGHT_SCALE = 1.20;
+const SKIRT_SEATED_DEPTH_SCALE = 1.34;
+const SKIRT_SEATED_LIFT = 5.6;
+
 const SAFE_SIT_CLIP_PROGRESS = 0.85; // 100%の座位ポーズはモデル上で体が不自然に折れ曲がるため85%程度までで止める
 function inferMaterialCategory(materialName: string, meshName: string): ColorCategory {
   const search = `${materialName} ${meshName}`.toLowerCase();
@@ -1086,7 +1093,7 @@ function applyCustomMaterials(
       );
 
       mesh.userData.clothSimMeshType = meshType;
-  mesh.visible = !hiddenCategories?.has(meshType);
+        mesh.visible = !hiddenCategories?.has(meshType);
 
       discovered.push({ id: meshId, name: meshName, current: meshType });
 
@@ -1224,6 +1231,7 @@ function SceneWithFBX({
   const modelRootRef = useRef<THREE.Group>(null);
   const skirtFollowRootRef = useRef<THREE.Group>(null);
   const skirtInitialHipsLocalRef = useRef<THREE.Vector3 | null>(null);
+  const skirtInitialHipsLocalQuaternionRef = useRef<THREE.Quaternion | null>(null);
   const TARGET_EPSILON = 1e-4;
   const hiddenFbxCategories = useMemo(() => new Set<ColorCategory>(['skirt']), []);
 
@@ -1284,12 +1292,52 @@ function SceneWithFBX({
         }
       }
 
-      if (skirtFollowRootRef.current && legCloseBonesRef.current.hips && skirtInitialHipsLocalRef.current) {
+      if (
+        skirtFollowRootRef.current &&
+        legCloseBonesRef.current.hips &&
+        skirtInitialHipsLocalRef.current &&
+        skirtInitialHipsLocalQuaternionRef.current
+      ) {
         cloned.updateMatrixWorld(true);
-        const hipsLocal = cloned.worldToLocal(
-          legCloseBonesRef.current.hips.getWorldPosition(new THREE.Vector3())
+        const currentHipsWorldPosition = legCloseBonesRef.current.hips.getWorldPosition(new THREE.Vector3());
+        const currentHipsLocalPosition = cloned.worldToLocal(currentHipsWorldPosition);
+        const rootWorldQuaternion = cloned.getWorldQuaternion(new THREE.Quaternion());
+        const currentHipsLocalQuaternion = rootWorldQuaternion
+          .clone()
+          .invert()
+          .multiply(legCloseBonesRef.current.hips.getWorldQuaternion(new THREE.Quaternion()))
+          .normalize();
+        const hipsRotationDelta = currentHipsLocalQuaternion
+          .multiply(skirtInitialHipsLocalQuaternionRef.current.clone().invert())
+          .normalize();
+        const blendedHipsRotationDelta = new THREE.Quaternion().slerp(
+          hipsRotationDelta,
+          SKIRT_HIP_ROTATION_FOLLOW_BLEND
         );
-        skirtFollowRootRef.current.position.copy(hipsLocal.sub(skirtInitialHipsLocalRef.current));
+        const seatedCoverageT = smoothstep01(
+          (uiProgress - SKIRT_COVERAGE_CORRECTION_START_PROGRESS) /
+          (1 - SKIRT_COVERAGE_CORRECTION_START_PROGRESS)
+        );
+        const coverageScale = new THREE.Vector3(
+          THREE.MathUtils.lerp(1, SKIRT_SEATED_WIDTH_SCALE, seatedCoverageT),
+          THREE.MathUtils.lerp(1, SKIRT_SEATED_HEIGHT_SCALE, seatedCoverageT),
+          THREE.MathUtils.lerp(1, SKIRT_SEATED_DEPTH_SCALE, seatedCoverageT)
+        );
+        const coverageLift = new THREE.Vector3(0, SKIRT_SEATED_LIFT * seatedCoverageT, 0);
+
+        const pivotMatrix = new THREE.Matrix4().compose(
+          currentHipsLocalPosition.add(coverageLift),
+          blendedHipsRotationDelta,
+          coverageScale
+        );
+        const offsetMatrix = new THREE.Matrix4().makeTranslation(
+          -skirtInitialHipsLocalRef.current.x,
+          -skirtInitialHipsLocalRef.current.y,
+          -skirtInitialHipsLocalRef.current.z
+        );
+
+        skirtFollowRootRef.current.matrixAutoUpdate = false;
+        skirtFollowRootRef.current.matrix.copy(pivotMatrix.multiply(offsetMatrix));
       }
 
       // 立位時の腕基準ポーズを安定して維持しつつ立位区間だけ上腕を少し外側へ開いて
@@ -1339,6 +1387,8 @@ function SceneWithFBX({
     const action = skirtMixer.clipAction(selectedSkirtClip);
     action.reset();
     action.setEffectiveWeight(1.0);
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
     action.play();
     skirtActionRef.current = action;
     skirtMixer.setTime(0);
@@ -1375,9 +1425,20 @@ function SceneWithFBX({
     legCloseBonesRef.current = collectLegCloseBones(cloned);
     standingFootLocalYRef.current = getLowestFootLocalY(cloned, legCloseBonesRef.current);
     hipRestPositionRef.current = legCloseBonesRef.current.hips?.position.clone() ?? null;
-    skirtInitialHipsLocalRef.current = legCloseBonesRef.current.hips
-      ? cloned.worldToLocal(legCloseBonesRef.current.hips.getWorldPosition(new THREE.Vector3()))
-      : null;
+    if (legCloseBonesRef.current.hips) {
+      cloned.updateMatrixWorld(true);
+      skirtInitialHipsLocalRef.current = cloned.worldToLocal(
+        legCloseBonesRef.current.hips.getWorldPosition(new THREE.Vector3())
+      );
+      skirtInitialHipsLocalQuaternionRef.current = cloned
+        .getWorldQuaternion(new THREE.Quaternion())
+        .invert()
+        .multiply(legCloseBonesRef.current.hips.getWorldQuaternion(new THREE.Quaternion()))
+        .normalize();
+    } else {
+      skirtInitialHipsLocalRef.current = null;
+      skirtInitialHipsLocalQuaternionRef.current = null;
+    }
     const sourceClip = fbx.animations?.find((candidate) => /mixamo.com|Take|take/i.test(candidate.name)) || fbx.animations?.[0];
     const rootPositionTrack = sourceClip?.tracks.find((track) => track.name === 'egaken.position') as THREE.VectorKeyframeTrack | undefined;
     rootMotionInterpolantRef.current = rootPositionTrack
@@ -1455,6 +1516,7 @@ function SceneWithFBX({
       legAdductionCalibrationRef.current = null;
       hipRestPositionRef.current = null;
       skirtInitialHipsLocalRef.current = null;
+      skirtInitialHipsLocalQuaternionRef.current = null;
       rootMotionInterpolantRef.current = null;
       rootMotionInitialYRef.current = 0;
       rootMotionInitialZRef.current = 0;
@@ -1554,23 +1616,14 @@ function SceneWithFBX({
 
   return (
     <group ref={modelRootRef} position={modelBasePosition}>
-      {cloned && (
-        <primitive
-          object={cloned}
-          scale={[objectScale, objectScale, objectScale]}
-          position={[0, modelOffsetY, 0]}
-        />
-      )}
-      {clonedSkirt && (
-        <group scale={[objectScale, objectScale, objectScale]} position={[0, modelOffsetY, 0]}>
+      <group scale={[objectScale, objectScale, objectScale]} position={[0, modelOffsetY, 0]}>
+        {cloned && <primitive object={cloned} />}
+        {clonedSkirt && (
           <group ref={skirtFollowRootRef}>
-            <primitive
-              object={clonedSkirt}
-              rotation={[Math.PI / 2, 0, 0]}
-            />
+            <primitive object={clonedSkirt} rotation={[Math.PI / 2, 0, 0]} />
           </group>
-        </group>
-      )}
+        )}
+      </group>
     </group>
   );
 }

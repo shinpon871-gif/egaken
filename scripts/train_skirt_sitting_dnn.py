@@ -335,12 +335,39 @@ provided_sitting_vertices = globals().get("DNN_SITTING_VERTICES", None)
 provided_pose_angles = globals().get("DNN_TRAINING_POSE_ANGLES", None)
 max_sit_angle = float(np.deg2rad(MAX_SIT_ANGLE_DEGREES))
 
+# ------------------------------------------------------------
+# 教師データの読み込み
+# 1. create_skirt_body_context.pyで生成された幾何Goal Pose付きブレンド教師
+#    (skirt_geometric_teacher_vertices)を最優先で使用。
+#    立位〜60%までは 0185d85 の body_motion 追従、
+#    60%〜100%で太腿カプセル衝突回避・めくれ抑制ゴールへ滑らかに遷移する。
+# 2. 手動指定 (DNN_TRAINING_VERTICES / DNN_SITTING_VERTICES)
+# 3. 従来フォールバック (skirt_skinned_vertices)
+# ------------------------------------------------------------
 if provided_training_vertices is None and os.path.isfile(BODY_CONTEXT_PATH):
     import pickle
 
     with open(BODY_CONTEXT_PATH, "rb") as file:
         teacher_context = pickle.load(file)
     if (
+        isinstance(teacher_context, dict)
+        and "skirt_geometric_teacher_vertices" in teacher_context
+    ):
+        provided_training_vertices = np.asarray(
+            teacher_context["skirt_geometric_teacher_vertices"],
+            dtype=np.float32,
+        )
+        provided_pose_angles = np.linspace(
+            0.0,
+            max_sit_angle,
+            len(provided_training_vertices),
+            dtype=np.float32,
+        )
+        print(
+            "教師スカート頂点の入力元(衝突回避幾何ブレンド教師): "
+            f"{BODY_CONTEXT_PATH} skirt_geometric_teacher_vertices"
+        )
+    elif (
         isinstance(teacher_context, dict)
         and "skirt_skinned_vertices" in teacher_context
     ):
@@ -622,6 +649,30 @@ optimizer = torch.optim.AdamW(
     weight_decay=WEIGHT_DECAY,
 )
 
+# メッシュ幾何拘束用のエッジリストと初期エッジ長を構築
+edge_set = set()
+for face in base_skirt_faces:
+    for i in range(3):
+        u, v = int(face[i]), int(face[(i + 1) % 3])
+        edge_set.add((min(u, v), max(u, v)))
+edge_pairs_np = np.array(list(edge_set), dtype=np.int64)
+edge_u_idx = torch.from_numpy(edge_pairs_np[:, 0]).to(device)
+edge_v_idx = torch.from_numpy(edge_pairs_np[:, 1]).to(device)
+initial_edges_u = torch.from_numpy(base_skirt_pc[edge_pairs_np[:, 0]]).to(device)
+initial_edges_v = torch.from_numpy(base_skirt_pc[edge_pairs_np[:, 1]]).to(device)
+initial_edge_lengths = torch.norm(initial_edges_u - initial_edges_v, dim=1)
+
+# フレームごとの全頂点入力テンソル（幾何Loss計算用）
+frame_full_inputs = [
+    torch.from_numpy(input_rows_all[f]).to(device)
+    for f in range(frame_count)
+]
+frame_full_targets = [
+    torch.from_numpy(target_rows_all[f]).to(device)
+    for f in range(frame_count)
+]
+base_skirt_torch = torch.from_numpy(base_skirt_pc).to(device)
+
 best_rmse = float("inf")
 best_state = None
 for step in range(1, train_steps + 1):
@@ -631,10 +682,22 @@ for step in range(1, train_steps + 1):
     batch_targets = train_targets[indices].to(device)
     optimizer.zero_grad(set_to_none=True)
     prediction = model(batch_inputs)
-    loss = (
+    loss_data = (
         0.8 * F.smooth_l1_loss(prediction, batch_targets)
         + 0.2 * F.mse_loss(prediction, batch_targets)
     )
+
+    # 幾何拘束損失 (ランダムなフレームを1つ選んでエッジ長を拘束)
+    random_frame = random.randint(0, frame_count - 1)
+    frame_in = frame_full_inputs[random_frame]
+    frame_disp = model(frame_in)
+    frame_verts = base_skirt_torch + frame_disp
+    pred_edge_lengths = torch.norm(frame_verts[edge_u_idx] - frame_verts[edge_v_idx], dim=1)
+    loss_edge = F.mse_loss(pred_edge_lengths, initial_edge_lengths)
+
+    # トータル損失
+    loss = loss_data + 0.05 * loss_edge
+
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
     optimizer.step()

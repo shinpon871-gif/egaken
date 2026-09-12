@@ -222,7 +222,11 @@ with open(mapping_path, "w", encoding="utf-8") as file:
             "body_context_has_skirt_after_runtime_leg_close": bool(
                 "skirt_skinned_vertices_after_runtime_leg_close" in context
             ),
-            "skirt_teacher_source": "skirt_skinned_vertices",
+            "skirt_teacher_source": (
+                "geometric_hybrid_teacher"
+                if "skirt_geometric_teacher_vertices" in context
+                else "skirt_skinned_vertices"
+            ),
             "body_context_motion_norm_peak_index": context.get(
                 "motion_norm_peak_index",
                 None,

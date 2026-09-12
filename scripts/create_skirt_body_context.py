@@ -1298,154 +1298,65 @@ print(
 )
 
 # ------------------------------------------------------------
-# フル座位時の衝突回避＋めくれ抑制付き幾何ゴールポーズ（Goal Pose）の生成
-# 0185d85のbody_motion変形をベースにしつつ、太腿カプセル衝突判定・
-# 股間めくれ緩和・ラプラシアンスムージングを施して自然な座位形状を作る。
+# 0185d85準拠: FBXのスキニング済みスカート動作（skirt_skinned_vertices）を
+# 100%ベースとし、各フレームで人体肌（skinned_vertices）の内側に潜り込んでいる
+# 局所頂点のみを外側へ安全に押し出す高精度教師データ（skirt_geometric_teacher_vertices）を生成。
 # ------------------------------------------------------------
-progress_log("衝突回避幾何Goal Poseの生成を開始します。")
-seated_skirt_baseline = [
-    [
-        skirt_base_vertices[i][axis] + skirt_vertex_body_motion[-1][i][axis]
-        for axis in range(3)
-    ]
+progress_log("高精度教師データ（skirt_geometric_teacher_vertices）の生成を開始します。")
+
+# 各スカート頂点の立位での最近傍Body頂点との初期外向きオフセットベクトル
+initial_skirt_offsets = [
+    vector_sub(
+        skirt_base_vertices[i],
+        body_base_vertices[nearest_body_indices[i]],
+    )
+    for i in range(len(skirt_base_vertices))
+]
+initial_skirt_distances = [
+    max(vector_norm(initial_skirt_offsets[i]), 0.004)
+    for i in range(len(skirt_base_vertices))
+]
+initial_skirt_unit_dirs = [
+    (
+        [
+            initial_skirt_offsets[i][axis] / initial_skirt_distances[i]
+            for axis in range(3)
+        ]
+        if initial_skirt_distances[i] > 1e-6
+        else [0.0, 1.0, 0.0]
+    )
     for i in range(len(skirt_base_vertices))
 ]
 
-# 太腿ボーン線分（Hips->Knee）の座標を取得
-thigh_segments = []
-if leg_close_bones.get("leftThigh") and leg_close_bones.get("leftKnee"):
-    thigh_segments.append((
-        bone_object_location(leg_close_bones["leftThigh"]),
-        bone_object_location(leg_close_bones["leftKnee"]),
-    ))
-if leg_close_bones.get("rightThigh") and leg_close_bones.get("rightKnee"):
-    thigh_segments.append((
-        bone_object_location(leg_close_bones["rightThigh"]),
-        bone_object_location(leg_close_bones["rightKnee"]),
-    ))
-
-skirt_extent = math.sqrt(sum(
-    (max(values) - min(values)) ** 2
-    for values in zip(*skirt_base_vertices)
-))
-# 太腿の安全半径（モデル全体のスケールから推定 + クリアランス）
-thigh_radius = max(skirt_extent * 0.18, 0.01)
-
-# メッシュの隣接リスト構築
-adjacency = [set() for _ in range(len(skirt_base_vertices))]
-for face in skirt_faces:
-    for i in range(3):
-        u, v = face[i], face[(i + 1) % 3]
-        adjacency[u].add(v)
-        adjacency[v].add(u)
-
-# ウエストバンド（最上部10%）の頂点は固定
-y_coords = [v[1] for v in skirt_base_vertices]
-y_max = max(y_coords)
-y_min = min(y_coords)
-y_range = max(y_max - y_min, 1e-6)
-is_waistband = [
-    (skirt_base_vertices[i][1] >= y_max - 0.10 * y_range)
-    for i in range(len(skirt_base_vertices))
-]
-
-
-def point_segment_closest_point(point, seg_a, seg_b):
-    ab = vector_sub(seg_b, seg_a)
-    ap = vector_sub(point, seg_a)
-    ab_len_sq = sum(c * c for c in ab)
-    if ab_len_sq <= 1e-10:
-        return list(seg_a)
-    t = max(0.0, min(1.0, sum(ap[axis] * ab[axis] for axis in range(3)) / ab_len_sq))
-    return [seg_a[axis] + t * ab[axis] for axis in range(3)]
-
-
-goal_vertices = [list(pt) for pt in seated_skirt_baseline]
-
-# 1. 太腿衝突押し出し
-for i, pt in enumerate(goal_vertices):
-    if is_waistband[i]:
-        continue
-    for seg_a, seg_b in thigh_segments:
-        closest = point_segment_closest_point(pt, seg_a, seg_b)
-        diff = vector_sub(pt, closest)
-        dist = vector_norm(diff)
-        if dist < thigh_radius:
-            if dist > 1e-6:
-                normal = [diff[axis] / dist for axis in range(3)]
-            else:
-                normal = [0.0, 1.0, 0.0]
-            # 外側へ押し出し
-            goal_vertices[i] = [
-                closest[axis] + normal[axis] * thigh_radius for axis in range(3)
-            ]
-
-# 2. ラプラシアンスムージング (5反復)
-for _ in range(5):
-    smoothed = [list(pt) for pt in goal_vertices]
-    for i in range(len(goal_vertices)):
-        if is_waistband[i] or not adjacency[i]:
-            continue
-        avg_pos = [0.0, 0.0, 0.0]
-        for neighbor in adjacency[i]:
-            for axis in range(3):
-                avg_pos[axis] += goal_vertices[neighbor][axis]
-        count = len(adjacency[i])
-        for axis in range(3):
-            smoothed[i][axis] = 0.5 * goal_vertices[i][axis] + 0.5 * (avg_pos[axis] / count)
-    # スムージング後の再衝突押し出し
-    for i, pt in enumerate(smoothed):
-        if is_waistband[i]:
-            continue
-        for seg_a, seg_b in thigh_segments:
-            closest = point_segment_closest_point(pt, seg_a, seg_b)
-            diff = vector_sub(pt, closest)
-            dist = vector_norm(diff)
-            if dist < thigh_radius:
-                if dist > 1e-6:
-                    normal = [diff[axis] / dist for axis in range(3)]
-                else:
-                    normal = [0.0, 1.0, 0.0]
-                smoothed[i] = [
-                    closest[axis] + normal[axis] * thigh_radius for axis in range(3)
-                ]
-    goal_vertices = smoothed
-
-progress_log("衝突回避幾何Goal Poseの生成が完了しました。")
-
-# 進行度ブレンド教師頂点列（全フレーム）の生成:
-# 立位〜60%までは 0185d85 の body_motion 追従
-# 60%〜100%で衝突回避 Goal Pose へ滑らかに遷移
 geometric_teacher_vertices = []
 for frame_idx in range(frame_count):
-    prog = frame_idx / float(frame_count - 1)
-    # 0185d85 ベースの追従形状
-    frame_motion_shape = [
-        [
-            skirt_base_vertices[i][axis] + skirt_vertex_body_motion[frame_idx][i][axis]
-            for axis in range(3)
-        ]
-        for i in range(len(skirt_base_vertices))
-    ]
-    if prog <= 0.5:
-        alpha = 0.0
-    else:
-        # 0.5 -> 1.0 で 0.0 -> 1.0 にスムーズ遷移
-        t_blend = (prog - 0.5) / 0.5
-        alpha = smoothstep01(t_blend)
+    # ベースは 0185d85 のFBXスキニング形状
+    frame_skirt = [list(pt) for pt in skirt_skinned_vertices[frame_idx]]
+    frame_body = skinned_vertices[frame_idx]
 
-    blended_frame = [
-        [
-            (1.0 - alpha) * frame_motion_shape[i][axis] + alpha * (
-                (1.0 - prog) * skirt_base_vertices[i][axis] + prog * goal_vertices[i][axis]
-            )
-            for axis in range(3)
-        ]
-        for i in range(len(skirt_base_vertices))
-    ]
-    geometric_teacher_vertices.append(blended_frame)
+    # 各スカート頂点について、対応するBody頂点との位置関係を検証
+    for i in range(len(frame_skirt)):
+        body_pt = frame_body[nearest_body_indices[i]]
+        current_offset = vector_sub(frame_skirt[i], body_pt)
+        unit_dir = initial_skirt_unit_dirs[i]
+
+        # 外向き方向への射影距離
+        proj_dist = sum(
+            current_offset[axis] * unit_dir[axis] for axis in range(3)
+        )
+        safe_min_dist = max(initial_skirt_distances[i] * 0.8, 0.005)
+
+        # 内側に潜り込んでいる（proj_dist < safe_min_dist）場合のみ外側へ押し出す
+        if proj_dist < safe_min_dist:
+            correction = safe_min_dist - proj_dist
+            for axis in range(3):
+                frame_skirt[i][axis] += unit_dir[axis] * correction
+
+    geometric_teacher_vertices.append(frame_skirt)
 
 geometric_teacher_vertices[0] = [list(pt) for pt in skirt_base_vertices]
+goal_vertices = geometric_teacher_vertices[-1]
+progress_log("高精度教師データの生成が完了しました。")
 
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 progress_log(f"身体特徴量PKLを書き込みます: {output_path}")

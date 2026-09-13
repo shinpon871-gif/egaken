@@ -53,6 +53,7 @@ import re
 import sys
 
 from mathutils import Quaternion, Vector
+from mathutils.kdtree import KDTree
 
 
 THIGH_CLOSE_START_PROGRESS = 0.12
@@ -167,7 +168,10 @@ def nearest_body_distance(point, body_points):
     )
 
 
-def nearest_body_index(point, body_points):
+def nearest_body_index(point, body_points, kd_tree=None):
+    if kd_tree is not None:
+        _, index, _ = kd_tree.find(point)
+        return index
     return min(
         range(len(body_points)),
         key=lambda body_index: sum(
@@ -175,6 +179,14 @@ def nearest_body_index(point, body_points):
             for axis in range(3)
         ),
     )
+
+
+def build_body_kd_tree(body_points):
+    tree = KDTree(len(body_points))
+    for index, body_point in enumerate(body_points):
+        tree.insert(body_point, index)
+    tree.balance()
+    return tree
 
 
 def validate_skirt_geometry(
@@ -186,6 +198,10 @@ def validate_skirt_geometry(
     label,
     reference_sequence=None,
     nearest_indices_sequence=None,
+    surface_triangles=None,
+    surface_mask=None,
+    surface_triangle_candidates=None,
+    body_kd_trees=None,
 ):
     if not vertices_sequence:
         raise RuntimeError(f"{label}: スカート頂点列が空です。")
@@ -200,6 +216,7 @@ def validate_skirt_geometry(
     worst_edge_ratio = 0.0
     worst_body_distance = 1.0e20
     edge_warning_count = 0
+    maximum_neighbor_displacement_delta = 0.0
     for frame_index, vertices in enumerate(vertices_sequence):
         if any(
             not math.isfinite(value)
@@ -241,6 +258,19 @@ def validate_skirt_geometry(
             worst_edge_ratio = max(worst_edge_ratio, ratio)
             if ratio < minimum_edge_ratio or ratio > maximum_edge_ratio:
                 edge_warning_count += 1
+            if frame_index > 0:
+                left_delta = vector_sub(
+                    vertices[left],
+                    reference_sequence[frame_index][left],
+                )
+                right_delta = vector_sub(
+                    vertices[right],
+                    reference_sequence[frame_index][right],
+                )
+                maximum_neighbor_displacement_delta = max(
+                    maximum_neighbor_displacement_delta,
+                    vector_norm(vector_sub(left_delta, right_delta)),
+                )
         for vertex_index, point in enumerate(vertices):
             if vertex_index in fixed_vertices:
                 continue
@@ -252,8 +282,52 @@ def validate_skirt_geometry(
                 distance = vector_norm(vector_sub(point, body_point))
             else:
                 distance = nearest_body_distance(point, body_sequence[frame_index])
+            if surface_triangles is not None and (
+                surface_mask is None or surface_mask[vertex_index]
+            ):
+                frame_kd_tree = (
+                    body_kd_trees[frame_index]
+                    if body_kd_trees is not None
+                    else None
+                )
+                triangle_indices = (
+                    surface_triangle_candidates[
+                        nearest_body_index(
+                            point,
+                            body_sequence[frame_index],
+                            frame_kd_tree,
+                        )
+                    ]
+                    if surface_triangle_candidates is not None
+                    else range(len(surface_triangles))
+                )
+                surface_signed_distance, _, _ = signed_surface_distance(
+                    point,
+                    body_sequence[frame_index],
+                    surface_triangles,
+                    triangle_indices,
+                )
+                if surface_signed_distance is None:
+                    raise RuntimeError(
+                        f"{label}: frame={frame_index}, vertex={vertex_index}の"
+                        "近傍Body面を特定できません。"
+                    )
+                distance = abs(surface_signed_distance)
+                if surface_signed_distance < clearances[vertex_index] * 0.95:
+                    raise RuntimeError(
+                        f"{label}: frame={frame_index}, vertex={vertex_index}の"
+                        f"Body面符号距離が不足しています:"
+                        f" {surface_signed_distance:.6f}"
+                    )
             worst_body_distance = min(worst_body_distance, distance)
-            if distance < clearances[vertex_index] * 0.95:
+            surface_constraint_applied = (
+                surface_triangles is not None
+                and (surface_mask is None or surface_mask[vertex_index])
+            )
+            if (
+                not surface_constraint_applied
+                and distance < clearances[vertex_index] * 0.95
+            ):
                 raise RuntimeError(
                     f"{label}: frame={frame_index}, vertex={vertex_index}の"
                     f"Body距離が不足しています: {distance:.6f}"
@@ -262,6 +336,8 @@ def validate_skirt_geometry(
         f"[diag] {label}: min_area={worst_area:.6e}, "
         f"max_edge_ratio={worst_edge_ratio:.4f}, "
         f"min_body_distance={worst_body_distance:.6f}, "
+        f"max_neighbor_displacement_delta="
+        f"{maximum_neighbor_displacement_delta:.6f}, "
         f"edge_warnings={edge_warning_count}"
     )
 
@@ -962,7 +1038,35 @@ body_vertex_indices = sorted({
     if polygon.material_index in skin_material_indices
     for vertex_index in polygon.vertices
 })
+body_vertex_remap = {
+    source_index: target_index
+    for target_index, source_index in enumerate(body_vertex_indices)
+}
 body_object.data.calc_loop_triangles()
+body_skin_triangles = [
+    tuple(body_vertex_remap[index] for index in loop_triangle.vertices)
+    for loop_triangle in body_object.data.loop_triangles
+    if (
+        body_object.data.polygons[loop_triangle.polygon_index].material_index
+        in skin_material_indices
+        and all(index in body_vertex_remap for index in loop_triangle.vertices)
+    )
+]
+if not body_skin_triangles:
+    raise RuntimeError("BodyのSKIN面から三角形を抽出できませんでした。")
+body_vertex_triangle_neighbors = [set() for _ in body_vertex_indices]
+body_vertex_neighbors = [set() for _ in body_vertex_indices]
+for triangle_index, triangle in enumerate(body_skin_triangles):
+    for vertex_index in triangle:
+        body_vertex_triangle_neighbors[vertex_index].add(triangle_index)
+        for neighbor_index in triangle:
+            if neighbor_index != vertex_index:
+                body_vertex_neighbors[vertex_index].add(neighbor_index)
+for vertex_index in range(len(body_vertex_indices)):
+    expanded = set(body_vertex_triangle_neighbors[vertex_index])
+    for neighbor_index in body_vertex_neighbors[vertex_index]:
+        expanded.update(body_vertex_triangle_neighbors[neighbor_index])
+    body_vertex_triangle_neighbors[vertex_index] = expanded
 bottom_material_indices = {
     index for index, slot in enumerate(body_object.material_slots)
     if slot.material and "bottom" in slot.material.name.lower()
@@ -1221,11 +1325,6 @@ for index in range(frame_count):
         leg_close_bones,
     ) if apply_runtime_leg_close else []
 
-    # skirt_skinned_verticesは教師スカート形状として使うため、元FBXの
-    # Bottoms動作から取得する。脚閉じ補正後に採ると、布ではなく
-    # 追加ボーン回転の跳ね上がりまで教師として焼き込んでしまう。
-    skirt_vertices = read_evaluated_vertices(body_object, skirt_vertex_indices)
-
     if apply_runtime_leg_close:
         apply_runtime_leg_close_to_pose(
             leg_close_bones,
@@ -1233,6 +1332,10 @@ for index in range(frame_count):
             leg_adduction_calibration,
             progress,
         )
+
+    # Body/SKINと同じruntime_leg_close後の姿勢系列からBottomsを取得し、
+    # 教師スカートとBodyの姿勢基準を一致させる。
+    skirt_vertices = read_evaluated_vertices(body_object, skirt_vertex_indices)
 
     vertices, normals = read_evaluated_vertices_and_normals(
         body_object,
@@ -1513,17 +1616,39 @@ skirt_clearance = [
     else SAFE_NORMAL_CLEARANCE_BACK
     for i in range(len(skirt_base_vertices))
 ]
-fixed_vertices = {
-    index for index, fixed in enumerate(is_waistband) if fixed
-}
+THIGH_SURFACE_OFFSET_LOCAL = 0.1  # 1mm: FBXローカル座標では0.1単位
+THIGH_SURFACE_MAX_ITERATIONS = 32
+# 座標値が100前後のため丸め誤差は1e-5程度出る。1ミクロン相当で受ける。
+THIGH_SURFACE_CONVERGENCE_TOLERANCE = 1.0e-4
+# 外挿倍率の上限。実測で半角3度の溝でも8反復以内に収束する。
+THIGH_SURFACE_MAX_EXTRAPOLATION = 8.0
+THIGH_REGION_MIN_HEIGHT = 0.12
+THIGH_REGION_MAX_HEIGHT = 0.78
+thigh_region_mask = [
+    (
+        skirt_base_vertices[i][2] > 0.0
+        and THIGH_REGION_MIN_HEIGHT
+        <= (skirt_base_vertices[i][1] - y_min_base) / y_range_base
+        <= THIGH_REGION_MAX_HEIGHT
+        and not is_waistband[i]
+    )
+    for i in range(len(skirt_base_vertices))
+]
+teacher_clearances = [
+    THIGH_SURFACE_OFFSET_LOCAL if thigh_region_mask[i]
+    else skirt_clearance[i]
+    for i in range(len(skirt_base_vertices))
+]
+fixed_vertices = set()
 
 
 def push_outside_body_surface(
     point, frame_body_pts, frame_body_norms, clearance, body_index=None,
+    kd_tree=None,
 ):
     result = list(point)
     for _ in range(16):
-        nearest_b_idx = nearest_body_index(result, frame_body_pts)
+        nearest_b_idx = nearest_body_index(result, frame_body_pts, kd_tree)
         nearest_b_pt = frame_body_pts[nearest_b_idx]
         min_dist_sq = sum(
             (result[axis] - nearest_b_pt[axis]) ** 2
@@ -1545,6 +1670,193 @@ def push_outside_body_surface(
             for axis in range(3)
         ]
     return result
+
+
+def closest_point_on_body_triangle(point, body_points, triangle):
+    a, b, c = (Vector(body_points[index]) for index in triangle)
+    query = Vector(point)
+    ab = b - a
+    ac = c - a
+    ap = query - a
+    d1 = ab.dot(ap)
+    d2 = ac.dot(ap)
+    if d1 <= 0.0 and d2 <= 0.0:
+        return a, (b - a).cross(c - a).normalized()
+    bp = query - b
+    d3 = ab.dot(bp)
+    d4 = ac.dot(bp)
+    if d3 >= 0.0 and d4 <= d3:
+        return b, (b - a).cross(c - a).normalized()
+    vc = d1 * d4 - d3 * d2
+    if vc <= 0.0 and d1 >= 0.0 and d3 <= 0.0:
+        t = d1 / max(d1 - d3, 1.0e-8)
+        return a + ab * t, (b - a).cross(c - a).normalized()
+    cp = query - c
+    d5 = ab.dot(cp)
+    d6 = ac.dot(cp)
+    if d6 >= 0.0 and d5 <= d6:
+        return c, (b - a).cross(c - a).normalized()
+    vb = d5 * d2 - d1 * d6
+    if vb <= 0.0 and d2 >= 0.0 and d6 <= 0.0:
+        t = d2 / max(d2 - d6, 1.0e-8)
+        return a + ac * t, (b - a).cross(c - a).normalized()
+    va = d3 * d6 - d5 * d4
+    if va <= 0.0 and (d4 - d3) >= 0.0 and (d5 - d6) >= 0.0:
+        t = (d4 - d3) / max((d4 - d3) + (d5 - d6), 1.0e-8)
+        return b + (c - b) * t, (b - a).cross(c - a).normalized()
+    denominator = 1.0 / max(va + vb + vc, 1.0e-8)
+    v = vb * denominator
+    w = vc * denominator
+    return a + ab * v + ac * w, (b - a).cross(c - a).normalized()
+
+
+SURFACE_FEATURE_TOLERANCE = 1.0e-5
+
+
+def feature_angle_weight(closest, body_points, triangle):
+    """最近接点が面/辺/頂点のどれに載るかで擬似法線の重みを決める。"""
+    corners = [Vector(body_points[index]) for index in triangle]
+    for corner_index, corner in enumerate(corners):
+        if (closest - corner).length > SURFACE_FEATURE_TOLERANCE:
+            continue
+        left = corners[(corner_index + 1) % 3] - corner
+        right = corners[(corner_index + 2) % 3] - corner
+        if (
+            left.length <= SURFACE_FEATURE_TOLERANCE
+            or right.length <= SURFACE_FEATURE_TOLERANCE
+        ):
+            return 0.0
+        cosine = left.normalized().dot(right.normalized())
+        return math.acos(max(-1.0, min(1.0, cosine)))
+    for edge_index in range(3):
+        start = corners[edge_index]
+        edge = corners[(edge_index + 1) % 3] - start
+        length_squared = edge.length_squared
+        if length_squared <= 1.0e-12:
+            continue
+        t = (closest - start).dot(edge) / length_squared
+        if t < 0.0 or t > 1.0:
+            continue
+        if (closest - (start + edge * t)).length <= SURFACE_FEATURE_TOLERANCE:
+            return math.pi
+    return 2.0 * math.pi
+
+
+def signed_surface_distance(point, body_points, triangles, triangle_indices):
+    """Baerentzen-Aanaesの角度重み付き擬似法線による符号付き面距離。
+
+    凹面でも凸面でも内外判定が破綻しない唯一の定義として、
+    教師の補正とすべての検証がこの関数を共有する。
+    """
+    query = Vector(point)
+    closest = None
+    closest_distance_squared = 1.0e30
+    for triangle_index in triangle_indices:
+        candidate, _ = closest_point_on_body_triangle(
+            point, body_points, triangles[triangle_index],
+        )
+        distance_squared = (query - candidate).length_squared
+        if distance_squared < closest_distance_squared:
+            closest_distance_squared = distance_squared
+            closest = candidate
+    if closest is None:
+        return None, None, None
+    # 最近接点を共有する面をすべて集めて角度重み付き法線を合成する
+    normal_sum = Vector((0.0, 0.0, 0.0))
+    fallback_normal = None
+    for triangle_index in triangle_indices:
+        triangle = triangles[triangle_index]
+        candidate, normal = closest_point_on_body_triangle(
+            point, body_points, triangle,
+        )
+        if normal.length <= 1.0e-8:
+            continue
+        if (candidate - closest).length > SURFACE_FEATURE_TOLERANCE:
+            continue
+        if fallback_normal is None:
+            fallback_normal = normal
+        normal_sum += normal * feature_angle_weight(
+            closest, body_points, triangle,
+        )
+    if normal_sum.length <= 1.0e-12:
+        if fallback_normal is None:
+            return None, None, None
+        normal_sum = fallback_normal
+    unit_normal = normal_sum.normalized()
+    distance = math.sqrt(closest_distance_squared)
+    offset = query - closest
+    signed = distance if offset.dot(unit_normal) >= 0.0 else -distance
+    return signed, closest, unit_normal
+
+
+def apply_thigh_surface_offset(
+    frame_skirt,
+    frame_body_pts,
+    thigh_mask,
+    kd_tree=None,
+    frame_index=-1,
+):
+    minimum_distances = []
+    for index, point in enumerate(frame_skirt):
+        if not thigh_mask[index]:
+            continue
+        current = list(point)
+        achieved = None
+        converged = False
+        previous_deficit = None
+        extrapolation = 1.0
+        # 鋭い凹部では素の射影が線形収束で極端に遅いため、連続する
+        # 不足量の比から収束率を推定し、幾何級数の残りをまとめて飛ばす。
+        for _ in range(THIGH_SURFACE_MAX_ITERATIONS):
+            candidate_triangle_indices = body_vertex_triangle_neighbors[
+                nearest_body_index(current, frame_body_pts, kd_tree)
+            ]
+            signed, closest, unit_normal = signed_surface_distance(
+                current,
+                frame_body_pts,
+                body_skin_triangles,
+                candidate_triangle_indices,
+            )
+            if signed is None:
+                break
+            achieved = signed
+            if signed >= (
+                THIGH_SURFACE_OFFSET_LOCAL
+                - THIGH_SURFACE_CONVERGENCE_TOLERANCE
+            ):
+                converged = True
+                break
+            deficit = THIGH_SURFACE_OFFSET_LOCAL - signed
+            if previous_deficit is not None and previous_deficit > 1.0e-12:
+                ratio = deficit / previous_deficit
+                if 0.0 < ratio < 0.999:
+                    extrapolation = min(
+                        1.0 / (1.0 - ratio),
+                        THIGH_SURFACE_MAX_EXTRAPOLATION,
+                    )
+                else:
+                    extrapolation = THIGH_SURFACE_MAX_EXTRAPOLATION
+            previous_deficit = deficit
+            # 最近接点へスナップすると接線方向にも飛ぶため、接線位置を
+            # 保ったまま擬似法線方向へ押し出す。
+            step = deficit * extrapolation
+            current = [
+                current[axis] + unit_normal[axis] * step
+                for axis in range(3)
+            ]
+        if achieved is None:
+            continue
+        if not converged:
+            raise RuntimeError(
+                f"太腿面オフセットが収束しませんでした: frame={frame_index}, "
+                f"vertex={index}, achieved={achieved:.9f}, "
+                f"required={THIGH_SURFACE_OFFSET_LOCAL:.9f}。"
+                "この頂点は1mmを確保できない狭い凹部に挟まれています。"
+            )
+        # 既に1mm以上浮いている頂点はcurrentが未変更のまま、自然な浮きを保つ。
+        frame_skirt[index] = current
+        minimum_distances.append(achieved)
+    return min(minimum_distances, default=1.0e30)
 
 
 def smooth_skirt_displacement(
@@ -1573,6 +1885,8 @@ def smooth_skirt_displacement(
 
 geometric_teacher_vertices = []
 dynamic_nearest_body_indices_sequence = []
+thigh_surface_min_distances = []
+body_kd_trees = []
 for frame_idx in range(frame_count):
     if should_log_progress(frame_idx, frame_count):
         progress_log(
@@ -1584,20 +1898,20 @@ for frame_idx in range(frame_count):
     reference_frame_skirt = [list(pt) for pt in frame_skirt]
     frame_body_pts = skinned_vertices[frame_idx]
     frame_body_norms = skinned_normals[frame_idx]
-    dynamic_nearest_body_indices = [
-        nearest_body_index(point, frame_body_pts)
-        for point in frame_skirt
-    ]
+    frame_kd_tree = build_body_kd_tree(frame_body_pts)
+    body_kd_trees.append(frame_kd_tree)
 
-    # 各スカート頂点について、そのフレームでの真の最近接Body頂点と変形後法線を探索
+    # 太腿領域以外(腰帯を含む)はf849f7eの既存クリアランス処理を維持する。
+    # 腰帯は固定扱いを廃止したため、他の頂点と同じくBody距離を保証する。
     for i in range(len(frame_skirt)):
-        if is_waistband[i]:
+        if thigh_region_mask[i]:
             continue
         frame_skirt[i] = push_outside_body_surface(
             frame_skirt[i],
             frame_body_pts,
             frame_body_norms,
             skirt_clearance[i],
+            kd_tree=frame_kd_tree,
         )
 
     # 太腿上面の過剰な浮きを自然に接地させる処理（下限は法線クリアランスを厳守）
@@ -1625,17 +1939,36 @@ for frame_idx in range(frame_count):
             fixed_vertices,
         )
         for i in range(len(frame_skirt)):
-            if is_waistband[i]:
+            if thigh_region_mask[i]:
                 continue
             frame_skirt[i] = push_outside_body_surface(
                 frame_skirt[i],
                 frame_body_pts,
                 frame_body_norms,
                 skirt_clearance[i],
+                kd_tree=frame_kd_tree,
             )
+    thigh_min_distance = apply_thigh_surface_offset(
+        frame_skirt,
+        frame_body_pts,
+        thigh_region_mask,
+        kd_tree=frame_kd_tree,
+        frame_index=frame_idx,
+    )
+    thigh_surface_min_distances.append(thigh_min_distance)
+    if frame_idx in {
+        0,
+        int(round((frame_count - 1) * 0.40)),
+        int(round((frame_count - 1) * 0.617)),
+        frame_count - 1,
+    }:
+        print(
+            f"[diag] thigh_surface frame={frame_idx} "
+            f"min_distance={thigh_min_distance:.6f}"
+        )
 
     dynamic_nearest_body_indices = [
-        nearest_body_index(point, frame_body_pts)
+        nearest_body_index(point, frame_body_pts, frame_kd_tree)
         for point in frame_skirt
     ]
     dynamic_nearest_body_indices_sequence.append(
@@ -1649,11 +1982,15 @@ validate_skirt_geometry(
     geometric_teacher_vertices,
     skirt_faces,
     skinned_vertices,
-    skirt_clearance,
+    teacher_clearances,
     fixed_vertices,
     "geometric_teacher_vertices",
     reference_sequence=skirt_skinned_vertices,
     nearest_indices_sequence=dynamic_nearest_body_indices_sequence,
+    surface_triangles=body_skin_triangles,
+    surface_mask=thigh_region_mask,
+    surface_triangle_candidates=body_vertex_triangle_neighbors,
+    body_kd_trees=body_kd_trees,
 )
 progress_log("動的法線クリアランス高精度教師データの生成が完了しました。")
 
@@ -1664,6 +2001,13 @@ with open(output_path, "wb") as file:
         {
             "body_base_vertices": body_base_vertices,
             "body_vertex_indices": body_vertex_indices,
+            "body_skin_triangles": body_skin_triangles,
+            # 面距離を教師側と同一定義で再計算するための近傍三角形候補
+            "body_vertex_triangle_neighbors": [
+                sorted(indices)
+                for indices in body_vertex_triangle_neighbors
+            ],
+            "thigh_region_mask": thigh_region_mask,
             "skinned_vertices": skinned_vertices,
             "skinned_normals": skinned_normals,
             "skirt_skinned_vertices": skirt_skinned_vertices,
@@ -1684,10 +2028,11 @@ with open(output_path, "wb") as file:
             # 新規: 衝突回避ゴールポーズおよびブレンド教師頂点列
             "skirt_geometric_sitting_vertices": goal_vertices,
             "skirt_geometric_teacher_vertices": geometric_teacher_vertices,
-            "skirt_clearance_local_units": skirt_clearance,
+            "skirt_clearance_local_units": teacher_clearances,
             "skirt_dynamic_nearest_body_indices": (
                 dynamic_nearest_body_indices_sequence
             ),
+            "thigh_surface_min_distances": thigh_surface_min_distances,
             "skirt_base_vertices": skirt_base_vertices,
             "skirt_faces": skirt_faces,
             "skirt_vertex_indices": skirt_vertex_indices,
@@ -1722,6 +2067,10 @@ validate_skirt_geometry(
     nearest_indices_sequence=written_context[
         "skirt_dynamic_nearest_body_indices"
     ],
+    surface_triangles=written_context["body_skin_triangles"],
+    surface_mask=thigh_region_mask,
+    surface_triangle_candidates=body_vertex_triangle_neighbors,
+    body_kd_trees=body_kd_trees,
 )
 progress_log("身体特徴量PKLの書き込みが完了しました。")
 print("身体特徴量を保存しました: " + output_path)

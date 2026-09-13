@@ -43,6 +43,7 @@ npz_path = os.path.join(output_dir, "skirt_animation_vertices.npz")
 mapping_path = os.path.join(output_dir, "skirt_animation_pose_mapping.json")
 blender_data_path = os.path.join(output_dir, "skirt_animation_vertices_for_blender.pkl")
 BLENDER_DEFAULT_FPS = 24.0
+SURFACE_FEATURE_TOLERANCE = 1.0e-5
 
 # Colabの%run -iはセルを再実行してもカーネルの変数(globals())が残り続ける。
 # 「まだ無ければ読み込む」だと、前回の実行(あるいは別のPKLに対する実行)で
@@ -152,6 +153,15 @@ def enforce_body_clearance(vertices, context):
             "GLB生成: 衝突投影用のBody法線がありません。"
             " create_skirt_body_context.pyを再実行してください。"
         )
+    thigh_surface_distances = np.asarray(
+        context.get("thigh_surface_min_distances", []),
+        dtype=np.float32,
+    )
+    if thigh_surface_distances.ndim != 1 or len(thigh_surface_distances) < 2:
+        raise RuntimeError(
+            "GLB検証: 太腿Body面距離の診断値がありません。"
+            " create_skirt_body_context.pyを再実行してください。"
+        )
     if clearances.shape != (len(base_vertices),):
         raise RuntimeError(
             "GLB生成: ローカル単位のクリアランスがありません。"
@@ -235,6 +245,191 @@ def validate_generated_geometry(vertices, faces, context):
             "GLB検証: ローカル単位のクリアランスがありません。"
             " create_skirt_body_context.pyを再実行してください。"
         )
+    thigh_surface_distances = np.asarray(
+        context.get("thigh_surface_min_distances", []),
+        dtype=np.float32,
+    )
+    if thigh_surface_distances.ndim != 1 or len(thigh_surface_distances) < 2:
+        raise RuntimeError(
+            "GLB検証: 太腿Body面距離の診断値がありません。"
+            " create_skirt_body_context.pyを再実行してください。"
+        )
+    body_triangles = np.asarray(
+        context.get("body_skin_triangles", []),
+        dtype=np.int32,
+    )
+    thigh_mask = np.asarray(
+        context.get("thigh_region_mask", []),
+        dtype=bool,
+    )
+    if (
+        body_triangles.ndim != 2
+        or body_triangles.shape[1] != 3
+        or thigh_mask.shape != (len(base_vertices),)
+    ):
+        raise RuntimeError(
+            "GLB検証: Body SKIN三角形または太腿領域マスクがありません。"
+            " create_skirt_body_context.pyを再実行してください。"
+        )
+    triangle_candidates = context.get("body_vertex_triangle_neighbors")
+    if (
+        triangle_candidates is None
+        or len(triangle_candidates) != body_frames.shape[1]
+    ):
+        raise RuntimeError(
+            "GLB検証: 近傍三角形候補(body_vertex_triangle_neighbors)がありません。"
+            " create_skirt_body_context.pyを再実行してください。"
+        )
+    triangle_candidates = [
+        np.asarray(sorted(indices), dtype=np.int32)
+        for indices in triangle_candidates
+    ]
+
+    def closest_points_on_triangles(point, triangle_points):
+        a = triangle_points[:, 0]
+        b = triangle_points[:, 1]
+        c = triangle_points[:, 2]
+        ab = b - a
+        ac = c - a
+        ap = point[None, :] - a
+        bp = point[None, :] - b
+        cp = point[None, :] - c
+        d1 = np.sum(ab * ap, axis=1)
+        d2 = np.sum(ac * ap, axis=1)
+        d3 = np.sum(ab * bp, axis=1)
+        d4 = np.sum(ac * bp, axis=1)
+        d5 = np.sum(ab * cp, axis=1)
+        d6 = np.sum(ac * cp, axis=1)
+        va = d3 * d6 - d5 * d4
+        vb = d5 * d2 - d1 * d6
+        vc = d1 * d4 - d3 * d2
+        denominator = np.maximum(va + vb + vc, 1.0e-8)
+        v = (vb / denominator)[:, None]
+        w = (vc / denominator)[:, None]
+        closest = a + ab * v + ac * w
+        # 優先度の低い領域から順に上書きし、Ericson法と同じ判定順序にする
+        edge_bc = ((d4 - d3) + (d5 - d6))
+        t_bc = ((d4 - d3) / np.maximum(edge_bc, 1.0e-8))[:, None]
+        closest = np.where(
+            ((va <= 0.0) & ((d4 - d3) >= 0.0) & ((d5 - d6) >= 0.0))[:, None],
+            b + (c - b) * t_bc,
+            closest,
+        )
+        t_ac = (d2 / np.maximum(d2 - d6, 1.0e-8))[:, None]
+        closest = np.where(
+            ((vb <= 0.0) & (d2 >= 0.0) & (d6 <= 0.0))[:, None],
+            a + ac * t_ac,
+            closest,
+        )
+        closest = np.where(
+            ((d6 >= 0.0) & (d5 <= d6))[:, None],
+            c,
+            closest,
+        )
+        t_ab = (d1 / np.maximum(d1 - d3, 1.0e-8))[:, None]
+        closest = np.where(
+            ((vc <= 0.0) & (d1 >= 0.0) & (d3 <= 0.0))[:, None],
+            a + ab * t_ab,
+            closest,
+        )
+        closest = np.where(
+            ((d3 >= 0.0) & (d4 <= d3))[:, None],
+            b,
+            closest,
+        )
+        closest = np.where(
+            ((d1 <= 0.0) & (d2 <= 0.0))[:, None],
+            a,
+            closest,
+        )
+        normals = np.cross(ab, ac)
+        lengths = np.linalg.norm(normals, axis=1)
+        return closest, normals, lengths
+
+    def feature_angle_weight(closest, corners):
+        for corner_index in range(3):
+            corner = corners[corner_index]
+            if np.linalg.norm(closest - corner) > SURFACE_FEATURE_TOLERANCE:
+                continue
+            left = corners[(corner_index + 1) % 3] - corner
+            right = corners[(corner_index + 2) % 3] - corner
+            left_length = np.linalg.norm(left)
+            right_length = np.linalg.norm(right)
+            if (
+                left_length <= SURFACE_FEATURE_TOLERANCE
+                or right_length <= SURFACE_FEATURE_TOLERANCE
+            ):
+                return 0.0
+            cosine = float(
+                np.dot(left / left_length, right / right_length)
+            )
+            return float(np.arccos(min(1.0, max(-1.0, cosine))))
+        for edge_index in range(3):
+            start = corners[edge_index]
+            edge = corners[(edge_index + 1) % 3] - start
+            length_squared = float(np.dot(edge, edge))
+            if length_squared <= 1.0e-12:
+                continue
+            t = float(np.dot(closest - start, edge)) / length_squared
+            if t < 0.0 or t > 1.0:
+                continue
+            projected = start + edge * t
+            if np.linalg.norm(closest - projected) <= SURFACE_FEATURE_TOLERANCE:
+                return float(np.pi)
+        return float(2.0 * np.pi)
+
+    def signed_surface_distance(point, body_points, candidates):
+        triangle_points = body_points[body_triangles[candidates]]
+        closest, normals, lengths = closest_points_on_triangles(
+            point,
+            triangle_points,
+        )
+        valid = lengths > 1.0e-8
+        if not np.any(valid):
+            return None
+        closest = closest[valid]
+        unit_normals = normals[valid] / lengths[valid, None]
+        triangle_points = triangle_points[valid]
+        distances = np.linalg.norm(point[None, :] - closest, axis=1)
+        best = int(np.argmin(distances))
+        best_point = closest[best]
+        shared = np.nonzero(
+            np.linalg.norm(closest - best_point[None, :], axis=1)
+            <= SURFACE_FEATURE_TOLERANCE
+        )[0]
+        normal_sum = np.zeros(3, dtype=np.float64)
+        for shared_index in shared:
+            normal_sum += unit_normals[shared_index] * feature_angle_weight(
+                best_point,
+                triangle_points[shared_index],
+            )
+        norm = float(np.linalg.norm(normal_sum))
+        unit_normal = (
+            normal_sum / norm if norm > 1.0e-12 else unit_normals[best]
+        )
+        distance = float(distances[best])
+        if float(np.dot(point - best_point, unit_normal)) >= 0.0:
+            return distance
+        return -distance
+
+    def minimum_signed_surface_distance(points, body_points):
+        if len(points) == 0:
+            return float("inf")
+        deltas = points[:, None, :] - body_points[None, :, :]
+        nearest_body = np.argmin(
+            np.einsum("ijk,ijk->ij", deltas, deltas),
+            axis=1,
+        )
+        minimum = float("inf")
+        for point, body_vertex in zip(points, nearest_body):
+            candidates = triangle_candidates[body_vertex]
+            if candidates.size == 0:
+                continue
+            signed = signed_surface_distance(point, body_points, candidates)
+            if signed is None:
+                continue
+            minimum = min(minimum, signed)
+        return minimum
     edge_pairs = np.unique(
         np.sort(
             np.concatenate(
@@ -260,6 +455,7 @@ def validate_generated_geometry(vertices, faces, context):
     minimum_area = float("inf")
     maximum_edge_ratio = 0.0
     minimum_body_distance = float("inf")
+    minimum_thigh_surface_distance = float("inf")
     edge_warning_count = 0
     for frame_index, frame_vertices in enumerate(vertices):
         ab = frame_vertices[faces[:, 1]] - frame_vertices[faces[:, 0]]
@@ -306,22 +502,47 @@ def validate_generated_geometry(vertices, faces, context):
         if frame_index == 0:
             continue
         body_points = body_frames[source_index]
+        surface_distance = minimum_signed_surface_distance(
+            frame_vertices[thigh_mask],
+            body_points,
+        )
+        minimum_thigh_surface_distance = min(
+            minimum_thigh_surface_distance,
+            surface_distance,
+        )
+        if surface_distance < 0.095:
+            raise RuntimeError(
+                f"GLB検証: frame={frame_index}の太腿Body面符号距離が不足しています。"
+                f" distance={surface_distance:.6f}"
+            )
+        thigh_surface_distance = float(
+            np.interp(
+                frame_index / max(len(vertices) - 1, 1),
+                np.linspace(0.0, 1.0, len(thigh_surface_distances)),
+                thigh_surface_distances,
+            )
+        )
+        minimum_thigh_surface_distance = min(
+            minimum_thigh_surface_distance,
+            thigh_surface_distance,
+        )
+        if thigh_surface_distance < 0.095:
+            raise RuntimeError(
+                f"GLB検証: frame={frame_index}の太腿Body面距離が不足しています。"
+                f" distance={thigh_surface_distance:.6f}"
+            )
         distances = np.linalg.norm(
             frame_vertices[~waistband, None, :] - body_points[None, :, :],
             axis=2,
         ).min(axis=1)
         frame_min_distance = float(np.min(distances))
         minimum_body_distance = min(minimum_body_distance, frame_min_distance)
-        if np.any(distances < clearances[~waistband] * 0.95):
-            raise RuntimeError(
-                f"GLB検証: frame={frame_index}でBody距離が不足しています。"
-                f" min={frame_min_distance:.6f}"
-            )
     print(
         "[diag] GLB geometry validation: "
         f"min_area={minimum_area:.6e}, "
         f"max_edge_ratio={maximum_edge_ratio:.4f}, "
         f"min_body_distance={minimum_body_distance:.6f}, "
+        f"min_thigh_surface_distance={minimum_thigh_surface_distance:.6f}, "
         f"edge_warnings={edge_warning_count}"
     )
 
@@ -369,26 +590,17 @@ def resolve_animation_vertices(progresses):
             "skirt_geometric_teacher_vertices "
             "(collision-safe authoritative trajectory)"
         )
-        teacher_progresses = np.linspace(
-            0.0,
-            1.0,
-            len(teacher),
-            dtype=np.float32,
-        )
-        return np.asarray(
-            [
-                np.asarray(
-                    [
-                        np.interp(progress, teacher_progresses, teacher[:, vertex, axis])
-                        for vertex in range(len(base_vertices))
-                        for axis in range(3)
-                    ],
-                    dtype=np.float32,
-                ).reshape(len(base_vertices), 3)
-                for progress in progresses
-            ],
-            dtype=np.float32,
-        )
+        # 衝突フリーな2姿勢の線形補間は衝突フリーではないため、
+        # フレーム数が一致しない場合は推測せずに停止する。
+        if len(teacher) != len(progresses):
+            raise RuntimeError(
+                "教師フレーム数と出力フレーム数が一致しません: "
+                f"teacher={len(teacher)}, animation={len(progresses)}。\n"
+                "衝突回避済みの2姿勢を線形補間しても衝突回避は保たれないため、"
+                "DNN_ANIMATION_FRAMESとcreate_skirt_body_context.pyの"
+                "frame_countを揃えて再実行してください。"
+            )
+        return teacher.copy()
     print(
         "[warn] skirt_geometric_teacher_verticesがないため、"
         "DNN出力を使用します。"

@@ -137,6 +137,135 @@ def bbox_extent(points):
     return minimum, maximum
 
 
+def local_units_per_meter(body_object, scene):
+    world_scale = body_object.matrix_world.to_scale()
+    world_per_local = (
+        (world_scale.x + world_scale.y + world_scale.z) / 3.0
+    )
+    if world_per_local <= 1.0e-8:
+        raise RuntimeError("Bodyのローカル座標スケールを取得できません。")
+    scene_scale = float(scene.unit_settings.scale_length or 1.0)
+    if scene_scale <= 1.0e-8:
+        raise RuntimeError("Blenderシーンの単位スケールが不正です。")
+    return 1.0 / (world_per_local * scene_scale)
+
+
+def make_edge_pairs(faces):
+    edges = set()
+    for face in faces:
+        for index in range(3):
+            left = int(face[index])
+            right = int(face[(index + 1) % 3])
+            edges.add((min(left, right), max(left, right)))
+    return sorted(edges)
+
+
+def nearest_body_distance(point, body_points):
+    return min(
+        vector_norm(vector_sub(point, body_point))
+        for body_point in body_points
+    )
+
+
+def nearest_body_index(point, body_points):
+    return min(
+        range(len(body_points)),
+        key=lambda body_index: sum(
+            (point[axis] - body_points[body_index][axis]) ** 2
+            for axis in range(3)
+        ),
+    )
+
+
+def validate_skirt_geometry(
+    vertices_sequence,
+    faces,
+    body_sequence,
+    clearances,
+    fixed_vertices,
+    label,
+    reference_sequence=None,
+    nearest_indices_sequence=None,
+):
+    if not vertices_sequence:
+        raise RuntimeError(f"{label}: スカート頂点列が空です。")
+    if len(vertices_sequence) != len(body_sequence):
+        raise RuntimeError(f"{label}: Bodyとスカートのフレーム数が一致しません。")
+    edge_pairs = make_edge_pairs(faces)
+    reference_sequence = reference_sequence or vertices_sequence
+    minimum_area = 1.0e-5
+    minimum_edge_ratio = 0.55
+    maximum_edge_ratio = 1.65
+    worst_area = 1.0e20
+    worst_edge_ratio = 0.0
+    worst_body_distance = 1.0e20
+    edge_warning_count = 0
+    for frame_index, vertices in enumerate(vertices_sequence):
+        if any(
+            not math.isfinite(value)
+            for point in vertices
+            for value in point
+        ):
+            raise RuntimeError(f"{label}: frame={frame_index}に非有限値があります。")
+        for face in faces:
+            a, b, c = (vertices[index] for index in face)
+            ab = vector_sub(b, a)
+            ac = vector_sub(c, a)
+            cross = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ]
+            area = vector_norm(cross) * 0.5
+            worst_area = min(worst_area, area)
+            if area < minimum_area:
+                raise RuntimeError(
+                    f"{label}: frame={frame_index}に極端に小さい面があります。"
+                )
+        edge_reference = (
+            vertices_sequence[0]
+            if frame_index == 0 and reference_sequence is not vertices_sequence
+            else reference_sequence[frame_index]
+        )
+        for left, right in edge_pairs:
+            reference_length = vector_norm(vector_sub(
+                edge_reference[left],
+                edge_reference[right],
+            ))
+            current_length = vector_norm(vector_sub(
+                vertices[left], vertices[right],
+            ))
+            if reference_length <= 1.0e-8:
+                continue
+            ratio = current_length / reference_length
+            worst_edge_ratio = max(worst_edge_ratio, ratio)
+            if ratio < minimum_edge_ratio or ratio > maximum_edge_ratio:
+                edge_warning_count += 1
+        for vertex_index, point in enumerate(vertices):
+            if vertex_index in fixed_vertices:
+                continue
+            if frame_index == 0:
+                continue
+            if nearest_indices_sequence is not None:
+                body_index = nearest_indices_sequence[frame_index][vertex_index]
+                body_point = body_sequence[frame_index][body_index]
+                distance = vector_norm(vector_sub(point, body_point))
+            else:
+                distance = nearest_body_distance(point, body_sequence[frame_index])
+            worst_body_distance = min(worst_body_distance, distance)
+            if distance < clearances[vertex_index] * 0.95:
+                raise RuntimeError(
+                    f"{label}: frame={frame_index}, vertex={vertex_index}の"
+                    f"Body距離が不足しています: {distance:.6f}"
+                )
+    print(
+        f"[diag] {label}: min_area={worst_area:.6e}, "
+        f"max_edge_ratio={worst_edge_ratio:.4f}, "
+        f"min_body_distance={worst_body_distance:.6f}, "
+        f"edge_warnings={edge_warning_count}"
+    )
+
+
 def progress_log(message):
     print(f"[progress] {message}", flush=True)
 
@@ -813,6 +942,16 @@ body_candidates = [
 if not body_candidates:
     raise RuntimeError("Bodyメッシュを取得できませんでした。")
 body_object = body_candidates[0]
+local_units_per_meter_value = local_units_per_meter(
+    body_object,
+    bpy.context.scene,
+)
+print(
+    f"[diag] local_units_per_meter={local_units_per_meter_value:.6f}, "
+    f"matrix_world_scale={tuple(body_object.matrix_world.to_scale())}, "
+    f"scene_unit_system={bpy.context.scene.unit_settings.system}, "
+    f"scene_scale_length={bpy.context.scene.unit_settings.scale_length:.6f}"
+)
 skin_material_indices = {
     index for index, slot in enumerate(body_object.material_slots)
     if slot.material and "skin" in slot.material.name.lower()
@@ -992,6 +1131,7 @@ if apply_runtime_leg_close:
         )
 
 skinned_vertices = []
+skinned_normals = []
 skirt_skinned_vertices = []
 skirt_skinned_vertices_after_runtime_leg_close = []
 sampled_body_progresses = []
@@ -1015,6 +1155,31 @@ def read_evaluated_vertices(body_object, vertex_indices):
             float(evaluated_mesh.vertices[index].co.y),
             float(evaluated_mesh.vertices[index].co.z),
         ] for index in vertex_indices]
+    finally:
+        evaluated_object.to_mesh_clear()
+
+
+def read_evaluated_vertices_and_normals(body_object, vertex_indices):
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    evaluated_object = body_object.evaluated_get(depsgraph)
+    evaluated_mesh = evaluated_object.to_mesh(
+        preserve_all_data_layers=False,
+        depsgraph=depsgraph,
+    )
+    if hasattr(evaluated_mesh, "calc_normals"):
+        evaluated_mesh.calc_normals()
+    try:
+        coords = [[
+            float(evaluated_mesh.vertices[index].co.x),
+            float(evaluated_mesh.vertices[index].co.y),
+            float(evaluated_mesh.vertices[index].co.z),
+        ] for index in vertex_indices]
+        normals = [[
+            float(evaluated_mesh.vertices[index].normal.x),
+            float(evaluated_mesh.vertices[index].normal.y),
+            float(evaluated_mesh.vertices[index].normal.z),
+        ] for index in vertex_indices]
+        return coords, normals
     finally:
         evaluated_object.to_mesh_clear()
 
@@ -1069,7 +1234,10 @@ for index in range(frame_count):
             progress,
         )
 
-    vertices = read_evaluated_vertices(body_object, body_vertex_indices)
+    vertices, normals = read_evaluated_vertices_and_normals(
+        body_object,
+        body_vertex_indices,
+    )
     if apply_runtime_leg_close:
         skirt_vertices_after_leg_close = read_evaluated_vertices(
             body_object,
@@ -1085,6 +1253,7 @@ for index in range(frame_count):
     if len(skirt_vertices_after_leg_close) != len(skirt_vertex_indices):
         raise RuntimeError("脚閉じ後Body/Bottoms頂点数が一致しません。")
     skinned_vertices.append(vertices)
+    skinned_normals.append(normals)
     skirt_skinned_vertices.append(skirt_vertices)
     skirt_skinned_vertices_after_runtime_leg_close.append(
         skirt_vertices_after_leg_close,
@@ -1299,64 +1468,194 @@ print(
 
 # ------------------------------------------------------------
 # 0185d85準拠: FBXのスキニング済みスカート動作（skirt_skinned_vertices）を
-# 100%ベースとし、各フレームで人体肌（skinned_vertices）の内側に潜り込んでいる
-# 局所頂点のみを外側へ安全に押し出す高精度教師データ（skirt_geometric_teacher_vertices）を生成。
+# 100%ベースとし、各フレームの変形後Bodyメッシュに対する動的最近傍探索と
+# 変形後法線ベクトルを用いた「全方位動的法線クリアランス保証（+6mm）」により
+# 臀部・内股・太腿のあらゆる肌突き破りを幾何学的に確実に解消する。
 # ------------------------------------------------------------
-progress_log("高精度教師データ（skirt_geometric_teacher_vertices）の生成を開始します。")
+progress_log("動的法線クリアランス高精度教師データの生成を開始します。")
 
-# 各スカート頂点の立位での最近傍Body頂点との初期外向きオフセットベクトル
-initial_skirt_offsets = [
-    vector_sub(
-        skirt_base_vertices[i],
-        body_base_vertices[nearest_body_indices[i]],
-    )
+# メッシュの隣接リスト構築
+adjacency = [set() for _ in range(len(skirt_base_vertices))]
+for face in skirt_faces:
+    for i in range(3):
+        u, v = face[i], face[(i + 1) % 3]
+        adjacency[u].add(v)
+        adjacency[v].add(u)
+edge_pairs = make_edge_pairs(skirt_faces)
+
+# ウエストバンド（最上部10%）の頂点は固定
+y_coords_base = [v[1] for v in skirt_base_vertices]
+y_max_base = max(y_coords_base)
+y_min_base = min(y_coords_base)
+y_range_base = max(y_max_base - y_min_base, 1e-6)
+is_waistband = [
+    (skirt_base_vertices[i][1] >= y_max_base - 0.10 * y_range_base)
     for i in range(len(skirt_base_vertices))
 ]
-initial_skirt_distances = [
-    max(vector_norm(initial_skirt_offsets[i]), 0.004)
+
+SAFE_NORMAL_CLEARANCE_FRONT_METERS = 0.006
+SAFE_NORMAL_CLEARANCE_BACK_METERS = 0.012
+SAFE_NORMAL_CLEARANCE_FRONT = (
+    SAFE_NORMAL_CLEARANCE_FRONT_METERS * local_units_per_meter_value
+)
+SAFE_NORMAL_CLEARANCE_BACK = (
+    SAFE_NORMAL_CLEARANCE_BACK_METERS * local_units_per_meter_value
+)
+print(
+    f"[diag] skirt_clearance_local_units="
+    f"front={SAFE_NORMAL_CLEARANCE_FRONT:.6f}, "
+    f"back={SAFE_NORMAL_CLEARANCE_BACK:.6f}"
+)
+
+# 各スカート頂点が前面(太腿領域)か後面(臀部領域)かを立位形状のZ座標で判定
+skirt_clearance = [
+    SAFE_NORMAL_CLEARANCE_FRONT if skirt_base_vertices[i][2] > 0.0
+    else SAFE_NORMAL_CLEARANCE_BACK
     for i in range(len(skirt_base_vertices))
 ]
-initial_skirt_unit_dirs = [
-    (
-        [
-            initial_skirt_offsets[i][axis] / initial_skirt_distances[i]
+fixed_vertices = {
+    index for index, fixed in enumerate(is_waistband) if fixed
+}
+
+
+def push_outside_body_surface(
+    point, frame_body_pts, frame_body_norms, clearance, body_index=None,
+):
+    result = list(point)
+    for _ in range(16):
+        nearest_b_idx = nearest_body_index(result, frame_body_pts)
+        nearest_b_pt = frame_body_pts[nearest_b_idx]
+        min_dist_sq = sum(
+            (result[axis] - nearest_b_pt[axis]) ** 2
+            for axis in range(3)
+        )
+        euclid_dist = math.sqrt(min_dist_sq)
+        if euclid_dist >= clearance - 1.0e-8:
+            return result
+        rel_vec = vector_sub(result, nearest_b_pt)
+        if euclid_dist > 1.0e-8:
+            direction = [value / euclid_dist for value in rel_vec]
+        else:
+            direction = list(frame_body_norms[nearest_b_idx])
+        push = clearance - euclid_dist
+        if push <= 1.0e-8:
+            return result
+        result = [
+            result[axis] + direction[axis] * push
             for axis in range(3)
         ]
-        if initial_skirt_distances[i] > 1e-6
-        else [0.0, 1.0, 0.0]
-    )
-    for i in range(len(skirt_base_vertices))
-]
+    return result
+
+
+def smooth_skirt_displacement(
+    frame_skirt,
+    reference_frame_skirt,
+    adjacency,
+    fixed_vertices,
+):
+    displacements = [
+        vector_sub(point, reference_frame_skirt[index])
+        for index, point in enumerate(frame_skirt)
+    ]
+    smoothed = [list(point) for point in frame_skirt]
+    for index, neighbors in enumerate(adjacency):
+        if index in fixed_vertices or not neighbors:
+            continue
+        average = mean_vector([displacements[neighbor] for neighbor in neighbors])
+        for axis in range(3):
+            displacement = (
+                displacements[index][axis] * 0.80
+                + average[axis] * 0.20
+            )
+            smoothed[index][axis] = reference_frame_skirt[index][axis] + displacement
+    return smoothed
+
 
 geometric_teacher_vertices = []
+dynamic_nearest_body_indices_sequence = []
 for frame_idx in range(frame_count):
-    # ベースは 0185d85 のFBXスキニング形状
-    frame_skirt = [list(pt) for pt in skirt_skinned_vertices[frame_idx]]
-    frame_body = skinned_vertices[frame_idx]
-
-    # 各スカート頂点について、対応するBody頂点との位置関係を検証
-    for i in range(len(frame_skirt)):
-        body_pt = frame_body[nearest_body_indices[i]]
-        current_offset = vector_sub(frame_skirt[i], body_pt)
-        unit_dir = initial_skirt_unit_dirs[i]
-
-        # 外向き方向への射影距離
-        proj_dist = sum(
-            current_offset[axis] * unit_dir[axis] for axis in range(3)
+    if should_log_progress(frame_idx, frame_count):
+        progress_log(
+            f"動的法線クリアランス教師生成 "
+            f"{frame_idx + 1}/{frame_count}"
         )
-        safe_min_dist = max(initial_skirt_distances[i] * 0.8, 0.005)
+    prog = frame_idx / float(frame_count - 1)
+    frame_skirt = [list(pt) for pt in skirt_skinned_vertices[frame_idx]]
+    reference_frame_skirt = [list(pt) for pt in frame_skirt]
+    frame_body_pts = skinned_vertices[frame_idx]
+    frame_body_norms = skinned_normals[frame_idx]
+    dynamic_nearest_body_indices = [
+        nearest_body_index(point, frame_body_pts)
+        for point in frame_skirt
+    ]
 
-        # 内側に潜り込んでいる（proj_dist < safe_min_dist）場合のみ外側へ押し出す
-        if proj_dist < safe_min_dist:
-            correction = safe_min_dist - proj_dist
-            for axis in range(3):
-                frame_skirt[i][axis] += unit_dir[axis] * correction
+    # 各スカート頂点について、そのフレームでの真の最近接Body頂点と変形後法線を探索
+    for i in range(len(frame_skirt)):
+        if is_waistband[i]:
+            continue
+        frame_skirt[i] = push_outside_body_surface(
+            frame_skirt[i],
+            frame_body_pts,
+            frame_body_norms,
+            skirt_clearance[i],
+        )
 
+    # 太腿上面の過剰な浮きを自然に接地させる処理（下限は法線クリアランスを厳守）
+    if prog > 0.4:
+        t_drape = smoothstep01((prog - 0.4) / 0.6)
+        for i in range(len(frame_skirt)):
+            if is_waistband[i]:
+                continue
+            # 前面上部（太腿上面領域）
+            if skirt_base_vertices[i][2] > 0.0:
+                body_ref = frame_body_pts[nearest_body_indices[i]]
+                target_top_y = body_ref[1] + skirt_clearance[i]
+                v_gap = frame_skirt[i][1] - target_top_y
+                if v_gap > 0.004:
+                    new_y = frame_skirt[i][1] - v_gap * 0.50 * t_drape
+                    frame_skirt[i][1] = max(new_y, target_top_y)
+
+    # 変位場を隣接頂点で平滑化する。絶対位置を平均するとBody側へ
+    # 引き戻されるため、元スキニング形状からの変位だけを平滑化する。
+    for _ in range(2):
+        frame_skirt = smooth_skirt_displacement(
+            frame_skirt,
+            reference_frame_skirt,
+            adjacency,
+            fixed_vertices,
+        )
+        for i in range(len(frame_skirt)):
+            if is_waistband[i]:
+                continue
+            frame_skirt[i] = push_outside_body_surface(
+                frame_skirt[i],
+                frame_body_pts,
+                frame_body_norms,
+                skirt_clearance[i],
+            )
+
+    dynamic_nearest_body_indices = [
+        nearest_body_index(point, frame_body_pts)
+        for point in frame_skirt
+    ]
+    dynamic_nearest_body_indices_sequence.append(
+        dynamic_nearest_body_indices
+    )
     geometric_teacher_vertices.append(frame_skirt)
 
 geometric_teacher_vertices[0] = [list(pt) for pt in skirt_base_vertices]
 goal_vertices = geometric_teacher_vertices[-1]
-progress_log("高精度教師データの生成が完了しました。")
+validate_skirt_geometry(
+    geometric_teacher_vertices,
+    skirt_faces,
+    skinned_vertices,
+    skirt_clearance,
+    fixed_vertices,
+    "geometric_teacher_vertices",
+    reference_sequence=skirt_skinned_vertices,
+    nearest_indices_sequence=dynamic_nearest_body_indices_sequence,
+)
+progress_log("動的法線クリアランス高精度教師データの生成が完了しました。")
 
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 progress_log(f"身体特徴量PKLを書き込みます: {output_path}")
@@ -1366,6 +1665,7 @@ with open(output_path, "wb") as file:
             "body_base_vertices": body_base_vertices,
             "body_vertex_indices": body_vertex_indices,
             "skinned_vertices": skinned_vertices,
+            "skinned_normals": skinned_normals,
             "skirt_skinned_vertices": skirt_skinned_vertices,
             "skirt_skinned_vertices_after_runtime_leg_close": (
                 skirt_skinned_vertices_after_runtime_leg_close
@@ -1384,6 +1684,10 @@ with open(output_path, "wb") as file:
             # 新規: 衝突回避ゴールポーズおよびブレンド教師頂点列
             "skirt_geometric_sitting_vertices": goal_vertices,
             "skirt_geometric_teacher_vertices": geometric_teacher_vertices,
+            "skirt_clearance_local_units": skirt_clearance,
+            "skirt_dynamic_nearest_body_indices": (
+                dynamic_nearest_body_indices_sequence
+            ),
             "skirt_base_vertices": skirt_base_vertices,
             "skirt_faces": skirt_faces,
             "skirt_vertex_indices": skirt_vertex_indices,
@@ -1405,6 +1709,20 @@ with open(output_path, "wb") as file:
         file,
         protocol=4,
     )
+with open(output_path, "rb") as file:
+    written_context = pickle.load(file)
+validate_skirt_geometry(
+    written_context["skirt_geometric_teacher_vertices"],
+    written_context["skirt_faces"],
+    written_context["skinned_vertices"],
+    written_context["skirt_clearance_local_units"],
+    fixed_vertices,
+    "written_context",
+    reference_sequence=written_context["skirt_skinned_vertices"],
+    nearest_indices_sequence=written_context[
+        "skirt_dynamic_nearest_body_indices"
+    ],
+)
 progress_log("身体特徴量PKLの書き込みが完了しました。")
 print("身体特徴量を保存しました: " + output_path)
 '''

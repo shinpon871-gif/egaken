@@ -140,6 +140,192 @@ body_motion = np.broadcast_to(
 ).copy()
 
 
+def enforce_body_clearance(vertices, context):
+    body_frames = np.asarray(context.get("skinned_vertices", []), dtype=np.float32)
+    body_normals = np.asarray(context.get("skinned_normals", []), dtype=np.float32)
+    clearances = np.asarray(
+        context.get("skirt_clearance_local_units", []),
+        dtype=np.float32,
+    )
+    if body_frames.ndim != 3 or body_normals.shape != body_frames.shape:
+        raise RuntimeError(
+            "GLB生成: 衝突投影用のBody法線がありません。"
+            " create_skirt_body_context.pyを再実行してください。"
+        )
+    if clearances.shape != (len(base_vertices),):
+        raise RuntimeError(
+            "GLB生成: ローカル単位のクリアランスがありません。"
+        )
+    base_y = base_vertices[:, 1]
+    waistband = base_y >= np.max(base_y) - 0.10 * max(
+        float(np.ptp(base_y)),
+        1.0e-6,
+    )
+    corrected = np.asarray(vertices, dtype=np.float32).copy()
+    correction_count = 0
+    maximum_correction = 0.0
+    unresolved_frames = []
+    for frame_index in range(1, len(corrected)):
+        source_index = min(
+            int(round(
+                frame_index * (len(body_frames) - 1)
+                / max(len(corrected) - 1, 1)
+            )),
+            len(body_frames) - 1,
+        )
+        body_points = body_frames[source_index]
+        normals = body_normals[source_index]
+        converged = False
+        for _ in range(32):
+            offsets = (
+                corrected[frame_index, :, None, :]
+                - body_points[None, :, :]
+            )
+            distances_squared = np.sum(offsets * offsets, axis=2)
+            nearest_indices = np.argmin(distances_squared, axis=1)
+            nearest_points = body_points[nearest_indices]
+            nearest_normals = normals[nearest_indices]
+            offsets = corrected[frame_index] - nearest_points
+            distances = np.linalg.norm(offsets, axis=1)
+            safe_distances = clearances.copy()
+            safe_distances[waistband] = 0.0
+            pushes = safe_distances - distances
+            pushes[waistband] = 0.0
+            active = pushes > 1.0e-6
+            if not np.any(active):
+                converged = True
+                break
+            directions = np.zeros_like(offsets)
+            valid_directions = distances > 1.0e-6
+            directions[valid_directions] = (
+                offsets[valid_directions]
+                / distances[valid_directions, None]
+            )
+            directions[~valid_directions] = nearest_normals[~valid_directions]
+            corrected[frame_index] += directions * pushes[:, None]
+            correction_count += int(np.sum(active))
+            maximum_correction = max(maximum_correction, float(np.max(pushes)))
+        if not converged:
+            unresolved_frames.append(frame_index)
+    if unresolved_frames:
+        raise RuntimeError(
+            "GLB生成: Body距離投影が収束しませんでした。"
+            f" frames={unresolved_frames[:10]}"
+        )
+    print(
+        "[diag] GLB body clearance projection: "
+        f"corrections={correction_count}, "
+        f"max_correction={maximum_correction:.6f}"
+    )
+    return corrected
+
+
+def validate_generated_geometry(vertices, faces, context):
+    if not np.isfinite(vertices).all():
+        raise RuntimeError("GLB検証: 頂点列にNaNまたはInfがあります。")
+    body_frames = np.asarray(context.get("skinned_vertices", []), dtype=np.float32)
+    if body_frames.ndim != 3 or body_frames.shape[2] != 3:
+        raise RuntimeError("GLB検証: Bodyフレーム列がありません。")
+    clearances = np.asarray(
+        context.get("skirt_clearance_local_units", []),
+        dtype=np.float32,
+    )
+    if clearances.shape != (len(base_vertices),):
+        raise RuntimeError(
+            "GLB検証: ローカル単位のクリアランスがありません。"
+            " create_skirt_body_context.pyを再実行してください。"
+        )
+    edge_pairs = np.unique(
+        np.sort(
+            np.concatenate(
+                [faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]],
+                axis=0,
+            ),
+            axis=1,
+        ),
+        axis=0,
+    )
+    base_edges = np.linalg.norm(
+        base_vertices[edge_pairs[:, 0]] - base_vertices[edge_pairs[:, 1]],
+        axis=1,
+    )
+    base_y = base_vertices[:, 1]
+    waistband = base_y >= np.max(base_y) - 0.10 * max(
+        float(np.ptp(base_y)),
+        1.0e-6,
+    )
+    min_area = 1.0e-5
+    min_edge_ratio = 0.55
+    max_edge_ratio = 1.65
+    minimum_area = float("inf")
+    maximum_edge_ratio = 0.0
+    minimum_body_distance = float("inf")
+    edge_warning_count = 0
+    for frame_index, frame_vertices in enumerate(vertices):
+        ab = frame_vertices[faces[:, 1]] - frame_vertices[faces[:, 0]]
+        ac = frame_vertices[faces[:, 2]] - frame_vertices[faces[:, 0]]
+        areas = 0.5 * np.linalg.norm(np.cross(ab, ac), axis=1)
+        frame_min_area = float(np.min(areas))
+        minimum_area = min(minimum_area, frame_min_area)
+        if frame_min_area < min_area:
+            raise RuntimeError(
+                f"GLB検証: frame={frame_index}に極端に小さい面があります。"
+            )
+        source_index = min(
+            int(round(frame_index * (len(body_frames) - 1) / max(len(vertices) - 1, 1))),
+            len(body_frames) - 1,
+        )
+        if frame_index == 0:
+            # vertices[0] is explicitly reset to the exported Basis mesh.
+            # Compare it with the same mesh, not with the FBX-evaluated frame
+            # that may contain an animation-origin offset.
+            reference = base_vertices
+        else:
+            reference = np.asarray(
+                context["skirt_skinned_vertices"][source_index],
+                dtype=np.float32,
+            )
+        reference_edges = np.linalg.norm(
+            reference[edge_pairs[:, 0]] - reference[edge_pairs[:, 1]],
+            axis=1,
+        )
+        edge_ratios = np.divide(
+            np.linalg.norm(
+                frame_vertices[edge_pairs[:, 0]]
+                - frame_vertices[edge_pairs[:, 1]],
+                axis=1,
+            ),
+            np.maximum(reference_edges, 1.0e-8),
+        )
+        frame_max_ratio = float(np.max(edge_ratios))
+        maximum_edge_ratio = max(maximum_edge_ratio, frame_max_ratio)
+        if np.any(edge_ratios < min_edge_ratio) or np.any(edge_ratios > max_edge_ratio):
+            edge_warning_count += int(
+                np.sum((edge_ratios < min_edge_ratio) | (edge_ratios > max_edge_ratio))
+            )
+        if frame_index == 0:
+            continue
+        body_points = body_frames[source_index]
+        distances = np.linalg.norm(
+            frame_vertices[~waistband, None, :] - body_points[None, :, :],
+            axis=2,
+        ).min(axis=1)
+        frame_min_distance = float(np.min(distances))
+        minimum_body_distance = min(minimum_body_distance, frame_min_distance)
+        if np.any(distances < clearances[~waistband] * 0.95):
+            raise RuntimeError(
+                f"GLB検証: frame={frame_index}でBody距離が不足しています。"
+                f" min={frame_min_distance:.6f}"
+            )
+    print(
+        "[diag] GLB geometry validation: "
+        f"min_area={minimum_area:.6e}, "
+        f"max_edge_ratio={maximum_edge_ratio:.4f}, "
+        f"min_body_distance={minimum_body_distance:.6f}, "
+        f"edge_warnings={edge_warning_count}"
+    )
+
+
 def interpolate(values, progress):
     index = np.clip(progress, 0.0, 1.0) * (len(values) - 1)
     lower = int(np.floor(index))
@@ -166,11 +352,59 @@ def predict_vertices(progress):
     return base_vertices + prediction
 
 
+def resolve_animation_vertices(progresses):
+    teacher = context.get("skirt_geometric_teacher_vertices")
+    if teacher is not None:
+        teacher = np.asarray(teacher, dtype=np.float32)
+        expected_shape = (len(body_motion), len(base_vertices), 3)
+        if teacher.shape != expected_shape:
+            raise RuntimeError(
+                "幾何教師の形状がbody_contextと一致しません: "
+                f"{teacher.shape} != {expected_shape}"
+            )
+        if not np.isfinite(teacher).all():
+            raise RuntimeError("幾何教師にNaNまたはInfがあります。")
+        print(
+            "[diag] animation source: "
+            "skirt_geometric_teacher_vertices "
+            "(collision-safe authoritative trajectory)"
+        )
+        teacher_progresses = np.linspace(
+            0.0,
+            1.0,
+            len(teacher),
+            dtype=np.float32,
+        )
+        return np.asarray(
+            [
+                np.asarray(
+                    [
+                        np.interp(progress, teacher_progresses, teacher[:, vertex, axis])
+                        for vertex in range(len(base_vertices))
+                        for axis in range(3)
+                    ],
+                    dtype=np.float32,
+                ).reshape(len(base_vertices), 3)
+                for progress in progresses
+            ],
+            dtype=np.float32,
+        )
+    print(
+        "[warn] skirt_geometric_teacher_verticesがないため、"
+        "DNN出力を使用します。"
+    )
+    return np.asarray(
+        [predict_vertices(float(progress)) for progress in progresses],
+        dtype=np.float32,
+    )
+
+
 progresses = np.linspace(0.0, 1.0, num_animation_frames, dtype=np.float32)
-vertices = np.asarray([predict_vertices(float(progress)) for progress in progresses])
+vertices = resolve_animation_vertices(progresses)
 vertices[0] = base_vertices
 if not np.isfinite(vertices).all():
     raise RuntimeError("DNN出力にNaNまたはInfがあります。")
+validate_generated_geometry(vertices, faces, context)
 
 source_body_progresses = np.asarray(
     context.get("source_body_progresses", []),

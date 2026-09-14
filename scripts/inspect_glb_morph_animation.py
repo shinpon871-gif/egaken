@@ -1,3 +1,24 @@
+"""GLB のモーフターゲットアニメーション構造および形状変化診断スクリプト
+
+概要
+- glTF 2.0 形式の GLB ファイルを直接解析してモーフターゲットアニメーションの健全性を検証する
+
+役割
+- GLB ファイルのバイナリヘッダおよびチャンク構造を解析
+- メッシュ情報 アクセサ アニメーションチャネルの構成を取得
+- モーフアニメーション再生時におけるメッシュバウンディングボックスの対角比および軸比を計算
+- モーフターゲットの重み合成による異常膨張や形状破綻を早期検出
+
+必須データ
+- skirt_mesh_sitting_animation.glb などの検証対象 GLB ファイル
+
+使い方
+- 既定パスのファイルを検証
+    python scripts/inspect_glb_morph_animation.py
+- パスや許容比率を指定して検証
+    python scripts/inspect_glb_morph_animation.py [GLBファイルパス] --max-diagonal-ratio 2.0 --max-axis-ratio 2.5
+"""
+
 import argparse
 import json
 import math
@@ -7,9 +28,31 @@ import sys
 from typing import Any
 
 
+# GLBファイルヘッダの固定長バイト数
+GLB_HEADER_SIZE_BYTES = 12
+
+# GLBチャンクヘッダの固定長バイト数
+GLB_CHUNK_HEADER_SIZE_BYTES = 8
+
+# モーフターゲット重みの非ゼロ判定用イプシロン
+MORPH_WEIGHT_EPSILON = 1.0e-8
+
+# 軸比率計算における基準対角長に対する下限床比率
+MORPH_AXIS_FLOOR_RATIO = 0.05
+
+# 基準形状対角長に対する最大許容対角比率
+DEFAULT_MAX_DIAGONAL_RATIO = 2.0
+
+# 基準形状各軸サイズに対する最大許容軸比率
+DEFAULT_MAX_AXIS_RATIO = 2.5
+
+# 形状変化評価を行うサンプリング進捗値リスト
+DEFAULT_SAMPLE_PROGRESS_VALUES = (0.0, 0.25, 0.5, 0.75, 1.0)
+
+# 診断対象 GLB ファイルの既定パス
 DEFAULT_GLB_PATH = "/content/public/models/skirt_mesh_sitting_animation.glb"
 
-
+# glTFコンポーネントタイプIDとstructフォーマットおよびバイトサイズの対応辞書
 COMPONENT_TYPE_FORMATS = {
     5120: ("b", 1),
     5121: ("B", 1),
@@ -19,6 +62,7 @@ COMPONENT_TYPE_FORMATS = {
     5126: ("f", 4),
 }
 
+# glTFアクセサタイプと要素数の対応辞書
 ACCESSOR_TYPE_SIZES = {
     "SCALAR": 1,
     "VEC2": 2,
@@ -31,10 +75,12 @@ ACCESSOR_TYPE_SIZES = {
 
 
 def read_glb(path: str) -> tuple[dict[str, Any], bytes]:
+    # GLBはヘッダとチャンクで構成されるので、サイズと種類を先に確認して
+    # 以後の解析が実際に有効なglTFデータかどうかを判定する
     with open(path, "rb") as file:
         data = file.read()
 
-    if len(data) < 12:
+    if len(data) < GLB_HEADER_SIZE_BYTES:
         raise ValueError("GLBヘッダーが短すぎます。")
 
     magic, version, length = struct.unpack_from("<4sII", data, 0)
@@ -50,11 +96,11 @@ def read_glb(path: str) -> tuple[dict[str, Any], bytes]:
     offset = 12
 
     while offset < length:
-        if offset + 8 > length:
+        if offset + GLB_CHUNK_HEADER_SIZE_BYTES > length:
             raise ValueError("チャンクヘッダーが途中で終わっています。")
 
         chunk_length, chunk_type = struct.unpack_from("<I4s", data, offset)
-        chunk_start = offset + 8
+        chunk_start = offset + GLB_CHUNK_HEADER_SIZE_BYTES
         chunk_end = chunk_start + chunk_length
         if chunk_end > length:
             raise ValueError("チャンク長がGLB全体長を超えています。")
@@ -140,6 +186,7 @@ def read_vec3_accessor(
 
 
 def compute_bounds(vertices: list[list[float]]) -> dict[str, Any]:
+    # 頂点列の外枠を計算して、モーフ後に形状が異常拡大していないかを見やすくする
     minimum = [math.inf, math.inf, math.inf]
     maximum = [-math.inf, -math.inf, -math.inf]
     for vertex in vertices:
@@ -391,7 +438,7 @@ def describe_morph_bounds(
     print(f"Basis対角長       : {basis_diagonal:.6f}")
 
     ok = True
-    sample_progresses = [0.0, 0.25, 0.5, 0.75, 1.0]
+    sample_progresses = DEFAULT_SAMPLE_PROGRESS_VALUES
     for progress in sample_progresses:
         weights = interpolate_weights(times, values, item_size, progress)
         morphed = apply_morph_targets(base_vertices, target_deltas, weights)
@@ -399,10 +446,10 @@ def describe_morph_bounds(
         size = bounds["size"]
         diagonal_ratio = float(bounds["diagonal"]) / basis_diagonal
         axis_ratio = max(
-            size[axis] / max(basis_size[axis], axis_floor)
+            size[axis] / max(basis_size[axis], basis_diagonal * MORPH_AXIS_FLOOR_RATIO)
             for axis in range(3)
         )
-        nonzero_weights = sum(1 for value in weights if abs(value) > 1.0e-6)
+        nonzero_weights = sum(1 for value in weights if abs(value) > MORPH_WEIGHT_EPSILON)
         print(
             f"進捗 {progress * 100:5.1f}%: "
             f"size={format_vector(size)}, "

@@ -1,6 +1,37 @@
 # scripts\train_skirt_sitting_dnn.py
-# スカートアニメーション用のDNN学習スクリプト
-# Colab環境でBlender付属Pythonから実行することを想定している
+"""スカートの座位遷移学習を行う DNN トレーニングスクリプト
+Colab環境でBlender付属Pythonから実行することを想定している
+
+概要
+- 立位スカート形状と身体特徴量から座位への変形残差を予測する DNN を学習する
+
+役割
+- base_skirt_pc と base_skirt_faces を使って幾何入力を構築
+- DNN_BODY_CONTEXT から身体特徴量を取得して入力へ結合
+- 姿勢ごとの教師頂点を生成して身体追従ベースラインからの残差学習を実行
+- メッシュ形状崩れを抑える幾何拘束損失を加えてモデルを最適化
+- 学習済みモデルチェックポイント TorchScript およびメタデータを保存
+
+必須データ
+- base_skirt_pc 立位スカートの頂点座標配列
+- base_skirt_faces 立位スカートの面インデックス配列
+- skirt_body_context_for_dnn.pkl 身体特徴量PKLファイル
+
+使い方
+- 実行手順
+    1 base_skirt_pc と base_skirt_faces をColabカーネル上で用意
+    2 必要に応じて DNN_INPUT_FEATURES に 9 または 12 を設定
+    3 %run -i /content/train_skirt_sitting_dnn.py を実行
+    4 完了後 model 変数に学習済みモデルが格納され skirt_animation_dnn_morph_fixed.py で利用可能となる
+
+入力次元の構成
+- 9次元  [pose(3), point(3), body_motion(3)]
+- 12次元 [pose(3), point(3), body_position(3), body_motion(3)]
+
+モデル構造の特徴
+- 入力末尾3列の body_motion にそのまま追従し DNN が学習した残差を加えるスキップ接続構造
+"""
+
 import json
 import os
 import random
@@ -10,51 +41,111 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# ============================================================
-# 使い方
-# ============================================================
-# 1. base_skirt_pc と base_skirt_faces を同じColabカーネルで作成する。
-# 2. 身体特徴量を DNN_BODY_MOTION または DNN_BODY_CONTEXT に用意する。
-#    DNN_BODY_MOTION: (フレーム数, 頂点数, 3)
-#      base_skirt_pc と同じ座標系での、立位Body/SKINからの身体頂点差分。
-#    DNN_BODY_CONTEXT: dict形式の場合は次のどちらか。
-#      {"body_motion": ndarray[F, N, 3]}
-#      {"body_position": ndarray[F, N, 3],
-#       "body_motion": ndarray[F, N, 3]}
-#    DNN_BODY_CONTEXT_FEATURES を直接渡す場合は
-#      (フレーム数, 頂点数, 3 または 6) を使用できる。
-#    変数を用意しない場合は、DNN_BODY_CONTEXT_PATHのPKLを読み込む。
-# 3. 必要なら DNN_INPUT_FEATURES を 9 または 12 に設定する。
-# 4. 次を実行する。
-#      %run -i /content/train_skirt_sitting_dnn.py
-# 5. 実行後、学習済みモデルが model に入り、
-#    skirt_animation_dnn_morph_fixed.py から利用できる。
-#
-# 9次元:  [pose(3), point(3), body_motion(3)]
-# 12次元: [pose(3), point(3), body_position(3), body_motion(3)]
-#
-# モデルは「まず入力末尾3列のbody_motion(身体側の実変位)にそのまま追従し、
-# その上でDNNが学習した残差(布のたわみ等)を加える」skip接続構造。
-# body_motionと無関係な絶対変位を直接学習させると、身体側の変位が
-# スカート各頂点で大きく異なる場合に学習が不安定になり、過剰な変形や
-# 崩れた形状を出力しやすくなるため、この構造で安定させている。
-# ============================================================
 
+# 再現性を確保するための乱数シード値
 RANDOM_SEED = int(globals().get("DNN_RANDOM_SEED", 20260903))
+
+# DNNの入力特徴量次元数 9 または 12
 INPUT_FEATURES = int(globals().get("DNN_INPUT_FEATURES", 9))
+
+# 座位動作時の最大着席角度度数法
 MAX_SIT_ANGLE_DEGREES = float(
     globals().get("DNN_MAX_SIT_ANGLE_DEGREES", 75.0)
 )
+
+# 教師データ生成時の姿勢サンプリング分割数
 NUM_POSE_SAMPLES = int(globals().get("DNN_NUM_POSE_SAMPLES", 61))
+
+# DNNネットワークの中間層隠れ層ユニット数
 HIDDEN_SIZE = int(globals().get("DNN_HIDDEN_SIZE", 192))
+
+# 最適化アルゴリズムの学習率
 LEARNING_RATE = float(globals().get("DNN_LEARNING_RATE", 1.0e-3))
+
+# 最適化時の重み減衰係数
 WEIGHT_DECAY = float(globals().get("DNN_WEIGHT_DECAY", 1.0e-6))
+
+# 学習進捗ログを出力するステップ間隔
 PRINT_INTERVAL = int(globals().get("DNN_PRINT_INTERVAL", 100))
+
+# 学習ステップ数の外部上書き値
 TRAIN_STEPS_OVERRIDE = globals().get("DNN_TRAIN_STEPS", None)
+
+# バッチサイズの外部上書き値
 BATCH_SIZE_OVERRIDE = globals().get("DNN_BATCH_SIZE", None)
+
+# 出力成果物の保存先ディレクトリ
 OUTPUT_DIR = str(
     globals().get("DNN_OUTPUT_DIR", "/content/public/models")
 )
+
+# メッシュ対角長比較におけるスケール不一致許容比率
+SCALE_TOLERANCE_RATIO = 0.2
+
+# ゼロ除算や微小値比較に使用するイプシロン
+FLOAT_EPSILON = 1.0e-8
+
+# 検証用フレームをサンプリングするステップ間隔
+VALIDATION_SAMPLE_INTERVAL = 5
+
+# スカートメッシュとして最低限必要な頂点数
+MINIMUM_VERTEX_COUNT = 4
+
+# スカートメッシュとして最低限必要な面数
+MINIMUM_FACE_COUNT = 1
+
+# 残差スケーリング係数の安全下限値
+MINIMUM_RESIDUAL_SCALE = 1.0e-6
+
+# GPU環境における既定の学習ステップ数
+DEFAULT_TRAIN_STEPS_CUDA = 3000
+
+# CPU環境における既定の学習ステップ数
+DEFAULT_TRAIN_STEPS_CPU = 1800
+
+# GPU環境における既定のバッチサイズ
+DEFAULT_BATCH_SIZE_CUDA = 8192
+
+# CPU環境における既定のバッチサイズ
+DEFAULT_BATCH_SIZE_CPU = 4096
+
+# バッチサイズの許容下限値
+MIN_BATCH_SIZE = 32
+
+# 合成教師データ生成における着席時沈み込み比率
+TEACHER_SIT_DROP_RATIO = 0.16
+
+# 合成教師データ生成における側面膨らみ比率
+TEACHER_SIDE_SWELL_RATIO = 0.08
+
+# 合成教師データ生成における前面深さ変形比率
+TEACHER_FRONT_DEPTH_RATIO = 0.12
+
+# 合成教師データ生成における前面バイアス変形比率
+TEACHER_FRONT_DEPTH_BIAS_RATIO = 0.06
+
+# 合成教師データ生成における側面拡大幅比率
+TEACHER_SIDE_SCALE_RATIO = 0.05
+
+# 合成教師データ生成における変形開始高さ比率
+TEACHER_HEIGHT_START_RATIO = 0.05
+
+# 合成教師データ生成における変形高さ範囲比率
+TEACHER_HEIGHT_RANGE_RATIO = 0.95
+
+# 主損失関数における Smooth L1 損失の重み
+TRAINING_LOSS_WEIGHT_DATA = 0.8
+
+# 主損失関数における MSE 損失の重み
+TRAINING_LOSS_WEIGHT_MSE = 0.2
+
+# 幾何エッジ拘束損失の合成重み
+EDGE_CONSTRAINT_WEIGHT = 0.05
+
+# 勾配クリッピングの最大ノルム閾値
+GRADIENT_CLIP_NORM = 5.0
+
+# 身体特徴量PKLファイルの読み込み先パス
 BODY_CONTEXT_PATH = str(
     globals().get(
         "DNN_BODY_CONTEXT_PATH",
@@ -68,10 +159,8 @@ if INPUT_FEATURES not in (9, 12):
         "DNN_INPUT_FEATURES は9または12にしてください。"
     )
 
-# Colabの%run -iはセルを再実行してもカーネルの変数(globals())が残り続ける。
-# 「まだ無ければ読み込む」だと、前回の実行(あるいは別のPKLに対する実行)で
-# 残った古いbase_skirt_pcを誤って使い回してしまうため、PKLが存在する限り
-# 常にそちらを正として読み直す。
+# この処理はColabの再実行で残った古い変数を拾わないようにして
+# PKLの内容を学習データの正として扱う
 if os.path.isfile(BODY_CONTEXT_PATH):
     import pickle
 
@@ -119,15 +208,13 @@ if not np.isfinite(base_skirt_pc).all():
 
 num_points = int(base_skirt_pc.shape[0])
 num_faces = int(base_skirt_faces.shape[0])
-if num_points < 4 or num_faces < 1:
+if num_points < MINIMUM_VERTEX_COUNT or num_faces < MINIMUM_FACE_COUNT:
     raise ValueError("スカートの頂点数または面数が不足しています。")
 if np.min(base_skirt_faces) < 0 or np.max(base_skirt_faces) >= num_points:
     raise ValueError("base_skirt_facesに範囲外の頂点インデックスがあります。")
 
-# base_skirt_pcがColabカーネルに残っている別スケール・別ソースのメッシュだと、
-# 同じPKLのbody_motion(実測cm単位)と縮尺が食い違ったまま学習が進み、
-# 学習済みモデルの出力スケールごと破綻する。ここで両者の対角長を比較し、
-# 縮尺が一致しない場合はスケールを推測して補正せず、明確なエラーで停止する。
+# この処理はメッシュのサイズ差を検出して
+# 学習時に別スケールのデータを混ぜてしまう事故を素早く止める
 if os.path.isfile(BODY_CONTEXT_PATH):
     import pickle
 
@@ -144,7 +231,7 @@ if os.path.isfile(BODY_CONTEXT_PATH):
             base_skirt_pc.max(axis=0).astype(np.float64)
             - base_skirt_pc.min(axis=0).astype(np.float64)
         ))
-        if abs(base_skirt_extent - pkl_skirt_extent) > 0.2 * max(pkl_skirt_extent, 1.0e-8):
+        if abs(base_skirt_extent - pkl_skirt_extent) > SCALE_TOLERANCE_RATIO * max(pkl_skirt_extent, FLOAT_EPSILON):
             raise RuntimeError(
                 "base_skirt_pcの縮尺がbody_context PKLのskirt_base_verticesと"
                 "一致しません。\n"
@@ -155,6 +242,16 @@ if os.path.isfile(BODY_CONTEXT_PATH):
                 f"変数を削除してから、{BODY_CONTEXT_PATH} の"
                 "skirt_base_vertices/skirt_facesを使い直してください。"
             )
+
+
+# 特徴量正規化スケール計算時のゼロ除算防止用イプシロン
+INPUT_SCALE_MIN_EPSILON = 1.0e-6
+
+# 身体座標のSimilarity Transform計算における特異判定イプシロン
+SIMILARITY_TRANSFORM_EPSILON = 1.0e-20
+
+# 幾何形状バウンディングボックスの高さおよび奥行きの最小安全値
+GEOMETRY_SPAN_MIN_EPSILON = 1.0e-6
 
 
 def fit_similarity(source: np.ndarray, target: np.ndarray):
@@ -170,7 +267,7 @@ def fit_similarity(source: np.ndarray, target: np.ndarray):
         rotation = u @ vt
     rotated = source_centered @ rotation
     denominator = float(np.sum(source_centered * source_centered))
-    if denominator <= 1.0e-20:
+    if denominator <= SIMILARITY_TRANSFORM_EPSILON:
         raise ValueError("身体座標のSimilarity Transformを計算できません。")
     scale = float(np.sum(rotated * target_centered) / denominator)
     if not np.isfinite(scale) or scale <= 0.0:
@@ -396,18 +493,26 @@ def make_teacher(vertices: np.ndarray, progress: float) -> np.ndarray:
     center = np.mean(vertices, axis=0)
     centered = vertices - center
     vertical = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-    height = max(float(np.ptp(centered @ vertical)), 1.0e-6)
+    height = max(float(np.ptp(centered @ vertical)), GEOMETRY_SPAN_MIN_EPSILON)
     normalized_height = np.clip((centered @ vertical) / height + 0.5, 0.0, 1.0)
     sit = float(smoothstep(np.asarray(progress)))
-    front_extent = max(float(np.ptp(centered[:, 2])), 1.0e-6)
+    front_extent = max(float(np.ptp(centered[:, 2])), GEOMETRY_SPAN_MIN_EPSILON)
     front = np.clip(centered[:, 2] / front_extent, -1.0, 1.0)
-    lower = smoothstep((normalized_height - 0.05) / 0.95)
-    result = centered.copy()
-    result[:, 1] -= sit * height * lower * (0.16 + 0.08 * front)
-    result[:, 2] += (
-        sit * height * lower * (0.12 + 0.06 * np.maximum(front, 0.0))
+    lower = smoothstep(
+        (normalized_height - TEACHER_HEIGHT_START_RATIO)
+        / TEACHER_HEIGHT_RANGE_RATIO
     )
-    result[:, 0] *= 1.0 + sit * 0.05 * lower
+    result = centered.copy()
+    result[:, 1] -= sit * height * lower * (
+        TEACHER_SIT_DROP_RATIO + TEACHER_SIDE_SWELL_RATIO * front
+    )
+    result[:, 2] += (
+        sit * height * lower * (
+            TEACHER_FRONT_DEPTH_RATIO
+            + TEACHER_FRONT_DEPTH_BIAS_RATIO * np.maximum(front, 0.0)
+        )
+    )
+    result[:, 0] *= 1.0 + sit * TEACHER_SIDE_SCALE_RATIO * lower
     return (center + result).astype(np.float32)
 
 
@@ -557,7 +662,7 @@ if all_inputs.shape[1] != INPUT_FEATURES:
     raise RuntimeError(f"構成された入力次元が不正です: {all_inputs.shape}")
 
 validation_frame_mask = np.zeros(frame_count, dtype=bool)
-validation_frame_mask[1:-1:5] = True
+validation_frame_mask[1:-1:VALIDATION_SAMPLE_INTERVAL] = True
 sample_validation_mask = validation_frame_mask[all_frame_indices]
 if not sample_validation_mask.any():
     sample_validation_mask[:num_points] = True
@@ -569,7 +674,7 @@ validation_targets_np = all_targets[sample_validation_mask]
 
 input_center = np.mean(train_inputs_np, axis=0).astype(np.float32)
 input_scale = np.std(train_inputs_np, axis=0).astype(np.float32)
-input_scale = np.maximum(input_scale, np.float32(1.0e-6))
+input_scale = np.maximum(input_scale, np.float32(INPUT_SCALE_MIN_EPSILON))
 # output_scaleは「DNNが学習すべき残差(襞の変形)」の大きさに合わせる。
 # body_motionという絶対変位そのままの大きさで正規化すると、残差(通常は
 # body_motionより小さい)に対してeased*output_scaleが過大な自由度を持ち、
@@ -577,7 +682,7 @@ input_scale = np.maximum(input_scale, np.float32(1.0e-6))
 output_scale = float(
     max(
         np.max(np.linalg.norm(residual_displacements, axis=2)),
-        1.0e-6,
+        MINIMUM_RESIDUAL_SCALE,
     )
 )
 
@@ -631,13 +736,13 @@ class SkirtDeformationDNN(nn.Module):
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 train_steps = int(
     TRAIN_STEPS_OVERRIDE
-    or (3000 if device.type == "cuda" else 1800)
+    or (DEFAULT_TRAIN_STEPS_CUDA if device.type == "cuda" else DEFAULT_TRAIN_STEPS_CPU)
 )
 batch_size = int(
     BATCH_SIZE_OVERRIDE
-    or (8192 if device.type == "cuda" else 4096)
+    or (DEFAULT_BATCH_SIZE_CUDA if device.type == "cuda" else DEFAULT_BATCH_SIZE_CPU)
 )
-batch_size = max(32, min(batch_size, len(train_inputs_np)))
+batch_size = max(MIN_BATCH_SIZE, min(batch_size, len(train_inputs_np)))
 model = SkirtDeformationDNN(input_center, input_scale, output_scale).to(device)
 train_inputs = torch.from_numpy(train_inputs_np)
 train_targets = torch.from_numpy(train_targets_np)
@@ -683,8 +788,8 @@ for step in range(1, train_steps + 1):
     optimizer.zero_grad(set_to_none=True)
     prediction = model(batch_inputs)
     loss_data = (
-        0.8 * F.smooth_l1_loss(prediction, batch_targets)
-        + 0.2 * F.mse_loss(prediction, batch_targets)
+        TRAINING_LOSS_WEIGHT_DATA * F.smooth_l1_loss(prediction, batch_targets)
+        + TRAINING_LOSS_WEIGHT_MSE * F.mse_loss(prediction, batch_targets)
     )
 
     # 幾何拘束損失 (ランダムなフレームを1つ選んでエッジ長を拘束)
@@ -696,10 +801,10 @@ for step in range(1, train_steps + 1):
     loss_edge = F.mse_loss(pred_edge_lengths, initial_edge_lengths)
 
     # トータル損失
-    loss = loss_data + 0.05 * loss_edge
+    loss = loss_data + EDGE_CONSTRAINT_WEIGHT * loss_edge
 
     loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), GRADIENT_CLIP_NORM)
     optimizer.step()
 
     if step == 1 or step == train_steps or step % PRINT_INTERVAL == 0:

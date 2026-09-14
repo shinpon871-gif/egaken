@@ -1,6 +1,27 @@
 # scripts\create_skirt_body_context.py
-# スカートアニメーション用のBodyコンテキスト作成スクリプト
-# Colab環境でBlender付属Pythonから実行することを想定している
+"""スカートアニメーション用の身体コンテキスト作成スクリプト
+Colab環境でBlender付属Pythonから実行することを想定している
+
+概要
+- Body と Bottoms の幾何関係を解析して DNN 学習用コンテキスト PKL を生成する
+
+役割
+- FBX から Body メッシュと Bottoms メッシュを抽出
+- 体幹とスカートの接触判定および脚閉じ補正 (runtime leg close) を実行
+- 身体頂点の変形変位とスカート頂点の幾何関係を対応付けた特徴量を生成
+- body_normals による動的クリアランス補正を適用した幾何教師データを算出
+- DNN 学習スクリプト用の PKL ファイルを出力
+
+必須データ
+- StandToSit_model.fbx などの人体アニメーション付き FBX モデル
+
+使い方
+- 基本実行方法
+    python scripts/create_skirt_body_context.py
+- コマンドライン引数指定時
+    python scripts/create_skirt_body_context.py [FBXパス] [出力PKLパス] [頂点数] [フレーム数] [進捗上限] [ピーク後切捨フラグ] [脚閉じ適用フラグ]
+"""
+
 import importlib
 import os
 import shutil
@@ -9,24 +30,69 @@ import sys
 import tempfile
 
 
+# 既定の入力 FBX ファイルパス
+DEFAULT_FBX_PATH = "/content/public/models/StandToSit_model.fbx"
+
+# 既定の出力 PKL ファイル保存先パス
+DEFAULT_CONTEXT_PATH = "/content/public/models/skirt_body_context_for_dnn.pkl"
+
+# 頂点数チェック用初期値 0 は無制限
+DEFAULT_VERTEX_COUNT = "0"
+
+# サンプリングする既定フレーム数
+DEFAULT_FRAME_COUNT = "120"
+
+# 座位動作サンプリング時の進捗上限比率
+DEFAULT_PROGRESS_LIMIT = "0.85"
+
+# 身体変位ピーク到達後のフレーム切り捨てフラグ初期値 0 は切り捨て無効
+DEFAULT_TRUNCATE_AFTER_MOTION_PEAK = "0"
+
+# ランタイム脚閉じ補正の適用フラグ初期値 1 は適用有効
+DEFAULT_APPLY_RUNTIME_LEG_CLOSE = "1"
+
+# 環境変数または既定値から構成する引数リスト
 DEFAULT_ARGUMENTS = [
     os.environ.get(
         "DNN_BODY_FBX_PATH",
-        "/content/public/models/StandToSit_model.fbx",
+        DEFAULT_FBX_PATH,
     ),
     os.environ.get(
         "DNN_BODY_CONTEXT_PATH",
-        "/content/public/models/skirt_body_context_for_dnn.pkl",
+        DEFAULT_CONTEXT_PATH,
     ),
-    os.environ.get("DNN_BODY_VERTEX_COUNT", "0"),
-    os.environ.get("DNN_BODY_FRAME_COUNT", "120"),
-    os.environ.get("DNN_BODY_PROGRESS_LIMIT", "0.85"),
-    os.environ.get("DNN_TRUNCATE_AFTER_MOTION_PEAK", "0"),
-    os.environ.get("DNN_APPLY_RUNTIME_LEG_CLOSE", "1"),
+    os.environ.get("DNN_BODY_VERTEX_COUNT", DEFAULT_VERTEX_COUNT),
+    os.environ.get("DNN_BODY_FRAME_COUNT", DEFAULT_FRAME_COUNT),
+    os.environ.get("DNN_BODY_PROGRESS_LIMIT", DEFAULT_PROGRESS_LIMIT),
+    os.environ.get("DNN_TRUNCATE_AFTER_MOTION_PEAK", DEFAULT_TRUNCATE_AFTER_MOTION_PEAK),
+    os.environ.get("DNN_APPLY_RUNTIME_LEG_CLOSE", DEFAULT_APPLY_RUNTIME_LEG_CLOSE),
 ]
+
+# ローカル座標系の微小スケール比較用イプシロン
+LOCAL_SCALE_EPSILON = 1.0e-8
+
+# スカート上端の腰帯領域と判定する高さ比率マージン
+WAISTBAND_MARGIN_RATIO = 0.10
+
+# 表面クリアランス計算時の許容下限比率
+SURFACE_CLEARANCE_MARGIN_RATIO = 0.95
+
+# 幾何検証における三角形面の最小面積閾値
+MINIMUM_SURFACE_AREA = 1.0e-5
+
+# 幾何検証におけるエッジ伸縮比率の許容下限値
+MINIMUM_EDGE_RATIO = 0.55
+
+# 幾何検証におけるエッジ伸縮比率の許容上限値
+MAXIMUM_EDGE_RATIO = 1.65
+
+# 特徴量投影計算におけるゼロ除算防止用イプシロン
+FEATURE_PROJECTION_EPSILON = 1.0e-12
 
 
 def get_arguments():
+    # この処理は引数の順番や省略値を揃えて
+    # Blender側のワーカーに同じ形式を渡し続ける
     if "--" in sys.argv:
         arguments = sys.argv[sys.argv.index("--") + 1:]
     elif len(sys.argv[1:]) >= 5:
@@ -45,6 +111,8 @@ def get_arguments():
 
 
 def blender_source():
+    # この処理はBlenderで実際にBodyとSkirtの位相を調整して
+    # 学習用の特徴量と座標を吐き出す本体部分
     return r'''import bpy
 import math
 import os
@@ -56,41 +124,106 @@ from mathutils import Quaternion, Vector
 from mathutils.kdtree import KDTree
 
 
+# 脚閉じ補正の開始アニメーション進捗比率
 THIGH_CLOSE_START_PROGRESS = 0.12
+
+# 脚閉じ補正が完全適用となるアニメーション進捗比率
 THIGH_CLOSE_FULL_PROGRESS = 0.58
+
+# 大腿骨から膝の間で内股間隙を評価する補間パラメータ
 INNER_THIGH_SAMPLE_T = 0.34
+
+# 脚閉じ完了時の目標内股間隙比率
 TARGET_INNER_THIGH_GAP_RATIO_AT_FULL_CLOSE = 0.010
+
+# 脚閉じ完了時の目標膝間隙比率
 TARGET_KNEE_GAP_RATIO_AT_FULL_CLOSE = 0.07
+
+# 脚閉じ完了時の目標足首間隙比率
 TARGET_ANKLE_GAP_RATIO_AT_FULL_CLOSE = 0.42
+
+# 着席姿勢基準の内股間隙ハード下限比率
 HARD_MIN_INNER_THIGH_GAP_RATIO_FROM_SIT_POSE = 0.010
+
+# 着席姿勢基準の膝間隙ハード下限比率
 HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE = 0.05
+
+# 着席姿勢基準の足首間隙ハード下限比率
 HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE = 0.22
+
+# 太腿内転のローカル最大回転角度
 MAX_THIGH_ADDUCTION_LOCAL_ANGLE = math.radians(17.5)
+
+# ワールド座標系での膝方向補正最大角度
 MAX_WORLD_KNEE_ALIGN_ANGLE = math.radians(4.0)
+
+# 内転軸キャリブレーション時のテスト回転角度
 CALIBRATION_TEST_ANGLE = math.radians(2.5)
+
+# 間隙計算におけるゼロ割防止最小値
 GAP_EPSILON_MIN = 0.001
+
+# 左右交差防止のための左右判定イプシロン
 LEG_SIDE_KEEP_EPSILON = 0.001
+
+# 脚閉じ補正をアクティブ判定する最小進行度
 LEG_CLOSE_PROGRESS_ACTIVE_EPSILON = 0.0001
+
+# 外積軸の長さ二乗の最小閾値
 CROSS_AXIS_MIN_LENGTH_SQ = 1.0e-8
+
+# 方向整列計算を行う最小角度差閾値
 DIRECTION_ALIGNMENT_MIN_ANGLE = 1.0e-5
+
+# 軸評価におけるY軸方向変位のペナルティ重み
 AXIS_CALIBRATION_Y_PENALTY_WEIGHT = 0.25
+
+# 軸評価におけるZ軸方向変位のペナルティ重み
 AXIS_CALIBRATION_Z_PENALTY_WEIGHT = 0.25
+
+# 軸評価における足首横変位のペナルティ重み
 AXIS_CALIBRATION_FOOT_LATERAL_PENALTY_WEIGHT = 0.12
+
+# 軸評価における左右境界越えのペナルティ値
 AXIS_CALIBRATION_SIDE_BREAK_PENALTY = 0.4
+
+# 軸評価における採用最低スコア閾値
 AXIS_CALIBRATION_MIN_ACCEPTABLE_SCORE = -0.05
+
+# 目標間隙調整をトリガーする内股間隙マージン
 REFINE_TRIGGER_INNER_GAP_MARGIN = 0.002
+
+# 目標間隙調整をトリガーする膝間隙マージン
 REFINE_TRIGGER_KNEE_GAP_MARGIN = 0.01
+
+# 目標左右位置クランプ時の最小離隔イプシロン
 TARGET_SIDE_CLAMP_EPSILON = 0.001
+
+# 脚閉じ回転スケールの探索候補リスト
 LEG_CLOSE_BASE_SCALES = [
     2.40, 2.20, 2.00, 1.80, 1.60, 1.40,
     1.20, 1.00, 0.80, 0.60, 0.40, 0.20,
 ]
+
+# 脚閉じ回転スケールの左右非対称性オフセット候補リスト
 LEG_CLOSE_ASYMMETRY_OFFSETS = [0.0, -0.12, 0.12, -0.22, 0.22]
+
+# 脚閉じ評価スコアの内股間隙の重み
 SCORE_INNER_GAP_WEIGHT = 1400
+
+# 脚閉じ評価スコアの内股過剰間隙ペナルティ重み
 SCORE_INNER_EXCESS_WEIGHT = 600
+
+# 脚閉じ評価スコアの膝間隙の重み
 SCORE_KNEE_GAP_WEIGHT = 55
+
+# 脚閉じ評価スコアの膝過剰間隙ペナルティ重み
 SCORE_KNEE_EXCESS_WEIGHT = 20
+
+# 脚閉じ評価スコアの足首ボーナス重み
 SCORE_ANKLE_BONUS_WEIGHT = 0.5
+
+# 脚閉じ評価スコアの左右非対称ペナルティ重み
 SCORE_ASYMMETRY_WEIGHT = 0.15
 
 
@@ -143,10 +276,10 @@ def local_units_per_meter(body_object, scene):
     world_per_local = (
         (world_scale.x + world_scale.y + world_scale.z) / 3.0
     )
-    if world_per_local <= 1.0e-8:
+    if world_per_local <= LOCAL_SCALE_EPSILON:
         raise RuntimeError("Bodyのローカル座標スケールを取得できません。")
     scene_scale = float(scene.unit_settings.scale_length or 1.0)
-    if scene_scale <= 1.0e-8:
+    if scene_scale <= LOCAL_SCALE_EPSILON:
         raise RuntimeError("Blenderシーンの単位スケールが不正です。")
     return 1.0 / (world_per_local * scene_scale)
 
@@ -203,15 +336,28 @@ def validate_skirt_geometry(
     surface_triangle_candidates=None,
     body_kd_trees=None,
 ):
+    # この処理は何をするか
+    # スカート頂点列の全フレームについて幾何学的な妥当性と身体接触を厳密に検証する
+    #
+    # どうやって実現しているか
+    # 1 頂点座標にNaNやInfが含まれていないかチェック
+    # 2 三角形面の外積から面積を求め 極小縮退面を検出
+    # 3 エッジ長と基準メッシュのエッジ長との比率を求め 過度な伸び縮みを警告
+    # 4 前フレームからの隣接頂点間変位差分を測り 空間的なギザギザ変形を追跡
+    # 5 身体頂点または身体三角パッチとの距離を求め 突き抜けやクリアランス不足をエラー判定
+    #
+    # 注意点
+    # 単純な頂点間距離だけでなく unit_normal による符号付き面距離 signed_surface_distance を検証することで
+    # 凹部や鋭角部における内外誤判定を防いでいる
     if not vertices_sequence:
         raise RuntimeError(f"{label}: スカート頂点列が空です。")
     if len(vertices_sequence) != len(body_sequence):
         raise RuntimeError(f"{label}: Bodyとスカートのフレーム数が一致しません。")
     edge_pairs = make_edge_pairs(faces)
     reference_sequence = reference_sequence or vertices_sequence
-    minimum_area = 1.0e-5
-    minimum_edge_ratio = 0.55
-    maximum_edge_ratio = 1.65
+    minimum_area = MINIMUM_SURFACE_AREA
+    minimum_edge_ratio = MINIMUM_EDGE_RATIO
+    maximum_edge_ratio = MAXIMUM_EDGE_RATIO
     worst_area = 1.0e20
     worst_edge_ratio = 0.0
     worst_body_distance = 1.0e20
@@ -252,7 +398,7 @@ def validate_skirt_geometry(
             current_length = vector_norm(vector_sub(
                 vertices[left], vertices[right],
             ))
-            if reference_length <= 1.0e-8:
+            if reference_length <= LOCAL_SCALE_EPSILON:
                 continue
             ratio = current_length / reference_length
             worst_edge_ratio = max(worst_edge_ratio, ratio)
@@ -313,7 +459,7 @@ def validate_skirt_geometry(
                         "近傍Body面を特定できません。"
                     )
                 distance = abs(surface_signed_distance)
-                if surface_signed_distance < clearances[vertex_index] * 0.95:
+                if surface_signed_distance < clearances[vertex_index] * SURFACE_CLEARANCE_MARGIN_RATIO:
                     raise RuntimeError(
                         f"{label}: frame={frame_index}, vertex={vertex_index}の"
                         f"Body面符号距離が不足しています:"
@@ -326,7 +472,7 @@ def validate_skirt_geometry(
             )
             if (
                 not surface_constraint_applied
-                and distance < clearances[vertex_index] * 0.95
+                and distance < clearances[vertex_index] * SURFACE_CLEARANCE_MARGIN_RATIO
             ):
                 raise RuntimeError(
                     f"{label}: frame={frame_index}, vertex={vertex_index}の"
@@ -365,6 +511,15 @@ def find_pose_bone_by_name_pattern(armature_object, patterns):
 
 
 def collect_leg_close_bones(armature_object):
+    # この処理は何をするか
+    # アーマチュア内から脚閉じに必要な主要ボーンを正規表現パターンで検索して辞書化する
+    #
+    # どうやって実現しているか
+    # 骨盤 (hips) 太腿 (thigh) 膝 (knee) 足首 (foot) を複数の命名規則に対応した正規表現でマッチング
+    #
+    # 注意点
+    # モデルによって命名が Mixamo 形式 VRM 形式 標準ボーン名 など異なるため
+    # 前方一致や大文字小文字無視を含めて網羅的に検索する
     return {
         "hips": find_pose_bone_by_name_pattern(
             armature_object,
@@ -643,6 +798,18 @@ ADDUCTION_AXIS_CANDIDATES = create_adduction_axis_candidates()
 
 
 def evaluate_thigh_adduction_axis(bones, thigh, knee, foot, side):
+    # この処理は何をするか
+    # 骨格モデルごとのローカル座標系の向きに依存せず 脚を自然に内側に閉じる最適回転軸を自動探索する
+    #
+    # どうやって実現しているか
+    # 1 候補となる26方向の単位ベクトル軸に対してテスト角度回転を適用
+    # 2 Hips基準の横方向軸への投影変化から 内側への変位量を計算
+    # 3 前後上下への不要なブレや左右交差違反に対してペナルティを課してスコアリング
+    # 4 最もスコアの高い軸をその脚の最適内転軸として決定
+    #
+    # 注意点
+    # 単純なX軸回転やY軸回転と決め打ちすると モデルごとに脚が前後に跳ね上がったりねじれたりするため
+    # 実測によるキャリブレーションで確実に左右方向への純粋な閉じ運動を取り出す
     if not bones["hips"] or not thigh or not knee:
         return None
     ensure_pose_bone_quaternion(thigh)
@@ -767,6 +934,19 @@ def apply_runtime_leg_close_to_pose(
     calibration,
     ui_progress,
 ):
+    # この処理は何をするか
+    # 着席アニメーションの進行度に合わせて脚の開きを狭めるランタイム脚閉じ補正を実行する
+    #
+    # どうやって実現しているか
+    # 1 進行度 ui_progress をスムーズステップ関数で正規化し 適用係数 t を算出
+    # 2 着席基準ポーズにおける内股間隙 膝間隙 足首間隙の目標値を決定
+    # 3 キャリブレーション済みの内転軸を用いて複数の回転スケールで太腿ボーンを回転
+    # 4 隙間が目標より大きい場合は膝位置を目標位置へ向ける追加の姿勢補正を実行
+    # 5 左右の脚が交差せず目標隙間に最も近くなる最適な回転クォータニオンを選択して適用
+    #
+    # 注意点
+    # 過剰に脚を閉じると左右の大腿部メッシュ同士がめり込むため
+    # ハード下限値を設けて安全な隙間を厳守する
     if not seated_reference or not calibration:
         return
     required = ["hips", "leftThigh", "rightThigh", "leftKnee", "rightKnee"]
@@ -1244,6 +1424,15 @@ progress_log(f"Body/SKIN評価を開始します: frames={frame_count}")
 
 
 def read_evaluated_vertices(body_object, vertex_indices):
+    # この処理は何をするか
+    # アニメーション評価後のBodyメッシュから指定頂点インデックスのローカル座標列を取得する
+    #
+    # どうやって実現しているか
+    # 依存グラフ (depsgraph) から評価済みオブジェクトとメッシュを生成し各頂点のco座標を抽出
+    #
+    # 注意点
+    # ワールド行列を乗算するとFBX特有のスケールや位置オフセットが混入し
+    # ポーズ変化ではなく定数ズレが変位の主成分になってしまうためローカル座標のまま扱う
     depsgraph = bpy.context.evaluated_depsgraph_get()
     evaluated_object = body_object.evaluated_get(depsgraph)
     evaluated_mesh = evaluated_object.to_mesh(
@@ -1251,9 +1440,6 @@ def read_evaluated_vertices(body_object, vertex_indices):
         depsgraph=depsgraph,
     )
     try:
-        # body_base_vertices/skirt_base_verticesと同じローカル座標系に揃える。
-        # matrix_worldを掛けるとFBXのスケール・位置オフセットが混入し、
-        # body_motionが実際のポーズ変化ではなくその定数ズレ主体になってしまう。
         return [[
             float(evaluated_mesh.vertices[index].co.x),
             float(evaluated_mesh.vertices[index].co.y),
@@ -1264,6 +1450,14 @@ def read_evaluated_vertices(body_object, vertex_indices):
 
 
 def read_evaluated_vertices_and_normals(body_object, vertex_indices):
+    # この処理は何をするか
+    # アニメーション評価後のBodyメッシュから指定頂点のローカル座標と外向き方向ベクトル normals を同時に取得する
+    #
+    # どうやって実現しているか
+    # 評価済みメッシュでcalc_normalsを実行した後に各頂点の座標と normals を抽出
+    #
+    # 注意点
+    # normals はスカート頂点を体表面から外側へ押し出す際の押し出し方向ベクトルとして使用される
     depsgraph = bpy.context.evaluated_depsgraph_get()
     evaluated_object = body_object.evaluated_get(depsgraph)
     evaluated_mesh = evaluated_object.to_mesh(
@@ -1532,7 +1726,7 @@ for skirt_index, skirt_vertex in enumerate(skirt_base_vertices):
         )
         distances.append((distance_squared, body_index))
     nearest = sorted(distances)[:neighbor_count]
-    weights = [1.0 / (distance + 1.0e-6) for distance, _ in nearest]
+    weights = [1.0 / (distance + INVERSE_DISTANCE_WEIGHT_EPSILON) for distance, _ in nearest]
     weight_sum = sum(weights)
     neighbor_indices.append([body_index for _, body_index in nearest])
     neighbor_weights.append([weight / weight_sum for weight in weights])
@@ -1572,10 +1766,10 @@ print(
 # ------------------------------------------------------------
 # 0185d85準拠: FBXのスキニング済みスカート動作（skirt_skinned_vertices）を
 # 100%ベースとし、各フレームの変形後Bodyメッシュに対する動的最近傍探索と
-# 変形後法線ベクトルを用いた「全方位動的法線クリアランス保証（+6mm）」により
-# 臀部・内股・太腿のあらゆる肌突き破りを幾何学的に確実に解消する。
+# 変形後外向きベクトルを用いた全方位動的クリアランス保証（+6mm）により
+# 臀部・内股・太腿の肌突き破りを解消する
 # ------------------------------------------------------------
-progress_log("動的法線クリアランス高精度教師データの生成を開始します。")
+progress_log("動的クリアランス教師データの生成を開始します。")
 
 # メッシュの隣接リスト構築
 adjacency = [set() for _ in range(len(skirt_base_vertices))]
@@ -1596,11 +1790,21 @@ is_waistband = [
     for i in range(len(skirt_base_vertices))
 ]
 
+# 逆距離二乗重み計算時のゼロ除算防止用イプシロン
+INVERSE_DISTANCE_WEIGHT_EPSILON = 1.0e-6
+
+# 前面太腿領域の安全クリアランスメートル単位
 SAFE_NORMAL_CLEARANCE_FRONT_METERS = 0.006
+
+# 後面臀部領域の安全クリアランスメートル単位
 SAFE_NORMAL_CLEARANCE_BACK_METERS = 0.012
+
+# 前面太腿領域のローカル単位クリアランス
 SAFE_NORMAL_CLEARANCE_FRONT = (
     SAFE_NORMAL_CLEARANCE_FRONT_METERS * local_units_per_meter_value
 )
+
+# 後面臀部領域のローカル単位クリアランス
 SAFE_NORMAL_CLEARANCE_BACK = (
     SAFE_NORMAL_CLEARANCE_BACK_METERS * local_units_per_meter_value
 )
@@ -1616,14 +1820,45 @@ skirt_clearance = [
     else SAFE_NORMAL_CLEARANCE_BACK
     for i in range(len(skirt_base_vertices))
 ]
-THIGH_SURFACE_OFFSET_LOCAL = 0.1  # 1mm: FBXローカル座標では0.1単位
+
+# 太腿面への最小オフセットローカル単位 1mm相当
+THIGH_SURFACE_OFFSET_LOCAL = 0.1
+
+# 太腿面オフセット投影の最大反復回数
 THIGH_SURFACE_MAX_ITERATIONS = 32
-# 座標値が100前後のため丸め誤差は1e-5程度出る。1ミクロン相当で受ける。
+
+# 太腿面オフセット投影の収束判定許容誤差
 THIGH_SURFACE_CONVERGENCE_TOLERANCE = 1.0e-4
-# 外挿倍率の上限。実測で半角3度の溝でも8反復以内に収束する。
+
+# 太腿面オフセット投影の外挿倍率上限
 THIGH_SURFACE_MAX_EXTRAPOLATION = 8.0
+
+# 太腿領域とみなすスカート高さ下限比率
 THIGH_REGION_MIN_HEIGHT = 0.12
+
+# 太腿領域とみなすスカート高さ上限比率
 THIGH_REGION_MAX_HEIGHT = 0.78
+
+# 外向き方向への押し出し補正最大反復回数
+SURFACE_PUSH_MAX_ITERATIONS = 16
+
+# 平滑化処理における自身の変位保持比率
+SMOOTH_DISPLACEMENT_SELF_WEIGHT = 0.80
+
+# 平滑化処理における近傍平均変位の合成比率
+SMOOTH_DISPLACEMENT_NEIGHBOR_WEIGHT = 0.20
+
+# 太腿上面ドレープ開始のアニメーション進捗閾値
+DRAPE_START_PROGRESS = 0.40
+
+# 太腿上面ドレープの進捗区間スパン
+DRAPE_PROGRESS_SPAN = 0.60
+
+# 太腿上面ギャップ補正を適用する最小閾値
+DRAPE_GAP_TRIGGER_THRESHOLD = 0.004
+
+# 太腿上面ギャップ補正の引き下げ強度比率
+DRAPE_PULL_DOWN_RATIO = 0.50
 thigh_region_mask = [
     (
         skirt_base_vertices[i][2] > 0.0
@@ -1646,8 +1881,18 @@ def push_outside_body_surface(
     point, frame_body_pts, frame_body_norms, clearance, body_index=None,
     kd_tree=None,
 ):
+    # この処理は何をするか
+    # スカート頂点がBody頂点群の指定クリアランス球内に入り込んでいる場合 外側へ frame_body_norms 方向に押し出す
+    #
+    # どうやって実現しているか
+    # 1 KDTreeを用いて最近傍Body頂点を高速検索
+    # 2 距離がクリアランス未満の場合 相対変位ベクトルまたは frame_body_norms に沿って不足距離分だけ押し出し
+    # 3 最大反復回数まで押し出しを繰り返し クリアランスを確保
+    #
+    # 注意点
+    # 単純な球クリアランス押し出しは凹部で振動しやすいため 最大反復数で制限して発散を防ぐ
     result = list(point)
-    for _ in range(16):
+    for _ in range(SURFACE_PUSH_MAX_ITERATIONS):
         nearest_b_idx = nearest_body_index(result, frame_body_pts, kd_tree)
         nearest_b_pt = frame_body_pts[nearest_b_idx]
         min_dist_sq = sum(
@@ -1655,15 +1900,15 @@ def push_outside_body_surface(
             for axis in range(3)
         )
         euclid_dist = math.sqrt(min_dist_sq)
-        if euclid_dist >= clearance - 1.0e-8:
+        if euclid_dist >= clearance - LOCAL_SCALE_EPSILON:
             return result
         rel_vec = vector_sub(result, nearest_b_pt)
-        if euclid_dist > 1.0e-8:
+        if euclid_dist > LOCAL_SCALE_EPSILON:
             direction = [value / euclid_dist for value in rel_vec]
         else:
             direction = list(frame_body_norms[nearest_b_idx])
         push = clearance - euclid_dist
-        if push <= 1.0e-8:
+        if push <= LOCAL_SCALE_EPSILON:
             return result
         result = [
             result[axis] + direction[axis] * push
@@ -1673,6 +1918,15 @@ def push_outside_body_surface(
 
 
 def closest_point_on_body_triangle(point, body_points, triangle):
+    # この処理は何をするか
+    # 3次元空間内の任意のクエリ点から指定された三角形面上の最近接点および外向きベクトル normal を計算する
+    #
+    # どうやって実現しているか
+    # Christer Ericson のリアルタイム衝突検出アルゴリズムに基づくボロノイ領域判定を採用
+    # 頂点領域 辺領域 面内部領域の順に射影判定を行い 正確な最近接点座標を特定
+    #
+    # 注意点
+    # 三角形の退化によるゼロ除算を防ぐため 面積や分母に対して微小イプシロンで下限クランプする
     a, b, c = (Vector(body_points[index]) for index in triangle)
     query = Vector(point)
     ab = b - a
@@ -1714,7 +1968,16 @@ SURFACE_FEATURE_TOLERANCE = 1.0e-5
 
 
 def feature_angle_weight(closest, body_points, triangle):
-    """最近接点が面/辺/頂点のどれに載るかで擬似法線の重みを決める。"""
+    # この処理は何をするか
+    # 最近接点が三角形の頂点 辺 面のいずれに位置するかに応じて合成重み角度を計算する
+    #
+    # どうやって実現しているか
+    # 頂点上にある場合は隣接2辺のなす角を計算
+    # 辺上にある場合は平面角 pi を返す
+    # 面内部にある場合は立体角 2*pi を返す
+    #
+    # 注意点
+    # 共有頂点や共有エッジにおける normal の不連続性を解消する
     corners = [Vector(body_points[index]) for index in triangle]
     for corner_index, corner in enumerate(corners):
         if (closest - corner).length > SURFACE_FEATURE_TOLERANCE:
@@ -1743,11 +2006,18 @@ def feature_angle_weight(closest, body_points, triangle):
 
 
 def signed_surface_distance(point, body_points, triangles, triangle_indices):
-    """Baerentzen-Aanaesの角度重み付き擬似法線による符号付き面距離。
-
-    凹面でも凸面でも内外判定が破綻しない唯一の定義として、
-    教師の補正とすべての検証がこの関数を共有する。
-    """
+    # この処理は何をするか
+    # 身体メッシュ表面に対する符号付き最短距離 (Signed Surface Distance) を計算する
+    # 身体の外側なら正値 内側へのめり込みなら負値を返す
+    #
+    # どうやって実現しているか
+    # 1 近傍の候補三角形群から最近接点と最短ユークリッド距離を探索
+    # 2 最近接点を共有する三角形群の normal を角度重み付きで合成し unit_normal ベクトルを構築
+    # 3 クエリ点と最近接点の差分ベクトルと unit_normal の内積符号から内外判定を決定
+    #
+    # 注意点
+    # 凹面や急峻な関節溝でも内外判定が反転しない厳密な幾何アルゴリズムであるため
+    # 教師データの生成と検証テストで完全に同一の計算式を共有する
     query = Vector(point)
     closest = None
     closest_distance_squared = 1.0e30
@@ -1761,7 +2031,6 @@ def signed_surface_distance(point, body_points, triangles, triangle_indices):
             closest = candidate
     if closest is None:
         return None, None, None
-    # 最近接点を共有する面をすべて集めて角度重み付き法線を合成する
     normal_sum = Vector((0.0, 0.0, 0.0))
     fallback_normal = None
     for triangle_index in triangle_indices:
@@ -1796,6 +2065,17 @@ def apply_thigh_surface_offset(
     kd_tree=None,
     frame_index=-1,
 ):
+    # この処理は何をするか
+    # 太腿領域のスカート頂点をBody表面から指定厚み (1mm相当) 確実に浮いた位置へ射影補正する
+    #
+    # どうやって実現しているか
+    # 1 符号付き面距離を計算し 不足しているオフセット量を算出
+    # 2 狭い凹部での線形収束遅延を回避するため 連続する不足量比率から幾何級数の残りを予測して外挿加速
+    # 3 接線方向の位置を保ちながら unit_normal 方向へ頂点をステップ移動
+    #
+    # 注意点
+    # 既に1mm以上浮いている自然なドレープ形状の頂点は一切移動させず
+    # めり込みまたは接近しすぎた頂点のみを選択的に押し出す
     minimum_distances = []
     for index, point in enumerate(frame_skirt):
         if not thigh_mask[index]:
@@ -1805,8 +2085,6 @@ def apply_thigh_surface_offset(
         converged = False
         previous_deficit = None
         extrapolation = 1.0
-        # 鋭い凹部では素の射影が線形収束で極端に遅いため、連続する
-        # 不足量の比から収束率を推定し、幾何級数の残りをまとめて飛ばす。
         for _ in range(THIGH_SURFACE_MAX_ITERATIONS):
             candidate_triangle_indices = body_vertex_triangle_neighbors[
                 nearest_body_index(current, frame_body_pts, kd_tree)
@@ -1837,8 +2115,6 @@ def apply_thigh_surface_offset(
                 else:
                     extrapolation = THIGH_SURFACE_MAX_EXTRAPOLATION
             previous_deficit = deficit
-            # 最近接点へスナップすると接線方向にも飛ぶため、接線位置を
-            # 保ったまま擬似法線方向へ押し出す。
             step = deficit * extrapolation
             current = [
                 current[axis] + unit_normal[axis] * step
@@ -1853,7 +2129,6 @@ def apply_thigh_surface_offset(
                 f"required={THIGH_SURFACE_OFFSET_LOCAL:.9f}。"
                 "この頂点は1mmを確保できない狭い凹部に挟まれています。"
             )
-        # 既に1mm以上浮いている頂点はcurrentが未変更のまま、自然な浮きを保つ。
         frame_skirt[index] = current
         minimum_distances.append(achieved)
     return min(minimum_distances, default=1.0e30)
@@ -1876,8 +2151,8 @@ def smooth_skirt_displacement(
         average = mean_vector([displacements[neighbor] for neighbor in neighbors])
         for axis in range(3):
             displacement = (
-                displacements[index][axis] * 0.80
-                + average[axis] * 0.20
+                displacements[index][axis] * SMOOTH_DISPLACEMENT_SELF_WEIGHT
+                + average[axis] * SMOOTH_DISPLACEMENT_NEIGHBOR_WEIGHT
             )
             smoothed[index][axis] = reference_frame_skirt[index][axis] + displacement
     return smoothed
@@ -1890,7 +2165,7 @@ body_kd_trees = []
 for frame_idx in range(frame_count):
     if should_log_progress(frame_idx, frame_count):
         progress_log(
-            f"動的法線クリアランス教師生成 "
+            f"動的クリアランス教師生成 "
             f"{frame_idx + 1}/{frame_count}"
         )
     prog = frame_idx / float(frame_count - 1)
@@ -1914,9 +2189,9 @@ for frame_idx in range(frame_count):
             kd_tree=frame_kd_tree,
         )
 
-    # 太腿上面の過剰な浮きを自然に接地させる処理（下限は法線クリアランスを厳守）
-    if prog > 0.4:
-        t_drape = smoothstep01((prog - 0.4) / 0.6)
+    # 太腿上面の過剰な浮きを自然に接地させる処理（下限は skirt_clearance を厳守）
+    if prog > DRAPE_START_PROGRESS:
+        t_drape = smoothstep01((prog - DRAPE_START_PROGRESS) / DRAPE_PROGRESS_SPAN)
         for i in range(len(frame_skirt)):
             if is_waistband[i]:
                 continue
@@ -1925,8 +2200,8 @@ for frame_idx in range(frame_count):
                 body_ref = frame_body_pts[nearest_body_indices[i]]
                 target_top_y = body_ref[1] + skirt_clearance[i]
                 v_gap = frame_skirt[i][1] - target_top_y
-                if v_gap > 0.004:
-                    new_y = frame_skirt[i][1] - v_gap * 0.50 * t_drape
+                if v_gap > DRAPE_GAP_TRIGGER_THRESHOLD:
+                    new_y = frame_skirt[i][1] - v_gap * DRAPE_PULL_DOWN_RATIO * t_drape
                     frame_skirt[i][1] = max(new_y, target_top_y)
 
     # 変位場を隣接頂点で平滑化する。絶対位置を平均するとBody側へ
@@ -1992,7 +2267,7 @@ validate_skirt_geometry(
     surface_triangle_candidates=body_vertex_triangle_neighbors,
     body_kd_trees=body_kd_trees,
 )
-progress_log("動的法線クリアランス高精度教師データの生成が完了しました。")
+progress_log("動的クリアランス高精度教師データの生成が完了しました。")
 
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 progress_log(f"身体特徴量PKLを書き込みます: {output_path}")

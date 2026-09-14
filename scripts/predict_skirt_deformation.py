@@ -1,6 +1,29 @@
 # scripts\predict_skirt_deformation.py
-# スカートアニメーション用のDNN予測スクリプト
-# Colab環境でBlender付属Pythonから実行することを想定している   
+"""学習済みスカート DNN の単一姿勢変形予測スクリプト
+Colab環境でBlender付属Pythonから実行することを想定している
+
+概要
+- 指定した着席姿勢角および身体特徴量に対して単一フレームのスカート変形を推論する
+
+役割
+- 身体特徴量 PKL を読み込み立位スカートメッシュとのスケール一致を検証
+- 指定されたテスト姿勢角と補間された身体変位からモデル入力を構築
+- 学習済みモデルを用いてスカート各頂点の残差変位を推論
+- 推論結果の変形量およびメタデータを JSON 形式で保存
+
+必須データ
+- base_skirt_pc 立位スカートの頂点座標配列
+- model train_skirt_sitting_dnn.py で学習済みの PyTorch モデル
+- skirt_body_context_for_dnn.pkl 身体特徴量 PKL ファイル
+
+使い方
+- 実行手順
+    1 train_skirt_sitting_dnn.py を実行してモデルを学習
+    2 test_pose に評価したい姿勢角を設定 (未指定時は最大着席角)
+    3 %run -i /content/predict_skirt_deformation.py を実行
+    4 skirt_deformation.json に予測頂点変位が出力される
+"""
+
 import json
 import os
 import pickle
@@ -10,27 +33,38 @@ import torch
 import torch.nn as nn
 
 
-# ============================================================
-# 必須データ
-# ============================================================
-# 同じColabカーネルで次の変数を用意してから実行する。
-#   model: 9次元または12次元で学習済みのPyTorchモデル
-#   base_skirt_pc: (頂点数, 3)の立位スカート頂点
-#
-# 身体特徴量PKLは、create_skirt_body_context.pyで作成した
-# skirt_body_context_for_dnn.pklを使用する。
-# ============================================================
+# 身体特徴量PKLファイルの既定読み込み先パス
+DEFAULT_BODY_CONTEXT_PATH = "/content/public/models/skirt_body_context_for_dnn.pkl"
 
+# 予測変形結果JSONの既定保存先パス
+DEFAULT_OUTPUT_PATH = "/content/public/models/skirt_deformation.json"
+
+# 対応するモデル入力特徴量次元のタプル
+DEFAULT_MODEL_INPUT_FEATURES = (9, 12)
+
+# メッシュ対角長比較におけるスケール不一致許容比率
+DEFAULT_SCALE_TOLERANCE_RATIO = 0.2
+
+# ゼロ除算防止および微小値比較用イプシロン
+FLOAT_EPSILON = 1.0e-8
+
+# 座位動作時の既定最大着席角度ラジアン単位
+DEFAULT_MAX_SIT_ANGLE_RAD = np.deg2rad(75.0)
+
+
+# 身体特徴量PKLパスの環境変数またはグローバル取得値
 BODY_CONTEXT_PATH = str(
     globals().get(
         "DNN_BODY_CONTEXT_PATH",
-        "/content/public/models/skirt_body_context_for_dnn.pkl",
+        DEFAULT_BODY_CONTEXT_PATH,
     )
 )
+
+# 予測結果出力先パスの環境変数またはグローバル取得値
 OUTPUT_PATH = str(
     globals().get(
         "DNN_PREDICTION_OUTPUT_PATH",
-        "/content/public/models/skirt_deformation.json",
+        DEFAULT_OUTPUT_PATH,
     )
 )
 
@@ -77,7 +111,7 @@ if os.path.isfile(BODY_CONTEXT_PATH):
         base_skirt_extent = float(np.linalg.norm(
             base_vertices.max(axis=0) - base_vertices.min(axis=0)
         ))
-        if abs(base_skirt_extent - pkl_skirt_extent) > 0.2 * max(pkl_skirt_extent, 1.0e-8):
+        if abs(base_skirt_extent - pkl_skirt_extent) > DEFAULT_SCALE_TOLERANCE_RATIO * max(pkl_skirt_extent, FLOAT_EPSILON):
             raise RuntimeError(
                 "base_skirt_pcの縮尺がbody_context PKLのskirt_base_verticesと"
                 "一致しません。\n"
@@ -115,7 +149,7 @@ def fit_similarity(source, target):
         rotation = u @ vt
     rotated = source_centered @ rotation
     denominator = float(np.sum(source_centered * source_centered))
-    if denominator <= 1.0e-20:
+    if denominator <= FLOAT_EPSILON * FLOAT_EPSILON:
         raise RuntimeError("身体座標のSimilarity Transformを計算できません。")
     scale = float(np.sum(rotated * target_centered) / denominator)
     if not np.isfinite(scale) or scale <= 0.0:
@@ -144,9 +178,8 @@ def broadcast_body_motion(motion):
 
 def load_body_motion():
     # Colabの%run -iはセルを再実行してもglobals()が残るため、DNN_BODY_MOTIONの
-    # 手動オーバーライドをPKL読み込みより優先すると、train_skirt_sitting_dnn.py
-    # 等の前回実行で残った古い値を誤って使い回してしまう。
-    # PKLファイルが存在する限り、常にそちらを正として最優先で使う。
+    # 手動オーバーライドをPKL読み込みより優先すると、前回の学習結果が誤って再利用される
+    # そのため、PKLがある場合は入力値の出所をPKLに固定して、古い変数を混ぜない
     if not os.path.isfile(BODY_CONTEXT_PATH):
         direct = globals().get("DNN_BODY_MOTION", None)
         if direct is not None:
@@ -209,7 +242,7 @@ if input_features not in (9, 12):
     )
 
 max_sit_angle = float(
-    globals().get("max_sit_angle", np.deg2rad(75.0))
+    globals().get("max_sit_angle", DEFAULT_MAX_SIT_ANGLE_RAD)
 )
 test_pose = np.asarray(
     globals().get(

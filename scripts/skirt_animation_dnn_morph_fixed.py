@@ -1,6 +1,31 @@
 # scripts\skirt_animation_dnn_morph_fixed.py
-# スカートアニメーション用DNNのMorph固定スクリプト
-# Colab環境でBlender付属Pythonから実行することを想定している
+"""スカートアニメーション用 DNN Morph 固定および GLB 出力スクリプト
+Colab環境でBlender付属Pythonから実行することを想定している
+
+概要
+- 学習済み DNN または幾何教師データを用いて座位アニメーション GLB を生成する
+
+役割
+- 立位スカートメッシュと身体特徴量コンテキストのスケール整合性を検証
+- 幾何教師データまたは学習済みモデルから座位遷移頂点列を算出
+- Body メッシュとの動的クリアランス検証および衝突めり込み防止処理を実行
+- 各フレームの頂点変位を Shape Key に変換して GLB および blend ファイルへ出力
+- アニメーション進捗と姿勢角の対応マッピング JSON を書き出し
+
+必須データ
+- base_skirt_pc 立位スカートの頂点座標配列
+- base_skirt_faces 立位スカートの面インデックス配列
+- model train_skirt_sitting_dnn.py で学習済みの PyTorch モデル
+- skirt_body_context_for_dnn.pkl 身体特徴量 PKL ファイル
+
+使い方
+- 実行手順
+    1 create_skirt_body_context.py と train_skirt_sitting_dnn.py を事前実行
+    2 base_skirt_pc base_skirt_faces model が存在する状態で本スクリプトを実行
+    3 %run -i /content/skirt_animation_dnn_morph_fixed.py
+    4 生成された skirt_mesh_sitting_animation.glb を Three.js 等のビューアで確認
+"""
+
 import json
 import os
 import pickle
@@ -13,9 +38,59 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-# Blender付属Pythonのsite-packagesにColab環境のdist-packagesを参照させる.pthファイルを作成
-blender_site_packages = "/usr/bin/3.0/python/lib/python3.10/site-packages"
-colab_site_packages = f"/usr/local/lib/python{sys.version_info.major}.{sys.version_info.minor}/dist-packages"
+
+# Blender付属Pythonのsite-packagesディレクトリパス
+BLENDER_SITE_PACKAGES = "/usr/bin/3.0/python/lib/python3.10/site-packages"
+
+# Colab環境のdist-packagesディレクトリ接頭辞
+COLAB_DIST_PACKAGES_PREFIX = "/usr/local/lib/python"
+
+# 実行時Colab環境のdist-packages完全パス
+COLAB_SITE_PACKAGES = (
+    f"{COLAB_DIST_PACKAGES_PREFIX}{sys.version_info.major}.{sys.version_info.minor}/dist-packages"
+)
+
+# Blenderアニメーション出力時の標準フレームレート
+BLENDER_DEFAULT_FPS = 24.0
+
+# 表面最近接点判定における頂点辺判定の許容幾何誤差
+SURFACE_FEATURE_TOLERANCE = 1.0e-5
+
+# 基準メッシュ対角長に対する変位ノルムの許容最大倍率
+MAX_DISPLACEMENT_RATIO_LIMIT = 5.0
+
+# メッシュ対角長比較におけるスケール不一致許容比率
+SCALE_TOLERANCE_RATIO = 0.2
+
+# ゼロ除算防止および微小値比較用イプシロン
+FLOAT_EPSILON = 1.0e-8
+
+# 太腿Body面との最小許容距離閾値
+MIN_BODY_DISTANCE_THRESHOLD = 0.095
+
+# スカート上端の腰帯領域と判定する高さ比率マージン
+WAISTBAND_MARGIN_RATIO = 0.10
+
+# 微小距離判定用イプシロン
+SMALL_DISTANCE_EPSILON = 1.0e-6
+
+# 身体距離計算におけるゼロ割防止イプシロン
+BODY_DISTANCE_EPSILON = 1.0e-8
+
+# 表面クリアランス計算時の許容下限比率
+SURFACE_CLEARANCE_MARGIN_RATIO = 0.95
+
+# 幾何検証における三角形面の最小面積閾値
+MINIMUM_SURFACE_AREA = 1.0e-5
+
+# 幾何検証におけるエッジ伸縮比率の許容下限値
+MINIMUM_EDGE_RATIO = 0.55
+
+# 幾何検証におけるエッジ伸縮比率の許容上限値
+MAXIMUM_EDGE_RATIO = 1.65
+
+blender_site_packages = BLENDER_SITE_PACKAGES
+colab_site_packages = COLAB_SITE_PACKAGES
 
 if os.path.exists(blender_site_packages) and os.path.exists(colab_site_packages):
     pth_file_path = os.path.join(blender_site_packages, "colab_packages.pth")
@@ -42,13 +117,8 @@ blend_path = str(globals().get(
 npz_path = os.path.join(output_dir, "skirt_animation_vertices.npz")
 mapping_path = os.path.join(output_dir, "skirt_animation_pose_mapping.json")
 blender_data_path = os.path.join(output_dir, "skirt_animation_vertices_for_blender.pkl")
-BLENDER_DEFAULT_FPS = 24.0
-SURFACE_FEATURE_TOLERANCE = 1.0e-5
-
-# Colabの%run -iはセルを再実行してもカーネルの変数(globals())が残り続ける。
-# 「まだ無ければ読み込む」だと、前回の実行(あるいは別のPKLに対する実行)で
-# 残った古いbase_skirt_pcを誤って使い回してしまうため、PKLが存在する限り
-# 常にそちらを正として読み直す。
+# Colabの%run -iはセルを再実行しても古い変数が残り続くので
+# PKLがあればその内容を正として読み直す
 if os.path.isfile(body_context_path):
     with open(body_context_path, "rb") as file:
         skirt_context = pickle.load(file)
@@ -89,13 +159,15 @@ if input_features not in (9, 12):
 
 with open(body_context_path, "rb") as file:
     context = pickle.load(file)
-# base_skirt_pc(Colabカーネルの既存変数、または上でこのpklから読み込んだもの)と
-# body_motion(このpklのskirt_vertex_body_motion/body_motion)が異なる縮尺・
-# 別ソースのメッシュだと、スケールを推測して/100等の補正をかけるその場しのぎの
-# 変換は「たまたま近い値」を作るだけで根本解決にならず、実際には数十万倍もの
-# 出力破綻を招く(スキップ接続がbody_motionをそのまま出力へ加算するため)。
-# ここではbase_vertices自身とこのpkl由来のskirt_base_verticesの対角長を比較し、
-# 縮尺が一致しない場合は推測変換をせずに明確なエラーで停止する。
+# この処理は何をするか
+# メッシュ間の縮尺不一致を検出し スケール違いによる変位爆発を防止する
+#
+# どうやって実現しているか
+# 読み込んだ base_vertices と PKL 内の skirt_base_vertices のバウンディングボックス対角長を比較
+#
+# 注意点
+# スケールを自動推測して補正するとスキップ接続により実質数十万倍の破綻変位を生む危険があるため
+# 不一致時は自動補正せず明確なエラーで停止させる
 context_skirt_extent = float(np.linalg.norm(
     np.asarray(context["skirt_base_vertices"], dtype=np.float64).max(axis=0)
     - np.asarray(context["skirt_base_vertices"], dtype=np.float64).min(axis=0)
@@ -103,7 +175,7 @@ context_skirt_extent = float(np.linalg.norm(
 base_vertices_extent = float(np.linalg.norm(
     base_vertices.max(axis=0).astype(np.float64) - base_vertices.min(axis=0).astype(np.float64)
 ))
-if abs(base_vertices_extent - context_skirt_extent) > 0.2 * max(context_skirt_extent, 1.0e-8):
+if abs(base_vertices_extent - context_skirt_extent) > SCALE_TOLERANCE_RATIO * max(context_skirt_extent, FLOAT_EPSILON):
     raise RuntimeError(
         "base_skirt_pcの縮尺がbody_context PKLのskirt_base_verticesと一致しません。\n"
         f"base_skirt_pc対角長: {base_vertices_extent:.6f}, "
@@ -112,10 +184,16 @@ if abs(base_vertices_extent - context_skirt_extent) > 0.2 * max(context_skirt_ex
         "可能性があります。base_skirt_pc/base_skirt_facesの変数を削除してから、"
         f"{body_context_path} のskirt_base_vertices/skirt_facesを使い直してください。"
     )
-# "body_motion"(全SKIN頂点の平均変位)を全スカート頂点にそのまま
-# broadcastすると空間的な変形が失われ、スカートが剛体的に平行移動する
-# だけになる。スカート頂点ごとに最近傍Body/SKIN頂点を対応付けた
-# "skirt_vertex_body_motion"(空間的に変化する特徴量)を優先して使う。
+
+# この処理は何をするか
+# スカート頂点ごとに空間変化する身体変位特徴量を優先取得する
+#
+# どうやって実現しているか
+# PKL内に skirt_vertex_body_motion が存在すればそれを採用し なければ全体平均の body_motion にフォールバック
+#
+# 注意点
+# 全体平均の body_motion をブロードキャストするとスカート全体が剛体移動して相対変形が失われるため
+# 空間的な変形を表現可能な頂点別特徴量を優先する
 if "skirt_vertex_body_motion" in context:
     body_motion = np.asarray(context["skirt_vertex_body_motion"], dtype=np.float32)
     if body_motion.ndim != 3 or body_motion.shape[1:] != (len(base_vertices), 3):
@@ -142,6 +220,18 @@ body_motion = np.broadcast_to(
 
 
 def enforce_body_clearance(vertices, context):
+    # この処理は何をするか
+    # 生成された全フレームのスカート頂点列に対し Body メッシュとの衝突貫通を幾何学的に解消する
+    #
+    # どうやって実現しているか
+    # 1 各フレームに対応する Body 頂点 body_points および外向き方向 body_normals を取得
+    # 2 腰帯領域以外の頂点について 最近傍 Body 頂点との距離を計算
+    # 3 必要クリアランスを下回る頂点を body_normals 方向または相対ベクトル方向へ段階的に押し出す
+    # 4 最大反復回数内で収束するまで押し出しを反復
+    #
+    # 注意点
+    # 腰帯領域は人体にフィットさせるためクリアランス押し出しから除外する
+    # 収束しないフレームが存在する場合は形状破綻の兆候として即座にエラー停止する
     body_frames = np.asarray(context.get("skinned_vertices", []), dtype=np.float32)
     body_normals = np.asarray(context.get("skinned_normals", []), dtype=np.float32)
     clearances = np.asarray(
@@ -150,7 +240,7 @@ def enforce_body_clearance(vertices, context):
     )
     if body_frames.ndim != 3 or body_normals.shape != body_frames.shape:
         raise RuntimeError(
-            "GLB生成: 衝突投影用のBody法線がありません。"
+            "GLB生成: 衝突投影用の body_normals がありません。"
             " create_skirt_body_context.pyを再実行してください。"
         )
     thigh_surface_distances = np.asarray(
@@ -167,9 +257,9 @@ def enforce_body_clearance(vertices, context):
             "GLB生成: ローカル単位のクリアランスがありません。"
         )
     base_y = base_vertices[:, 1]
-    waistband = base_y >= np.max(base_y) - 0.10 * max(
+    waistband = base_y >= np.max(base_y) - WAISTBAND_MARGIN_RATIO * max(
         float(np.ptp(base_y)),
-        1.0e-6,
+        SMALL_DISTANCE_EPSILON,
     )
     corrected = np.asarray(vertices, dtype=np.float32).copy()
     correction_count = 0
@@ -201,12 +291,12 @@ def enforce_body_clearance(vertices, context):
             safe_distances[waistband] = 0.0
             pushes = safe_distances - distances
             pushes[waistband] = 0.0
-            active = pushes > 1.0e-6
+            active = pushes > SMALL_DISTANCE_EPSILON
             if not np.any(active):
                 converged = True
                 break
             directions = np.zeros_like(offsets)
-            valid_directions = distances > 1.0e-6
+            valid_directions = distances > SMALL_DISTANCE_EPSILON
             directions[valid_directions] = (
                 offsets[valid_directions]
                 / distances[valid_directions, None]
@@ -231,6 +321,18 @@ def enforce_body_clearance(vertices, context):
 
 
 def validate_generated_geometry(vertices, faces, context):
+    # この処理は何をするか
+    # GLB出力直前の全フレーム頂点配列に対し 形状の健全性と身体面との距離制約を多角的に検証する
+    #
+    # どうやって実現しているか
+    # 1 面の面積計算により縮退面や極小反転面を検出
+    # 2 エッジ長伸縮比率により過度の引き裂きや過密化を検出
+    # 3 Ericsonアルゴリズムと unit_normal による符号付き面距離 signed_surface_distance を用いて太腿面との離隔を厳密計測
+    # 4 最小許容面距離を下回るフレームがあればエラーを発生
+    #
+    # 注意点
+    # 最初のフレーム (Basis) はアニメーションオフセットを含まない素の基準メッシュと比較し
+    # 2フレーム目以降はスキニング後メッシュとの相対変化として正しく検証する
     if not np.isfinite(vertices).all():
         raise RuntimeError("GLB検証: 頂点列にNaNまたはInfがあります。")
     body_frames = np.asarray(context.get("skinned_vertices", []), dtype=np.float32)
@@ -303,19 +405,19 @@ def validate_generated_geometry(vertices, faces, context):
         va = d3 * d6 - d5 * d4
         vb = d5 * d2 - d1 * d6
         vc = d1 * d4 - d3 * d2
-        denominator = np.maximum(va + vb + vc, 1.0e-8)
+        denominator = np.maximum(va + vb + vc, BODY_DISTANCE_EPSILON)
         v = (vb / denominator)[:, None]
         w = (vc / denominator)[:, None]
         closest = a + ab * v + ac * w
         # 優先度の低い領域から順に上書きし、Ericson法と同じ判定順序にする
         edge_bc = ((d4 - d3) + (d5 - d6))
-        t_bc = ((d4 - d3) / np.maximum(edge_bc, 1.0e-8))[:, None]
+        t_bc = ((d4 - d3) / np.maximum(edge_bc, BODY_DISTANCE_EPSILON))[:, None]
         closest = np.where(
             ((va <= 0.0) & ((d4 - d3) >= 0.0) & ((d5 - d6) >= 0.0))[:, None],
             b + (c - b) * t_bc,
             closest,
         )
-        t_ac = (d2 / np.maximum(d2 - d6, 1.0e-8))[:, None]
+        t_ac = (d2 / np.maximum(d2 - d6, BODY_DISTANCE_EPSILON))[:, None]
         closest = np.where(
             ((vb <= 0.0) & (d2 >= 0.0) & (d6 <= 0.0))[:, None],
             a + ac * t_ac,
@@ -326,7 +428,7 @@ def validate_generated_geometry(vertices, faces, context):
             c,
             closest,
         )
-        t_ab = (d1 / np.maximum(d1 - d3, 1.0e-8))[:, None]
+        t_ab = (d1 / np.maximum(d1 - d3, BODY_DISTANCE_EPSILON))[:, None]
         closest = np.where(
             ((vc <= 0.0) & (d1 >= 0.0) & (d3 <= 0.0))[:, None],
             a + ab * t_ab,
@@ -384,7 +486,7 @@ def validate_generated_geometry(vertices, faces, context):
             point,
             triangle_points,
         )
-        valid = lengths > 1.0e-8
+        valid = lengths > BODY_DISTANCE_EPSILON
         if not np.any(valid):
             return None
         closest = closest[valid]
@@ -445,13 +547,13 @@ def validate_generated_geometry(vertices, faces, context):
         axis=1,
     )
     base_y = base_vertices[:, 1]
-    waistband = base_y >= np.max(base_y) - 0.10 * max(
+    waistband = base_y >= np.max(base_y) - WAISTBAND_MARGIN_RATIO * max(
         float(np.ptp(base_y)),
-        1.0e-6,
+        SMALL_DISTANCE_EPSILON,
     )
-    min_area = 1.0e-5
-    min_edge_ratio = 0.55
-    max_edge_ratio = 1.65
+    min_area = MINIMUM_SURFACE_AREA
+    min_edge_ratio = MINIMUM_EDGE_RATIO
+    max_edge_ratio = MAXIMUM_EDGE_RATIO
     minimum_area = float("inf")
     maximum_edge_ratio = 0.0
     minimum_body_distance = float("inf")
@@ -491,7 +593,7 @@ def validate_generated_geometry(vertices, faces, context):
                 - frame_vertices[edge_pairs[:, 1]],
                 axis=1,
             ),
-            np.maximum(reference_edges, 1.0e-8),
+            np.maximum(reference_edges, BODY_DISTANCE_EPSILON),
         )
         frame_max_ratio = float(np.max(edge_ratios))
         maximum_edge_ratio = max(maximum_edge_ratio, frame_max_ratio)
@@ -510,7 +612,7 @@ def validate_generated_geometry(vertices, faces, context):
             minimum_thigh_surface_distance,
             surface_distance,
         )
-        if surface_distance < 0.095:
+        if surface_distance < MIN_BODY_DISTANCE_THRESHOLD:
             raise RuntimeError(
                 f"GLB検証: frame={frame_index}の太腿Body面符号距離が不足しています。"
                 f" distance={surface_distance:.6f}"
@@ -526,7 +628,7 @@ def validate_generated_geometry(vertices, faces, context):
             minimum_thigh_surface_distance,
             thigh_surface_distance,
         )
-        if thigh_surface_distance < 0.095:
+        if thigh_surface_distance < MIN_BODY_DISTANCE_THRESHOLD:
             raise RuntimeError(
                 f"GLB検証: frame={frame_index}の太腿Body面距離が不足しています。"
                 f" distance={thigh_surface_distance:.6f}"
@@ -574,6 +676,16 @@ def predict_vertices(progress):
 
 
 def resolve_animation_vertices(progresses):
+    # この処理は何をするか
+    # アニメーション出力用の全フレーム頂点軌道を決定する
+    #
+    # どうやって実現しているか
+    # 1 PKL内に衝突回避済みの幾何教師データ (skirt_geometric_teacher_vertices) が存在する場合はそれを優先採用
+    # 2 存在しない場合は DNN モデルに各進行度を入力して推論を実行
+    #
+    # 注意点
+    # 衝突フリーな2つの姿勢を線形補間しても中間フレームで衝突フリー性は保証されないため
+    # 教師フレーム数とアニメーションフレーム数が一致しない場合は補間推測せず停止させる
     teacher = context.get("skirt_geometric_teacher_vertices")
     if teacher is not None:
         teacher = np.asarray(teacher, dtype=np.float32)
@@ -590,8 +702,6 @@ def resolve_animation_vertices(progresses):
             "skirt_geometric_teacher_vertices "
             "(collision-safe authoritative trajectory)"
         )
-        # 衝突フリーな2姿勢の線形補間は衝突フリーではないため、
-        # フレーム数が一致しない場合は推測せずに停止する。
         if len(teacher) != len(progresses):
             raise RuntimeError(
                 "教師フレーム数と出力フレーム数が一致しません: "
@@ -715,18 +825,22 @@ with open(mapping_path, "w", encoding="utf-8") as file:
         ensure_ascii=False,
     )
 
-# 異常に大きい変位はThree.jsのバウンディングボックスをモーフ込みで
-# 極端に膨張させ、ビューアでモデルが見えなくなる原因になる。
+# この処理は何をするか
+# 頂点変位が基準メッシュ対角長に対して異常に巨大化していないかを検証する
+#
+# どうやって実現しているか
+# 全フレームの最大頂点変位ノルムを基準メッシュ対角長で除算し 上限倍率 MAX_DISPLACEMENT_RATIO_LIMIT を超過していないか判定
+#
+# 注意点
+# 異常変位が含まれるとThree.js側でバウンディングボックスが極端に膨張し モデルが画面外に消える原因となる
+# 古いモデルによる学習データ不整合が疑われる場合は z-score を用いて再学習の必要性を診断する
 base_extent = float(np.linalg.norm(base_vertices.max(axis=0) - base_vertices.min(axis=0)))
 displacement_norms = np.linalg.norm(vertices - base_vertices[None, :, :], axis=2)
 max_displacement = float(displacement_norms.max())
-max_displacement_ratio = max_displacement / max(base_extent, 1.0e-8)
-if max_displacement_ratio > 5.0:
+max_displacement_ratio = max_displacement / max(base_extent, BODY_DISTANCE_EPSILON)
+if max_displacement_ratio > MAX_DISPLACEMENT_RATIO_LIMIT:
     worst_frame = int(np.argmax(displacement_norms.max(axis=1)))
 
-    # modelは学習時の入力分布をinput_center/input_scaleバッファに保持している。
-    # 今回の入力がその分布から極端に外れているなら、body_motion側ではなく
-    # 「学習し直していない古いmodelを使っている」ことが原因である可能性が高い。
     stale_model_hint = ""
     input_center = getattr(model, "input_center", None)
     input_scale = getattr(model, "input_scale", None)

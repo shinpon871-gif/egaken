@@ -113,6 +113,8 @@ type SkirtDeformationMetadata = {
 };
 
 const skirtDeformationMetadata = skirtDeformation as SkirtDeformationMetadata;
+
+// スカート変形メタデータから取得したパラメータによるアセットキャッシュ更新用バージョン識別文字列
 const SKIRT_ASSET_VERSION = [
   skirtDeformationMetadata.progress ?? 0,
   skirtDeformationMetadata.vertex_count ?? 0,
@@ -122,51 +124,107 @@ const SKIRT_ASSET_VERSION = [
   .map((value) => Number(value).toFixed(4))
   .join('_');
 
+// スカートモーフ重みが有効に変化しているかを判定する微小閾値
 const SKIRT_MORPH_WEIGHT_EPSILON = 1e-6;
 
-// モデルと生成済みスカートアセットの参照先
+// ベクトルの長さ二乗がゼロと見なせる微小閾値
+const SMALL_VECTOR_LENGTH_SQ = 1e-8;
+
+// 方向ベクトル間の角度差がゼロと見なせる微小角度閾値
+const SMALL_ANGLE_EPSILON = 1e-5;
+
+// 座位アニメーションの再生終了位置を切り詰める安全進捗上限比率
+// 100%まで再生すると人体骨格が不自然に折れ曲がるため85%でクリップする
+const SAFE_SIT_CLIP_PROGRESS = 0.85;
+
+// 読み込み対象のFBX人体アニメーションモデルの公開パス
 const FBX_MODEL_PATH = '/models/StandToSit_model.fbx';
+
+// 読み込み対象のスカートGLBモーフアニメーションモデルの公開パス
 const SKIRT_GLB_PATH = '/models/skirt_mesh_sitting_animation.glb';
 
-// 画面全体と照明で共有する色
+// 3次元空間の背景色ダークネイビー
 const SCENE_BACKGROUND_COLOR = '#0f172a';
+
+// 半球ライトの空側から差し込む白色光
 const HEMISPHERE_SKY_COLOR = '#ffffff';
+
+// 半球ライトの地面側からの照り返し暗灰色光
 const HEMISPHERE_GROUND_COLOR = '#334155';
 
-// 初期カメラとモデル配置
+// 初期カメラの3次元座標位置 X=0 Y=0 Z=4.5
 const CAMERA_INITIAL_POSITION: [number, number, number] = [0, 0, 4.5];
+
+// カメラの垂直視野角 32度
 const CAMERA_FOV = 32;
+
+// モデル表示ルートの原点基準座標 X=0 Y=0 Z=0
 const MODEL_BASE_POSITION: [number, number, number] = [0, 0, 0];
+
+// カメラオービット操作の中心注視点座標 X=0 Y=0 Z=0
 const ORBIT_CONTROLS_TARGET: [number, number, number] = [0, 0, 0];
 
-// ライト設定
+// 上下均等な環境光を補う半球ライトの光度
 const HEMISPHERE_LIGHT_INTENSITY = 0.7;
+
+// 全方位から均一に照らす環境光の光度
 const AMBIENT_LIGHT_INTENSITY = 0.5;
+
+// 斜め前方上方から陰影を作る平行光源の配置座標 X=5 Y=10 Z=6
 const DIRECTIONAL_LIGHT_POSITION: [number, number, number] = [5, 10, 6];
+
+// 平行光源の光度
 const DIRECTIONAL_LIGHT_INTENSITY = 1.5;
+
+// 斜め後方上方からハイライトを作るスポット光源の配置座標 X=-5 Y=8 Z=4
 const SPOT_LIGHT_POSITION: [number, number, number] = [-5, 8, 4];
+
+// スポット光源の光度
 const SPOT_LIGHT_INTENSITY = 0.8;
+
+// スポットライトの境界ぼかし度合い 半影比率 0.5
 const SPOT_LIGHT_PENUMBRA = 0.5;
 
-// UI表示と操作量
+// 画面右側に配置する操作パネルの横幅ピクセル数 340px
 const CONTROL_PANEL_WIDTH = 340;
+
+// アニメーション進捗スライダーの最小値 立位状態 0.0
 const PROGRESS_MIN = 0;
+
+// アニメーション進捗スライダーの最大値 着席完了状態 1.0
 const PROGRESS_MAX = 1;
+
+// 進捗スライダーの最小操作刻み幅 0.001
 const PROGRESS_STEP = 0.001;
+
+// 立つ座るボタン押下時にポーズを自動シークする1秒あたりの進行速度倍率
 const AUTO_SEEK_SPEED = 1.2;
+
+// 自動シークで目標進捗値に到達したと判定する許容誤差イプシロン
 const TARGET_EPSILON = 1e-4;
 
-// モデルを画面内へ収めるための表示比率
+// 画面垂直視野の高さに対してモデルが占める目標表示比率 85%
 const MODEL_VIEW_HEIGHT_FRACTION = 0.85;
+
+// モデル境界ボックス取得に失敗した際の予備スケール倍率 0.01倍
 const FALLBACK_OBJECT_SCALE = 0.01;
 
-// マテリアル設定
+// アニメーションクリップ再生時間が未取得の場合にゼロ除算を防ぐ既定の再生秒数 1.0秒
+const DEFAULT_CLIP_DURATION = 1.0;
+
+// FBX人体および衣服メッシュの標準ラフネス粗さ 0.5
 const FBX_MATERIAL_ROUGHNESS = 0.5;
+
+// FBX人体および衣服メッシュの標準メタリック金属度 0.1
 const FBX_MATERIAL_METALNESS = 0.1;
+
+// スカートメッシュの布地らしい質感を出すラフネス粗さ 0.55
 const SKIRT_MATERIAL_ROUGHNESS = 0.55;
+
+// スカートメッシュの布地らしい質感を出すメタリック金属度 0.05
 const SKIRT_MATERIAL_METALNESS = 0.05;
 
-// 初期配色
+// 衣服や身体各部位の初期配色パレット定義
 const DEFAULT_COLORS: Record<ColorCategory, string> = {
   hair: '#3b2418',
   skin: '#f5dcc0',
@@ -176,11 +234,14 @@ const DEFAULT_COLORS: Record<ColorCategory, string> = {
   default: '#d1d5db',
 };
 
+// スカートのモーフアニメーションは morphTargetInfluences か weights を含むトラックだけを使う
+// それ以外の骨格トラックは見え方に影響しないので除外して速度と安全性を保つ
 function getSkirtMorphWeightTracks(clip: THREE.AnimationClip): THREE.KeyframeTrack[] {
   return clip.tracks.filter((track) => /morphTargetInfluences|\.weights$/i.test(track.name));
 }
 
-// GLB終端ぴったりを踏むと先頭姿勢へ巻き戻るため有効morphの直前時刻を使う
+// GLB の終端で値が戻るケースがあるので実際に動いている直前の時刻を使う
+// こうしておくと 100% 近くで首振りが起きる問題を避けられる
 function resolveLastValidSkirtMorphTime(clip: THREE.AnimationClip): number {
   const morphTracks = getSkirtMorphWeightTracks(clip);
   let lastValidTime: number | null = null;
@@ -230,7 +291,6 @@ function resolveSkirtClipTime(clip: THREE.AnimationClip, uiProgress: number): nu
 }
 
 // 100%の座位ポーズはモデル上で体が不自然に折れ曲がるため85%程度までで止める
-const SAFE_SIT_CLIP_PROGRESS = 0.85;
 function inferMaterialCategory(materialName: string, meshName: string): ColorCategory {
   const search = `${materialName} ${meshName}`.toLowerCase();
   if (/hair/.test(search)) return 'hair';
@@ -287,12 +347,16 @@ type ArmSpreadBones = {
 };
 
 // 立位区間でのみ腕広げ補正を有効化する終了進捗
+// 0.0から0.18までの立位初期でのみ腕を外側に開き太ももとの接触を防ぐ
 const STANDING_ARM_SPREAD_END_PROGRESS = 0.18;
-// 現在腕方向を目標方向へ寄せる補間率
+
+// 現在の腕方向を目標の外開き方向へ寄せる補間割合 38%
 const STANDING_ARM_OUTWARD_BLEND = 0.38;
-// 目標腕方向を作る際の左右成分の重み
+
+// 目標腕方向を生成する際の体幹横方向ベクトルの合成重み
 const STANDING_ARM_OUTWARD_LATERAL_WEIGHT = 0.34;
-// 1フレームあたりの最大回転角
+
+// 腕外開き補正における1フレームあたりの最大回転角度 4度
 const STANDING_ARM_OUTWARD_MAX_ANGLE = THREE.MathUtils.degToRad(4);
 
 type LegCloseBones = {
@@ -315,104 +379,132 @@ type ResolvedLegAdductionCalibration = {
   rightAxis: THREE.Vector3;
 };
 
+// 座位への脚閉じ補正を開始するアニメーション進捗閾値
+// 0.12未満では歩容や着席動作の自然な開きを維持する
 const THIGH_CLOSE_START_PROGRESS = 0.12;
+
+// 座位への脚閉じ補正が100%完全適用となるアニメーション進捗閾値
 const THIGH_CLOSE_FULL_PROGRESS = 0.58;
 
-// 座位時の脚閉じ密着化定義
-// 目標は股間が見えないほど太もも同士を閉じた状態
-
-// 座位脚閉じ関連の各パラメータ定義
-// 内腿サンプリング位置の補間係数
-// 0が太もも側 1が膝側
+// 太もも付け根から膝の間で内股間隔を計測する補間係数 0が付け根 1が膝
+// 22%の位置で計測し太もも内側の最も接触しやすい部位を監視する
 const INNER_THIGH_SAMPLE_T = 0.22;
-// ターゲット時の内腿間隔の比率
+
+// 脚閉じ完了時における着席基準内股間隔に対する目標隙間比率 1%
 const TARGET_INNER_THIGH_GAP_RATIO_AT_FULL_CLOSE = 0.010;
-// ターゲット時の膝間隔の比率
+
+// 脚閉じ完了時における着席基準膝間隔に対する目標隙間比率 2%
 const TARGET_KNEE_GAP_RATIO_AT_FULL_CLOSE = 0.02;
-// ターゲット時の足首間隔の比率
+
+// 脚閉じ完了時における着席基準足首間隔に対する目標隙間比率 20%
 const TARGET_ANKLE_GAP_RATIO_AT_FULL_CLOSE = 0.20;
-// 内腿ギャップの厳格な下限
+
+// 着席基準内股間隔に対する安全ガード用ハード下限比率 1%
 const HARD_MIN_INNER_THIGH_GAP_RATIO_FROM_SIT_POSE = 0.010;
-// 膝ギャップの厳格な下限
+
+// 着席基準膝間隔に対する安全ガード用ハード下限比率 2%
 const HARD_MIN_KNEE_GAP_RATIO_FROM_SIT_POSE = 0.02;
-// 足首ギャップの厳格な下限
+
+// 着席基準足首間隔に対する安全ガード用ハード下限比率 10%
 const HARD_MIN_ANKLE_GAP_RATIO_FROM_SIT_POSE = 0.10;
-// 太もも内転の最大回転角
+
+// 太ももボーンを内転回転させるローカル最大回転角度 17.5度
 const MAX_THIGH_ADDUCTION_LOCAL_ANGLE = THREE.MathUtils.degToRad(17.5);
-// 膝の世界座標調整の最大回転角
+
+// 膝位置を目標方向へ向けるワールド姿勢補正の最大回転角度 4.0度
 const MAX_WORLD_KNEE_ALIGN_ANGLE = THREE.MathUtils.degToRad(4.0);
-// 軸キャリブレーション時のテスト回転角度
+
+// 内転回転軸のキャリブレーション探索時に試行回転させるテスト角度 2.5度
 const CALIBRATION_TEST_ANGLE = THREE.MathUtils.degToRad(2.5);
 
-// 脚閉じ探索で使用する数値的な閾値
-// ギャップ値の下限
+// 間隔計算においてゼロ除算を防ぐ最小安全値 0.001
 const GAP_EPSILON_MIN = 0.001;
-// 左右脚が元の側に留まる判定用閾値
+
+// 左右の脚が境界を越えて交差していないかを判定する境界イプシロン 0.001
 const LEG_SIDE_KEEP_EPSILON = 0.001;
-// 脚閉じ進行度がほぼゼロと見なす閾値
+
+// 脚閉じ補正処理を有効とみなす最小進行度閾値 0.0001
 const LEG_CLOSE_PROGRESS_ACTIVE_EPSILON = 0.0001;
-// ベクトル外積の長さ二乗の下限
+
+// 外積ベクトルの長さ二乗がゼロとみなせる微小閾値
 const CROSS_AXIS_MIN_LENGTH_SQ = 1e-8;
-// 方向ベクトル間の角度の下限
+
+// 方向ベクトル間の角度差が計算可能とみなす最小角度閾値
 const DIRECTION_ALIGNMENT_MIN_ANGLE = 1e-5;
 
-// 軸キャリブレーション評価における重み係数
-// 膝の上下ずれペナルティ重み
+// 軸キャリブレーション評価において膝の上下方向Y軸ずれに課すペナルティ重み
 const AXIS_CALIBRATION_Y_PENALTY_WEIGHT = 0.25;
-// 膝の前後ずれペナルティ重み
+
+// 軸キャリブレーション評価において膝の前後方向Z軸ずれに課すペナルティ重み
 const AXIS_CALIBRATION_Z_PENALTY_WEIGHT = 0.25;
-// 足首の側方ずれペナルティ重み
+
+// 軸キャリブレーション評価において足首の横方向ずれに課すペナルティ重み
 const AXIS_CALIBRATION_FOOT_LATERAL_PENALTY_WEIGHT = 0.12;
-// 脚交差検出時のペナルティ
+
+// 軸キャリブレーション評価において左右脚の交差が発生した際に課すペナルティ値
 const AXIS_CALIBRATION_SIDE_BREAK_PENALTY = 0.4;
-// 軸キャリブレーション時の最小受け入れスコア
+
+// 軸キャリブレーションで採用を許可する最小許容スコア閾値
 const AXIS_CALIBRATION_MIN_ACCEPTABLE_SCORE = -0.05;
-// 軸の方向パターン数
+
+// 軸方向の反転パターン数 正方向と負方向の2パターン
 const AXIS_SIGN_VARIANTS = 2;
 
-// ターゲット値の微調整を開始する判定用マージン
-// 内腿ギャップがターゲット超過時の許容値
+// 目標位置調整をトリガーする内股隙間の許容超過マージン
 const REFINE_TRIGGER_INNER_GAP_MARGIN = 0.002;
-// 膝ギャップがターゲット超過時の許容値
+
+// 目標位置調整をトリガーする膝隙間の許容超過マージン
 const REFINE_TRIGGER_KNEE_GAP_MARGIN = 0.01;
-// 脚が交差しないよう制限する値
+
+// 目標脚位置を中央境界でクランプする際の最小離隔イプシロン
 const TARGET_SIDE_CLAMP_EPSILON = 0.001;
 
-// 脚閉じ探索時の対称と非対称な内転スケール候補
-// 太もも内転の回転スケール候補
+// 太もも内転回転角のスケール探索候補リスト 2.4倍から0.2倍まで12段階
 const LEG_CLOSE_BASE_SCALES = [2.40, 2.20, 2.00, 1.80, 1.60, 1.40, 1.20, 1.00, 0.80, 0.60, 0.40, 0.20];
-// 左右非対称な内転を試す際のオフセット
+
+// 左右脚の非対称回転を試行するためのオフセット候補リスト
 const LEG_CLOSE_ASYMMETRY_OFFSETS = [0.0, -0.12, 0.12, -0.22, 0.22];
 
-// スコア計算における重み係数
-// 優先順は内腿密着 膝密着 足首自然さ
-// 内腿ギャップの小ささ重視重み
+// 脚閉じ姿勢スコア計算における内股隙間の最小化を重視する重み係数
 const SCORE_INNER_GAP_WEIGHT = 1400;
-// 内腿ギャップがターゲット超過時のペナルティ重み
+
+// 内股隙間が目標値を超過した際に課すペナルティ重み係数
 const SCORE_INNER_EXCESS_WEIGHT = 600;
-// 膝ギャップの小ささ重視重み
+
+// 脚閉じ姿勢スコア計算における膝隙間の最小化を重視する重み係数
 const SCORE_KNEE_GAP_WEIGHT = 180;
-// 膝ギャップがターゲット超過時のペナルティ重み
+
+// 膝隙間が目標値を超過した際に課すペナルティ重み係数
 const SCORE_KNEE_EXCESS_WEIGHT = 80;
-// 足首ギャップがターゲット以下の場合のボーナス重み
+
+// 足首隙間が目標値以下に収まっている場合に与えるボーナス重み係数
 const SCORE_ANKLE_BONUS_WEIGHT = 0.5;
-// 左右内転スケール差異のペナルティ重み
+
+// 左右脚の内転スケール差による非対称性に課すペナルティ重み係数
 const SCORE_ASYMMETRY_WEIGHT = 0.15;
 
-// 探索の早期終了判定用品質閾値
-// 内腿ギャップがターゲット以下となる許容値
+// 探索の早期終了を判定する内股隙間の許容マージン
 const EARLY_ACCEPT_INNER_GAP_MARGIN = 0.0015;
-// 膝ギャップがターゲット以下となる許容値
+
+// 探索の早期終了を判定する膝隙間の許容マージン
 const EARLY_ACCEPT_KNEE_GAP_MARGIN = 0.004;
-// 探索早期終了判定時の内腿重み指数
+
+// 探索早期終了判定における内股隙間の重み指数
 const EARLY_BREAK_INNER_WEIGHT = 1000;
-// 探索早期終了判定時の膝重み指数
+
+// 探索早期終了判定における膝隙間の重み指数
 const EARLY_BREAK_KNEE_WEIGHT = 120;
-// 探索早期終了判定時のスコアベースオフセット
+
+// 探索早期終了判定におけるスコア基準オフセット値
 const EARLY_BREAK_SCORE_BIAS = 2.0;
 
+// 軸リカバリログの最大出力件数
 const LEG_ADDUCTION_AXIS_RECOVERY_MAX_LOGS = 0;
+
+// 脚閉じ処理の詳細トレースログ出力フラグ
 const LEG_ADDUCTION_TRACE = false;
+
+// 詳細トレースログの最大出力件数
 const LEG_ADDUCTION_TRACE_MAX_LOGS = 0;
 
 type SeatedLegReference = {
@@ -527,6 +619,8 @@ function smoothstep01(value: number): number {
   return t * t * (3 - 2 * t);
 }
 
+// 骨格のローカル座標を股関節基準で取る
+// この座標系を使うと左右脚の位置差を扱いやすくなる
 function getLocalPositionFromBone(
   hips: THREE.Object3D,
   bone: THREE.Object3D,
@@ -537,6 +631,8 @@ function getLocalPositionFromBone(
   return out.applyMatrix4(hipInv);
 }
 
+// 太ももの内側をまっすぐな線で取ることで座位時の密着感を安定させる
+// 内側を少し膝寄りに寄せて脚の接触位置を自然に保つ
 function getInnerThighLocalSample(
   hips: THREE.Object3D,
   thigh: THREE.Object3D,
@@ -550,10 +646,14 @@ function getInnerThighLocalSample(
   return out.applyMatrix4(hipInv);
 }
 
+// 左右の広がりを知るための軸上の符号付き値を計算する
+// 右側が正で左側が負になるようにして閉じ具合を比較しやすくする
 function getSignedLateralValue(localPos: THREE.Vector3, lateralAxisLocal: THREE.Vector3): number {
   return localPos.dot(lateralAxisLocal);
 }
 
+// 左右の候補位置から横方向軸を決める
+// 脚が近すぎて方向が取れないときは太ももの位置で代替軸を作る
 function resolveLateralAxisLocal(
   hips: THREE.Object3D,
   leftCandidate: THREE.Vector3,
@@ -564,13 +664,13 @@ function resolveLateralAxisLocal(
 ): THREE.Vector3 {
   const axis = new THREE.Vector3().subVectors(rightCandidate, leftCandidate);
 
-  if (axis.lengthSq() < 1e-8 && fallbackBoneLeft && fallbackBoneRight) {
+  if (axis.lengthSq() < SMALL_VECTOR_LENGTH_SQ && fallbackBoneLeft && fallbackBoneRight) {
     const leftThighLocal = getLocalPositionFromBone(hips, fallbackBoneLeft, new THREE.Vector3(), hipInv);
     const rightThighLocal = getLocalPositionFromBone(hips, fallbackBoneRight, new THREE.Vector3(), hipInv);
     axis.copy(rightThighLocal.sub(leftThighLocal));
   }
 
-  if (axis.lengthSq() < 1e-8) {
+  if (axis.lengthSq() < SMALL_VECTOR_LENGTH_SQ) {
     axis.set(1, 0, 0);
   } else {
     axis.normalize();
@@ -579,6 +679,8 @@ function resolveLateralAxisLocal(
   return axis;
 }
 
+// 座位時の基準脚の位置と間隔を保存する
+// 立位から座位へ進む途中で左右のギャップを比較する材料として使う
 function captureSeatedLegReference(root: THREE.Object3D, bones: LegCloseBones): SeatedLegReference | null {
   if (!bones.hips || !bones.leftThigh || !bones.rightThigh || !bones.leftKnee || !bones.rightKnee) return null;
 
@@ -636,6 +738,8 @@ function captureSeatedLegReference(root: THREE.Object3D, bones: LegCloseBones): 
   };
 }
 
+// 現在の脚の開き具合を計測する
+// 座位基準との差分を見て閉じるべき強さを決める
 function measureLegGaps(
   hips: THREE.Object3D,
   bones: LegCloseBones,
@@ -698,6 +802,8 @@ function measureLegGaps(
   };
 }
 
+// 太ももの内転軸を候補から選ぶ
+// 体の形状が変わると軸がぶれるので試行しながら安全な方向を探す
 function evaluateThighAdductionAxis(
   root: THREE.Object3D,
   bones: LegCloseBones,
@@ -780,10 +886,11 @@ function evaluateThighAdductionAxis(
 }
 
 function fallbackAdductionAxisFromSide(side: 'left' | 'right'): THREE.Vector3 {
-  // 軸キャリブレーション失敗時は股関節ローカルの左右回頭方向を代替として使う
+  // 軸の見つけ方が失敗したときは太ももの自然な回転方向を安全側で使う
   return side === 'left' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, -1, 0);
 }
 
+// 脚の内転軸を初期化して次の補正で使えるようにする
 function captureLegAdductionCalibration(root: THREE.Object3D, bones: LegCloseBones): LegAdductionCalibration {
   return {
     leftAxis: evaluateThighAdductionAxis(root, bones, bones.leftThigh, bones.leftKnee, bones.leftFoot, 'left'),
@@ -844,6 +951,8 @@ function resolveLegAdductionCalibration(
 }
 
 
+// 座位に近づくにつれて脚を閉じて太ももがぶつからないようにする
+// 間隔の下限を守りながら自然な角度を選ぶ
 function applySeatedLegAdductionWithGapLimit(
   root: THREE.Object3D,
   bones: LegCloseBones,
@@ -1062,6 +1171,8 @@ function applySeatedLegAdductionWithGapLimit(
   root.updateMatrixWorld(true);
 }
 
+// 立位では腕を少し外側へ開いて袖や手が太ももに食い込まないようにする
+// 座位に進むと補正を弱くして自然な姿勢へ戻す
 function applyStandingUpperArmSpread(
   root: THREE.Object3D,
   bones: ArmSpreadBones,
@@ -1077,6 +1188,7 @@ function applyStandingUpperArmSpread(
   const hipsWorldQ = bones.hips.getWorldQuaternion(new THREE.Quaternion());
   const worldDown = new THREE.Vector3(0, -1, 0).applyQuaternion(hipsWorldQ).normalize();
 
+  // 立位区間では腕を外側に開くように補正して手の位置が大腿部とぶつかる状態を防ぐ
   const applyToSide = (
     upperArm: THREE.Object3D,
     forearm: THREE.Object3D,
@@ -1107,10 +1219,10 @@ function applyStandingUpperArmSpread(
     const axisLenSq = axisWorld.lengthSq();
     const angle = currentDir.angleTo(desiredDir);
 
-    if (!Number.isFinite(angle) || angle <= 1e-5) return;
+    if (!Number.isFinite(angle) || angle <= SMALL_ANGLE_EPSILON) return;
 
     const safeAxisWorld =
-      axisLenSq > 1e-8
+      axisLenSq > SMALL_VECTOR_LENGTH_SQ
         ? axisWorld.normalize()
         : worldDown.clone().cross(lateralWorld).normalize();
 
@@ -1231,6 +1343,8 @@ function applyCustomMaterials(
   }
 }
 
+// スカートはモーフアニメーション済みのメッシュをそのまま使うので
+// 見た目だけを統一するシンプルなマテリアルへ置き換える
 function applyAnimatedSkirtMaterial(
   root: THREE.Object3D | null,
   wireframe: boolean,
@@ -1297,7 +1411,7 @@ function SceneWithFBX({
   const fbx = useFBX(fbxPath) as THREE.Group & { animations?: THREE.AnimationClip[] };
   const skirtGltf = useGLTF(skirtGlbPath) as AnimatedSkirtGltf;
   
-  // FBX元データを直接汚さないようスケルトンを複製する
+  // FBX そのものを壊さないためスケルトンだけ複製して編集用の姿勢を作る
   const cloned = useMemo(() => {
     if (!fbx) return null;
     const clonedGroup = skeletonClone(fbx) as THREE.Group;
@@ -1357,9 +1471,9 @@ function SceneWithFBX({
   }, [clonedSkirt]);
 
   // アニメーションクリップの選択と初期化
+  // モデルの本来の動きをそのまま使いながら表示専用のトラックだけを残す
   const selectedClip = useMemo(() => {
     if (!fbx?.animations || fbx.animations.length === 0) return null;
-    // 一般的なテイク名を含むクリップを優先して探索する
     const clip = fbx.animations.find((candidate) => /mixamo.com|Take|take/i.test(candidate.name)) || fbx.animations[0];
     const renderTracks = clip.tracks.filter((track) => !/^egaken\.(position|quaternion|scale)$/.test(track.name));
     return new THREE.AnimationClip(`${clip.name}_renderable`, clip.duration, renderTracks);
@@ -1370,10 +1484,12 @@ function SceneWithFBX({
     return skirtGltf.animations.find((candidate) => /keyaction|take|skirt/i.test(candidate.name)) || skirtGltf.animations[0];
   }, [skirtGltf]);
 
+  // UI の進行度をアニメーションクリップ時間へ変換して姿勢を再現する
+  // 立位と座位の区間を押さえながら脚の閉じ具合や腕の開き具合を補正する
   const applyPoseAtProgress = useCallback(
     (uiProgress: number) => {
       if (!mixer || !selectedClip || !cloned) return;
-      const duration = selectedClip.duration || 1;
+      const duration = selectedClip.duration || DEFAULT_CLIP_DURATION;
       const clipTime = uiProgressToClipProgress(uiProgress) * duration;
       mixer.setTime(clipTime);
       mixer.update(0);
@@ -1464,7 +1580,7 @@ function SceneWithFBX({
   }, [clonedSkirt, selectedSkirtClip, skirtMixer]);
 
   // アクションの設定と一時停止
-  // 自動再生との競合を排除する
+  // 自動再生と手動操作が競合しないように初期値を揃える
   useEffect(() => {
     if (!mixer || !cloned || !selectedClip) return;
     const action = mixer.clipAction(selectedClip);
@@ -1580,13 +1696,14 @@ function SceneWithFBX({
     };
   }, [SIT_CLIP_PROGRESS, mixer, cloned, fbx, selectedClip]);
 
-  // 初期ポーズ適用と外部変更時の即時反映
+  // スライダーや自動再生で値が変わるたびに姿勢をすぐ再計算する
+  // ここで更新した値がボーンに反映されるので画面が常に同期する
   useEffect(() => {
     applyPoseAtProgress(progress);
   }, [applyPoseAtProgress, progress]);
 
   // サイズと位置の自動計算ロジック
-  // 既存の見え方を維持するため計算式は変更しない
+  // 画面の見え方を保つため既存の比率を維持して拡大率を決める
   const { objectScale, modelOffsetY } = useMemo(() => {
     if (!cloned) return { objectScale: FALLBACK_OBJECT_SCALE, modelOffsetY: 0 };
 
@@ -1617,8 +1734,8 @@ function SceneWithFBX({
     return { objectScale: scale, modelOffsetY: offsetY };
   }, [cloned, camera, modelBasePosition]);
 
-  // ボタン操作とスライダーによるポーズ変更をボーンへ即時反映する
-  // 目標到達後は姿勢値を固定し勝手に戻らないようにする
+  // ボタン操作とスライダーによるポーズ変更をボーンへすぐ反映する
+  // 目標に到達したら値を固定して勝手に戻らないようにする
   useFrame((_, delta) => {
     if (!mixer || !actionRef.current || !selectedClip) return;
 
@@ -1684,7 +1801,7 @@ export default function ClothSimulator() {
 
   const customMapping = useMemo<MeshColorMapping>(() => ({}), []);
 
-  // メッシュ検出コールバックは現状UI未使用のため空関数とする
+  // メッシュ検出コールバックは今は UI で使わないので空の関数だけ用意する
   const handleDiscoverMeshes = useCallback(() => {}, []);
 
   const updateColor = useCallback((category: ColorCategory, value: string) => {

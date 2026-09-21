@@ -106,6 +106,19 @@ type AnimatedSkirtGltf = {
   animations: THREE.AnimationClip[];
 };
 
+interface StyleVector {
+  length: number;
+  tightness: number;
+  pleats: number;
+}
+
+interface MorphTargetIndices {
+  base: number;
+  tight: number;
+  long: number;
+  pleats: number;
+}
+
 type SkirtDeformationMetadata = {
   progress?: number;
   vertex_count?: number;
@@ -196,6 +209,21 @@ const PROGRESS_MAX = 1;
 
 // 進捗スライダーの最小操作刻み幅 0.001
 const PROGRESS_STEP = 0.001;
+
+// 潜在スタイルベクトル操作の最小値
+const STYLE_MIN = 0;
+
+// 潜在スタイルベクトル操作の最大値
+const STYLE_MAX = 1;
+
+// 潜在スタイルベクトル操作の刻み幅
+const STYLE_STEP = 0.01;
+
+const DEFAULT_STYLE_VECTOR: StyleVector = {
+  length: 0,
+  tightness: 0,
+  pleats: 0,
+};
 
 // 立つ座るボタン押下時にポーズを自動シークする1秒あたりの進行速度倍率
 const AUTO_SEEK_SPEED = 1.2;
@@ -1377,6 +1405,71 @@ function applyAnimatedSkirtMaterial(
   });
 }
 
+function getStyleMorphWeights(style: StyleVector): Record<keyof MorphTargetIndices, number> {
+  const length = THREE.MathUtils.clamp(style.length, STYLE_MIN, STYLE_MAX);
+  const tightness = THREE.MathUtils.clamp(style.tightness, STYLE_MIN, STYLE_MAX);
+  const pleats = THREE.MathUtils.clamp(style.pleats, STYLE_MIN, STYLE_MAX);
+  const remainingWithoutPleats = 1 - pleats;
+
+  return {
+    base: (1 - length) * (1 - tightness) * remainingWithoutPleats,
+    tight: tightness * (1 - length) * remainingWithoutPleats,
+    long: length * remainingWithoutPleats,
+    pleats,
+  };
+}
+
+function updateStyleAndPoseMorphs(
+  root: THREE.Object3D | null,
+  poseProgress: number,
+  style: StyleVector
+): void {
+  if (!root) return;
+
+  const styleWeights = getStyleMorphWeights(style);
+  root.traverse((object) => {
+    const mesh = object as THREE.Mesh & {
+      morphTargetDictionary?: Record<string, number>;
+      morphTargetInfluences?: number[];
+    };
+    if (!mesh.isMesh || !mesh.morphTargetDictionary || !mesh.morphTargetInfluences) return;
+
+    const frameIndices = Object.entries(mesh.morphTargetDictionary)
+      .filter(([name]) => /^Style_(base|tight|long|pleats)_\d+$/.test(name))
+      .map(([name]) => Number(name.match(/_(\d+)$/)?.[1] ?? 0));
+    const maxFrame = Math.max(...frameIndices, 0);
+    if (maxFrame === 0) return;
+
+    Object.entries(mesh.morphTargetDictionary).forEach(([name, index]) => {
+      // Style_*_* はBasisからの完全な姿勢形状であり、KeyActionのPose_*と
+      // 同時に加算すると座位変形が二重適用されてスカートが腰から剥がれる。
+      if (/^Pose_\d+$/.test(name)) {
+        mesh.morphTargetInfluences![index] = 0;
+      }
+      if (/^Style_(base|tight|long|pleats)_\d+$/.test(name)) {
+        mesh.morphTargetInfluences![index] = 0;
+      }
+    });
+
+    const framePosition = THREE.MathUtils.clamp(poseProgress, 0, 1) * maxFrame;
+    const lowerFrame = Math.floor(framePosition);
+    const upperFrame = Math.min(Math.ceil(framePosition), maxFrame);
+    const upperWeight = framePosition - lowerFrame;
+    const lowerWeight = 1 - upperWeight;
+
+    (Object.keys(styleWeights) as Array<keyof MorphTargetIndices>).forEach((styleName) => {
+      const styleWeight = styleWeights[styleName];
+      for (const [frame, frameWeight] of [[lowerFrame, lowerWeight], [upperFrame, upperWeight]] as const) {
+        if (frameWeight <= 0 || styleWeight <= 0) continue;
+        const index = mesh.morphTargetDictionary![`Style_${styleName}_${String(frame).padStart(3, '0')}`];
+        if (index !== undefined) {
+          mesh.morphTargetInfluences![index] = styleWeight * frameWeight;
+        }
+      }
+    });
+  });
+}
+
 function SceneWithFBX({
   fbxPath,
   skirtGlbPath,
@@ -1385,6 +1478,7 @@ function SceneWithFBX({
   onProgressChange,
   wireframe,
   playTarget,
+  style,
   onFinished = () => {},
   colors,
   customMapping,
@@ -1397,6 +1491,7 @@ function SceneWithFBX({
   onProgressChange: (p: number) => void;
   wireframe: boolean;
   playTarget: number | null;
+  style: StyleVector;
   onFinished?: () => void;
   colors: Record<ColorCategory, string>;
   customMapping: MeshColorMapping;
@@ -1498,6 +1593,7 @@ function SceneWithFBX({
         skirtMixer.setTime(resolveSkirtClipTime(selectedSkirtClip, uiProgress));
         skirtMixer.update(0);
       }
+      updateStyleAndPoseMorphs(clonedSkirt, uiProgress, style);
 
       const rootMotionOffset = new THREE.Vector3(0, 0, 0);
       if (legCloseBonesRef.current.hips && hipRestPositionRef.current) {
@@ -1546,7 +1642,7 @@ function SceneWithFBX({
         }
       }
     },
-    [cloned, mixer, modelBasePosition, selectedClip, selectedSkirtClip, skirtMixer, uiProgressToClipProgress]
+    [cloned, clonedSkirt, mixer, modelBasePosition, selectedClip, selectedSkirtClip, skirtMixer, style, uiProgressToClipProgress]
   );
 
   // マテリアルの適用とメッシュ検出
@@ -1794,6 +1890,7 @@ export default function ClothSimulator() {
   const [progress, setProgress] = useState(PROGRESS_MIN);
   const [playTarget, setPlayTarget] = useState<number | null>(null);
   const [colors, setColors] = useState<Record<ColorCategory, string>>(DEFAULT_COLORS);
+  const [style, setStyle] = useState<StyleVector>(DEFAULT_STYLE_VECTOR);
 
   const modelBasePosition = MODEL_BASE_POSITION;
   const fbxPath = FBX_MODEL_PATH;
@@ -1836,6 +1933,7 @@ export default function ClothSimulator() {
           onProgressChange={setProgress}
           wireframe={wireframe}
           playTarget={playTarget}
+          style={style}
           onFinished={() => setPlayTarget(null)}
           customMapping={customMapping}
           colors={colors}
@@ -1927,6 +2025,32 @@ export default function ClothSimulator() {
                   value={colors[category]}
                   onChange={(e) => updateColor(category, e.target.value)}
                   className="h-7 w-12 cursor-pointer rounded border border-slate-700 bg-slate-900 p-0.5"
+                  aria-label={label}
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className="mb-4 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800">
+            <div className="text-xs font-medium text-slate-400 mb-2">Skirt Style</div>
+            {([
+              ['length', 'Length'],
+              ['tightness', 'Tightness'],
+              ['pleats', 'Pleats'],
+            ] as const).map(([key, label]) => (
+              <label key={key} className="mt-2 block text-[11px] text-slate-300">
+                <span className="flex items-center justify-between">
+                  <span>{label}</span>
+                  <span className="font-mono text-slate-400">{Math.round(style[key] * 100)}%</span>
+                </span>
+                <input
+                  type="range"
+                  min={STYLE_MIN}
+                  max={STYLE_MAX}
+                  step={STYLE_STEP}
+                  value={style[key]}
+                  onChange={(event) => setStyle((current) => ({ ...current, [key]: Number(event.target.value) }))}
+                  className="mt-1 w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-700 rounded-lg appearance-none"
                   aria-label={label}
                 />
               </label>

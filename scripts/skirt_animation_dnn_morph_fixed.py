@@ -154,8 +154,11 @@ input_features = next(
     (module.in_features for module in model.modules() if isinstance(module, nn.Linear)),
     None,
 )
-if input_features not in (9, 12):
-    raise RuntimeError(f"DNN入力次元は9または12が必要です: {input_features}")
+if input_features not in (12, 15):
+    raise RuntimeError(f"DNN入力次元はスタイルz込みの12または15が必要です: {input_features}")
+
+style_latent_dimensions = 3
+base_input_features = input_features - style_latent_dimensions
 
 with open(body_context_path, "rb") as file:
     context = pickle.load(file)
@@ -656,15 +659,19 @@ def interpolate(values, progress):
     return (1.0 - (index - lower)) * values[lower] + (index - lower) * values[upper]
 
 
-def predict_vertices(progress):
+def predict_vertices(progress, style_vector=None):
     angle = float(progress * max_sit_angle)
     pose = np.repeat(np.asarray([[0.0, angle, 0.0]], dtype=np.float32), len(base_vertices), axis=0)
     motion = interpolate(body_motion, progress)
     position = base_vertices + motion
-    if input_features == 9:
-        inputs = np.concatenate([pose, base_vertices, motion], axis=1)
+    style = np.asarray(style_vector or [0.0, 0.0, 0.0], dtype=np.float32)
+    if style.shape != (style_latent_dimensions,):
+        raise ValueError(f"style_vectorは{style_latent_dimensions}次元で指定してください: {style}")
+    style_rows = np.repeat(style[None, :], len(base_vertices), axis=0)
+    if base_input_features == 9:
+        inputs = np.concatenate([pose, base_vertices, motion, style_rows], axis=1)
     else:
-        inputs = np.concatenate([pose, base_vertices, position, motion], axis=1)
+        inputs = np.concatenate([pose, base_vertices, position, motion, style_rows], axis=1)
     with torch.inference_mode():
         output = model(torch.from_numpy(inputs).to(device=device, dtype=dtype))
     if isinstance(output, (tuple, list)):
@@ -675,7 +682,7 @@ def predict_vertices(progress):
     return base_vertices + prediction
 
 
-def resolve_animation_vertices(progresses):
+def resolve_animation_vertices(progresses, style_name="base"):
     # この処理は何をするか
     # アニメーション出力用の全フレーム頂点軌道を決定する
     #
@@ -686,7 +693,10 @@ def resolve_animation_vertices(progresses):
     # 注意点
     # 衝突フリーな2つの姿勢を線形補間しても中間フレームで衝突フリー性は保証されないため
     # 教師フレーム数とアニメーションフレーム数が一致しない場合は補間推測せず停止させる
-    teacher = context.get("skirt_geometric_teacher_vertices")
+    style_teachers = context.get("skirt_style_teacher_vertices", {})
+    teacher = style_teachers.get(style_name)
+    if teacher is None:
+        teacher = context.get("skirt_geometric_teacher_vertices")
     if teacher is not None:
         teacher = np.asarray(teacher, dtype=np.float32)
         expected_shape = (len(body_motion), len(base_vertices), 3)
@@ -699,8 +709,7 @@ def resolve_animation_vertices(progresses):
             raise RuntimeError("幾何教師にNaNまたはInfがあります。")
         print(
             "[diag] animation source: "
-            "skirt_geometric_teacher_vertices "
-            "(collision-safe authoritative trajectory)"
+            f"style={style_name} (collision-safe authoritative trajectory)"
         )
         if len(teacher) != len(progresses):
             raise RuntimeError(
@@ -722,7 +731,12 @@ def resolve_animation_vertices(progresses):
 
 
 progresses = np.linspace(0.0, 1.0, num_animation_frames, dtype=np.float32)
-vertices = resolve_animation_vertices(progresses)
+style_presets = context.get("style_presets", {"base": [0.0, 0.0, 0.0]})
+style_vertices = {
+    style_name: resolve_animation_vertices(progresses, style_name)
+    for style_name in style_presets
+}
+vertices = style_vertices["base"]
 vertices[0] = base_vertices
 if not np.isfinite(vertices).all():
     raise RuntimeError("DNN出力にNaNまたはInfがあります。")
@@ -765,7 +779,7 @@ with open(mapping_path, "w", encoding="utf-8") as file:
     )
     json.dump(
         {
-            "format_version": 1,
+            "format_version": 2,
             "source": "skirt_animation_dnn_morph_fixed.py",
             "glb_path": glb_path,
             "body_context_path": body_context_path,
@@ -783,6 +797,8 @@ with open(mapping_path, "w", encoding="utf-8") as file:
                 if "skirt_geometric_teacher_vertices" in context
                 else "skirt_skinned_vertices"
             ),
+            "style_latent_schema": ["length", "tightness", "pleats"],
+            "style_presets": style_presets,
             "body_context_motion_norm_peak_index": context.get(
                 "motion_norm_peak_index",
                 None,
@@ -853,10 +869,11 @@ if max_displacement_ratio > MAX_DISPLACEMENT_RATIO_LIMIT:
         )
         worst_motion = interpolate(body_motion, worst_progress)
         worst_position = base_vertices + worst_motion
-        if input_features == 9:
-            worst_inputs = np.concatenate([worst_pose, base_vertices, worst_motion], axis=1)
+        worst_style = np.zeros((len(base_vertices), style_latent_dimensions), dtype=np.float32)
+        if base_input_features == 9:
+            worst_inputs = np.concatenate([worst_pose, base_vertices, worst_motion, worst_style], axis=1)
         else:
-            worst_inputs = np.concatenate([worst_pose, base_vertices, worst_position, worst_motion], axis=1)
+            worst_inputs = np.concatenate([worst_pose, base_vertices, worst_position, worst_motion, worst_style], axis=1)
         center_np = input_center.detach().cpu().numpy().reshape(-1)
         scale_np = input_scale.detach().cpu().numpy().reshape(-1)
         max_z_score = float(np.max(np.abs((worst_inputs - center_np) / scale_np)))
@@ -879,10 +896,26 @@ if max_displacement_ratio > MAX_DISPLACEMENT_RATIO_LIMIT:
     )
 
 os.makedirs(output_dir, exist_ok=True)
-np.savez(npz_path, vertices=vertices, faces=faces, progresses=progresses)
+np.savez(
+    npz_path,
+    vertices=vertices,
+    faces=faces,
+    progresses=progresses,
+    **{
+        f"style_{name}_vertices": sequence
+        for name, sequence in style_vertices.items()
+    },
+)
 with open(blender_data_path, "wb") as file:
     pickle.dump(
-        {"vertices": vertices.tolist(), "faces": faces.tolist()},
+        {
+            "vertices": vertices.tolist(),
+            "style_vertices": {
+                name: sequence.tolist()
+                for name, sequence in style_vertices.items()
+            },
+            "faces": faces.tolist(),
+        },
         file,
         protocol=4,
     )
@@ -1002,9 +1035,13 @@ frame_count = int(frame_count_text)
 with open(blender_data_path, "rb") as file:
     data = pickle.load(file)
 vertices = data["vertices"]
+style_vertices = data.get("style_vertices", {"base": vertices})
 faces = data["faces"]
 if len(vertices) != frame_count or not vertices or not vertices[0] or len(vertices[0][0]) != 3:
     raise RuntimeError("頂点アニメーション形状が不正です。")
+for style_name, sequence in style_vertices.items():
+    if len(sequence) != frame_count or len(sequence[0]) != len(vertices[0]):
+        raise RuntimeError(f"スタイル頂点アニメーション形状が不正です: {style_name}")
 
 bpy.ops.object.select_all(action="SELECT")
 bpy.ops.object.delete(use_global=False)
@@ -1018,6 +1055,17 @@ for frame_index in range(1, frame_count):
     key = obj.shape_key_add(name=f"Pose_{frame_index:03d}")
     for vertex_index, vertex in enumerate(vertices[frame_index]):
         key.data[vertex_index].co = tuple(float(value) for value in vertex)
+
+# 代表スタイルごとの全姿勢を静的モーフとして保存する。
+# Three.jsはPoseとStyleを別々に加算せず、ここにある完全形状を重み付きで合成する。
+for style_name, sequence in style_vertices.items():
+    safe_name = "".join(character if character.isalnum() else "_" for character in style_name)
+    # 立位フレームもスタイル固有の完全形状として出力する。
+    # frame 0 を省くと、Three.js側で立位スタイルを選んでも適用先がない。
+    for frame_index in range(frame_count):
+        key = obj.shape_key_add(name=f"Style_{safe_name}_{frame_index:03d}")
+        for vertex_index, vertex in enumerate(sequence[frame_index]):
+            key.data[vertex_index].co = tuple(float(value) for value in vertex)
 
 shape_keys = obj.data.shape_keys.key_blocks
 scene = bpy.context.scene

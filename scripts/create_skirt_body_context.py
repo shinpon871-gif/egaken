@@ -86,8 +86,22 @@ MINIMUM_EDGE_RATIO = 0.55
 # 幾何検証におけるエッジ伸縮比率の許容上限値
 MAXIMUM_EDGE_RATIO = 1.65
 
+# 逆距離二乗重み計算時のゼロ除算防止用イプシロン
+INVERSE_DISTANCE_WEIGHT_EPSILON = 1.0e-6
+
+# Body頂点距離投影の収束判定許容誤差。太腿面投影と同じローカル単位。
+SURFACE_CLEARANCE_CONVERGENCE_TOLERANCE = 1.0e-4
+
 # 特徴量投影計算におけるゼロ除算防止用イプシロン
 FEATURE_PROJECTION_EPSILON = 1.0e-12
+
+# 潜在スタイル空間の代表点。各点は既存の幾何安全補正を通過した教師軌道として保存する。
+STYLE_PRESETS = {
+    "base": (0.0, 0.0, 0.0),
+    "tight": (0.0, 1.0, 0.0),
+    "long": (1.0, 0.0, 0.0),
+    "pleats": (0.0, 0.0, 1.0),
+}
 
 
 def get_arguments():
@@ -119,13 +133,37 @@ import os
 import pickle
 import re
 import sys
+import time
 
 from mathutils import Quaternion, Vector
 from mathutils.kdtree import KDTree
 
+# Blenderワーカー内で参照する幾何検証定数。外側モジュールの定数は
+# この文字列スクリプトへ自動では引き継がれないため、ここで明示する。
+LOCAL_SCALE_EPSILON = 1.0e-8
+WAISTBAND_MARGIN_RATIO = 0.10
+SURFACE_CLEARANCE_MARGIN_RATIO = 0.95
+MINIMUM_SURFACE_AREA = 1.0e-5
+MINIMUM_EDGE_RATIO = 0.55
+MAXIMUM_EDGE_RATIO = 1.65
+
+# 逆距離二乗重み計算時のゼロ除算防止用イプシロン
+INVERSE_DISTANCE_WEIGHT_EPSILON = 1.0e-6
+
+# Body頂点距離投影の収束判定許容誤差。太腿面投影と同じローカル単位。
+SURFACE_CLEARANCE_CONVERGENCE_TOLERANCE = 1.0e-4
+
 
 # 脚閉じ補正の開始アニメーション進捗比率
 THIGH_CLOSE_START_PROGRESS = 0.12
+
+# 潜在スタイル空間の安全教師を生成する代表点
+STYLE_PRESETS = {
+    "base": (0.0, 0.0, 0.0),
+    "tight": (0.0, 1.0, 0.0),
+    "long": (1.0, 0.0, 0.0),
+    "pleats": (0.0, 0.0, 1.0),
+}
 
 # 脚閉じ補正が完全適用となるアニメーション進捗比率
 THIGH_CLOSE_FULL_PROGRESS = 0.58
@@ -322,6 +360,17 @@ def build_body_kd_tree(body_points):
     return tree
 
 
+def required_surface_clearance(clearance):
+    return clearance * SURFACE_CLEARANCE_MARGIN_RATIO
+
+
+def has_required_surface_clearance(distance, clearance):
+    return distance >= (
+        required_surface_clearance(clearance)
+        - SURFACE_CLEARANCE_CONVERGENCE_TOLERANCE
+    )
+
+
 def validate_skirt_geometry(
     vertices_sequence,
     faces,
@@ -459,7 +508,10 @@ def validate_skirt_geometry(
                         "近傍Body面を特定できません。"
                     )
                 distance = abs(surface_signed_distance)
-                if surface_signed_distance < clearances[vertex_index] * SURFACE_CLEARANCE_MARGIN_RATIO:
+                if not has_required_surface_clearance(
+                    surface_signed_distance,
+                    clearances[vertex_index],
+                ):
                     raise RuntimeError(
                         f"{label}: frame={frame_index}, vertex={vertex_index}の"
                         f"Body面符号距離が不足しています:"
@@ -472,7 +524,10 @@ def validate_skirt_geometry(
             )
             if (
                 not surface_constraint_applied
-                and distance < clearances[vertex_index] * SURFACE_CLEARANCE_MARGIN_RATIO
+                and not has_required_surface_clearance(
+                    distance,
+                    clearances[vertex_index],
+                )
             ):
                 raise RuntimeError(
                     f"{label}: frame={frame_index}, vertex={vertex_index}の"
@@ -499,6 +554,15 @@ def should_log_progress(index, total):
         return True
     interval = max(1, total // 10)
     return index % interval == 0
+
+
+def format_elapsed(seconds):
+    total_seconds = max(0, int(round(seconds)))
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:d}h{minutes:02d}m{seconds:02d}s"
+    return f"{minutes:d}m{seconds:02d}s"
 
 
 def find_pose_bone_by_name_pattern(armature_object, patterns):
@@ -1790,9 +1854,6 @@ is_waistband = [
     for i in range(len(skirt_base_vertices))
 ]
 
-# 逆距離二乗重み計算時のゼロ除算防止用イプシロン
-INVERSE_DISTANCE_WEIGHT_EPSILON = 1.0e-6
-
 # 前面太腿領域の安全クリアランスメートル単位
 SAFE_NORMAL_CLEARANCE_FRONT_METERS = 0.006
 
@@ -1840,7 +1901,7 @@ THIGH_REGION_MIN_HEIGHT = 0.12
 THIGH_REGION_MAX_HEIGHT = 0.78
 
 # 外向き方向への押し出し補正最大反復回数
-SURFACE_PUSH_MAX_ITERATIONS = 16
+SURFACE_PUSH_MAX_ITERATIONS = 32
 
 # 平滑化処理における自身の変位保持比率
 SMOOTH_DISPLACEMENT_SELF_WEIGHT = 0.80
@@ -1882,38 +1943,45 @@ def push_outside_body_surface(
     kd_tree=None,
 ):
     # この処理は何をするか
-    # スカート頂点がBody頂点群の指定クリアランス球内に入り込んでいる場合 外側へ frame_body_norms 方向に押し出す
+    # スカート頂点をBody三角形面から指定クリアランスの外側へ投影する
     #
     # どうやって実現しているか
-    # 1 KDTreeを用いて最近傍Body頂点を高速検索
-    # 2 距離がクリアランス未満の場合 相対変位ベクトルまたは frame_body_norms に沿って不足距離分だけ押し出し
-    # 3 最大反復回数まで押し出しを繰り返し クリアランスを確保
+    # 1 KDTreeで近傍Body頂点を求め、その頂点に接続する三角形だけを調べる
+    # 2 符号付き面距離が不足する場合、合成した外向き法線へ投影する
+    # 3 太腿と非太腿で同じBody面モデルを共有し、検証と補正を一致させる
     #
     # 注意点
-    # 単純な球クリアランス押し出しは凹部で振動しやすいため 最大反復数で制限して発散を防ぐ
+    # 最近傍頂点の距離球では、頂点切替時に投影方向が不連続になる。
+    # 太腿ですでに使っている三角形面の法線へ統一してその振動を避ける。
+    required_clearance = required_surface_clearance(clearance)
     result = list(point)
     for _ in range(SURFACE_PUSH_MAX_ITERATIONS):
-        nearest_b_idx = nearest_body_index(result, frame_body_pts, kd_tree)
-        nearest_b_pt = frame_body_pts[nearest_b_idx]
-        min_dist_sq = sum(
-            (result[axis] - nearest_b_pt[axis]) ** 2
-            for axis in range(3)
+        nearest_b_idx = nearest_body_index(
+            result, frame_body_pts, kd_tree,
         )
-        euclid_dist = math.sqrt(min_dist_sq)
-        if euclid_dist >= clearance - LOCAL_SCALE_EPSILON:
+        candidate_triangle_indices = body_vertex_triangle_neighbors[
+            nearest_b_idx
+        ]
+        signed_distance, _, unit_normal = signed_surface_distance(
+            result,
+            frame_body_pts,
+            body_skin_triangles,
+            candidate_triangle_indices,
+        )
+        if signed_distance is None or unit_normal is None:
+            raise RuntimeError("Body面距離投影の近傍三角形を特定できません。")
+        if has_required_surface_clearance(signed_distance, clearance):
             return result
-        rel_vec = vector_sub(result, nearest_b_pt)
-        if euclid_dist > LOCAL_SCALE_EPSILON:
-            direction = [value / euclid_dist for value in rel_vec]
-        else:
-            direction = list(frame_body_norms[nearest_b_idx])
-        push = clearance - euclid_dist
-        if push <= LOCAL_SCALE_EPSILON:
+        push = required_clearance - signed_distance
+        if push <= SURFACE_CLEARANCE_CONVERGENCE_TOLERANCE:
             return result
         result = [
-            result[axis] + direction[axis] * push
+            result[axis] + unit_normal[axis] * push
             for axis in range(3)
         ]
+    # この関数は平滑化の途中段階でも呼ばれる。ここで未収束を例外にすると、
+    # 後続の再投影・太腿面補正・全フレーム最終検証へ到達できない。
+    # 安全性の採否は必ず validate_skirt_geometry() が最終形状に対して判定する。
     return result
 
 
@@ -2176,19 +2244,6 @@ for frame_idx in range(frame_count):
     frame_kd_tree = build_body_kd_tree(frame_body_pts)
     body_kd_trees.append(frame_kd_tree)
 
-    # 太腿領域以外(腰帯を含む)はf849f7eの既存クリアランス処理を維持する。
-    # 腰帯は固定扱いを廃止したため、他の頂点と同じくBody距離を保証する。
-    for i in range(len(frame_skirt)):
-        if thigh_region_mask[i]:
-            continue
-        frame_skirt[i] = push_outside_body_surface(
-            frame_skirt[i],
-            frame_body_pts,
-            frame_body_norms,
-            skirt_clearance[i],
-            kd_tree=frame_kd_tree,
-        )
-
     # 太腿上面の過剰な浮きを自然に接地させる処理（下限は skirt_clearance を厳守）
     if prog > DRAPE_START_PROGRESS:
         t_drape = smoothstep01((prog - DRAPE_START_PROGRESS) / DRAPE_PROGRESS_SPAN)
@@ -2213,16 +2268,19 @@ for frame_idx in range(frame_count):
             adjacency,
             fixed_vertices,
         )
-        for i in range(len(frame_skirt)):
-            if thigh_region_mask[i]:
-                continue
-            frame_skirt[i] = push_outside_body_surface(
-                frame_skirt[i],
-                frame_body_pts,
-                frame_body_norms,
-                skirt_clearance[i],
-                kd_tree=frame_kd_tree,
-            )
+
+    # 中間形状では投影せず、ドレープと平滑化の完了後に一度だけBody面へ投影する。
+    # 最終形状は直後の全頂点・全フレーム面距離検証で必ずゲートする。
+    for i in range(len(frame_skirt)):
+        if thigh_region_mask[i]:
+            continue
+        frame_skirt[i] = push_outside_body_surface(
+            frame_skirt[i],
+            frame_body_pts,
+            frame_body_norms,
+            skirt_clearance[i],
+            kd_tree=frame_kd_tree,
+        )
     thigh_min_distance = apply_thigh_surface_offset(
         frame_skirt,
         frame_body_pts,
@@ -2263,11 +2321,125 @@ validate_skirt_geometry(
     reference_sequence=skirt_skinned_vertices,
     nearest_indices_sequence=dynamic_nearest_body_indices_sequence,
     surface_triangles=body_skin_triangles,
-    surface_mask=thigh_region_mask,
+    surface_mask=None,
     surface_triangle_candidates=body_vertex_triangle_neighbors,
     body_kd_trees=body_kd_trees,
 )
 progress_log("動的クリアランス高精度教師データの生成が完了しました。")
+
+
+def make_style_seed(vertices, style_vector):
+    # 長さ・タイトさ・プリーツを腰帯以外へ限定して加える。
+    # この結果は保存前に必ず既存のBody距離・太腿面補正を再実行する。
+    length, tightness, pleats = style_vector
+    source = [list(point) for point in vertices]
+    y_values = [point[1] for point in skirt_base_vertices]
+    min_y = min(y_values)
+    max_y = max(y_values)
+    height = max(max_y - min_y, 1.0e-8)
+    center_x = sum(point[0] for point in skirt_base_vertices) / len(skirt_base_vertices)
+    center_z = sum(point[2] for point in skirt_base_vertices) / len(skirt_base_vertices)
+    result = []
+    for index, point in enumerate(source):
+        base = skirt_base_vertices[index]
+        from_waist = max(0.0, min(1.0, (max_y - base[1]) / height))
+        lower_weight = smoothstep01(from_waist)
+        radial_x = base[0] - center_x
+        radial_z = base[2] - center_z
+        radial_length = max(math.sqrt(radial_x * radial_x + radial_z * radial_z), 1.0e-8)
+        # tightness=1 は裾側の周方向半径を縮め、length=1 は裾を下へ延長する。
+        radius_scale = 1.0 - 0.28 * tightness * lower_weight
+        pleat_wave = math.sin(math.atan2(radial_z, radial_x) * 8.0) * pleats * 0.045 * height * lower_weight
+        result.append([
+            center_x + radial_x * radius_scale + radial_x / radial_length * pleat_wave,
+            point[1] - length * 0.45 * height * lower_weight,
+            center_z + radial_z * radius_scale + radial_z / radial_length * pleat_wave,
+        ])
+    return result
+
+
+def enforce_style_safety(style_seed_sequence, style_name):
+    # スタイル変形後に既存と同一の順序で安全制約を再適用する。
+    safe_sequence = []
+    style_nearest_indices = []
+    style_started_at = time.monotonic()
+    total_frames = len(style_seed_sequence)
+    progress_log(
+        f"スタイル安全教師 {style_name} を開始します: "
+        f"frames={total_frames}"
+    )
+    for frame_idx, seed in enumerate(style_seed_sequence):
+        if should_log_progress(frame_idx, total_frames):
+            elapsed = time.monotonic() - style_started_at
+            completed = frame_idx + 1
+            eta = elapsed * (total_frames - completed) / completed
+            progress_log(
+                f"スタイル安全教師 {style_name} "
+                f"{frame_idx + 1}/{total_frames} "
+                f"elapsed={format_elapsed(elapsed)} "
+                f"eta={format_elapsed(eta)}"
+            )
+        frame_skirt = [list(point) for point in seed]
+        frame_body_pts = skinned_vertices[frame_idx]
+        frame_body_norms = skinned_normals[frame_idx]
+        frame_kd_tree = body_kd_trees[frame_idx]
+        # スタイル変形は一度平滑化してから最終形状へ投影する。
+        # 中間形状の反復投影は安全ゲートを強めず、同じ面距離探索を重複させる。
+        frame_skirt = smooth_skirt_displacement(
+            frame_skirt, seed, adjacency, fixed_vertices,
+        )
+        apply_thigh_surface_offset(
+            frame_skirt, frame_body_pts, thigh_region_mask,
+            kd_tree=frame_kd_tree, frame_index=frame_idx,
+        )
+        # 太腿投影後の最終形状へ、非太腿領域も一度だけ面距離投影する。
+        for index in range(len(frame_skirt)):
+            if not thigh_region_mask[index]:
+                frame_skirt[index] = push_outside_body_surface(
+                    frame_skirt[index], frame_body_pts, frame_body_norms,
+                    skirt_clearance[index], kd_tree=frame_kd_tree,
+                )
+        safe_sequence.append(frame_skirt)
+        style_nearest_indices.append([
+            nearest_body_index(point, frame_body_pts, frame_kd_tree)
+            for point in frame_skirt
+        ])
+    progress_log(f"スタイル安全教師 {style_name} の全フレーム検証を開始します")
+    validate_skirt_geometry(
+        safe_sequence, skirt_faces, skinned_vertices, teacher_clearances,
+        fixed_vertices, f"style_teacher_{style_name}",
+        reference_sequence=style_seed_sequence,
+        nearest_indices_sequence=style_nearest_indices,
+        surface_triangles=body_skin_triangles,
+        surface_mask=None,
+        surface_triangle_candidates=body_vertex_triangle_neighbors,
+        body_kd_trees=body_kd_trees,
+    )
+    progress_log(
+        f"スタイル安全教師 {style_name} が完了しました: "
+        f"elapsed={format_elapsed(time.monotonic() - style_started_at)}"
+    )
+    return safe_sequence
+
+
+style_teacher_vertices = {}
+styles_started_at = time.monotonic()
+for style_name, style_vector in STYLE_PRESETS.items():
+    if style_name == "base":
+        style_teacher_vertices[style_name] = geometric_teacher_vertices
+        continue
+    progress_log(f"スタイル安全教師を生成します: {style_name}")
+    style_seed_sequence = [
+        make_style_seed(frame_vertices, style_vector)
+        for frame_vertices in geometric_teacher_vertices
+    ]
+    style_teacher_vertices[style_name] = enforce_style_safety(
+        style_seed_sequence, style_name,
+    )
+progress_log(
+    "全スタイル安全教師の生成が完了しました: "
+    f"elapsed={format_elapsed(time.monotonic() - styles_started_at)}"
+)
 
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 progress_log(f"身体特徴量PKLを書き込みます: {output_path}")
@@ -2303,6 +2475,13 @@ with open(output_path, "wb") as file:
             # 新規: 衝突回避ゴールポーズおよびブレンド教師頂点列
             "skirt_geometric_sitting_vertices": goal_vertices,
             "skirt_geometric_teacher_vertices": geometric_teacher_vertices,
+            # style名 -> (frames, vertices, 3)。全て既存と同じ安全補正済み教師。
+            "skirt_style_teacher_vertices": style_teacher_vertices,
+            "style_latent_schema": ["length", "tightness", "pleats"],
+            "style_presets": {
+                name: list(vector)
+                for name, vector in STYLE_PRESETS.items()
+            },
             "skirt_clearance_local_units": teacher_clearances,
             "skirt_dynamic_nearest_body_indices": (
                 dynamic_nearest_body_indices_sequence
@@ -2343,7 +2522,7 @@ validate_skirt_geometry(
         "skirt_dynamic_nearest_body_indices"
     ],
     surface_triangles=written_context["body_skin_triangles"],
-    surface_mask=thigh_region_mask,
+    surface_mask=None,
     surface_triangle_candidates=body_vertex_triangle_neighbors,
     body_kd_trees=body_kd_trees,
 )

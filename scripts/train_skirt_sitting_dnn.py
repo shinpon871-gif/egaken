@@ -45,8 +45,14 @@ import torch.nn.functional as F
 # 再現性を確保するための乱数シード値
 RANDOM_SEED = int(globals().get("DNN_RANDOM_SEED", 20260903))
 
-# DNNの入力特徴量次元数 9 または 12
-INPUT_FEATURES = int(globals().get("DNN_INPUT_FEATURES", 9))
+# DNNの入力特徴量次元数。末尾にスタイルzを連結した12または15次元。
+INPUT_FEATURES = int(globals().get("DNN_INPUT_FEATURES", 12))
+
+# 潜在スタイルベクトル [length, tightness, pleats] の次元数
+STYLE_LATENT_DIMENSIONS = 3
+
+# スタイルzを除く従来の入力次元 9 または 12
+BASE_INPUT_FEATURES = INPUT_FEATURES - STYLE_LATENT_DIMENSIONS
 
 # 座位動作時の最大着席角度度数法
 MAX_SIT_ANGLE_DEGREES = float(
@@ -154,9 +160,9 @@ BODY_CONTEXT_PATH = str(
 )
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-if INPUT_FEATURES not in (9, 12):
+if INPUT_FEATURES not in (12, 15) or BASE_INPUT_FEATURES not in (9, 12):
     raise ValueError(
-        "DNN_INPUT_FEATURES は9または12にしてください。"
+        "DNN_INPUT_FEATURES はスタイルz込みの12または15にしてください。"
     )
 
 # この処理はColabの再実行で残った古い変数を拾わないようにして
@@ -355,7 +361,7 @@ def get_body_features() -> np.ndarray:
         motion = resolve_motion_from_context(context)
         motion = broadcast_body_motion(motion)
         print(f"身体特徴量の入力元: {BODY_CONTEXT_PATH}")
-        if INPUT_FEATURES == 9:
+        if BASE_INPUT_FEATURES == 9:
             return motion
         position = base_skirt_pc[None, :, :] + motion
         return np.concatenate([position, motion], axis=2)
@@ -365,7 +371,7 @@ def get_body_features() -> np.ndarray:
         features = np.asarray(direct, dtype=np.float32)
         # Add this line to broadcast the motion if its shape is (frames, 3)
         features = broadcast_body_motion(features)
-        expected_channels = 3 if INPUT_FEATURES == 9 else 6
+        expected_channels = 3 if BASE_INPUT_FEATURES == 9 else 6
         if features.ndim != 3 or features.shape[1:] != (
             num_points,
             expected_channels,
@@ -383,7 +389,7 @@ def get_body_features() -> np.ndarray:
             raise TypeError("DNN_BODY_CONTEXTはdictで指定してください。")
         motion = resolve_motion_from_context(context)
         motion = broadcast_body_motion(motion)
-        if INPUT_FEATURES == 9:
+        if BASE_INPUT_FEATURES == 9:
             return motion
         if "body_position" not in context:
             raise ValueError(
@@ -402,7 +408,7 @@ def get_body_features() -> np.ndarray:
             "Colabではcreate_skirt_body_context.pyを実行してください。"
         )
     motion = broadcast_body_motion(motion)
-    if INPUT_FEATURES == 9:
+    if BASE_INPUT_FEATURES == 9:
         return motion
     position = base_skirt_pc[None, :, :] + motion
     return np.concatenate([position, motion], axis=2)
@@ -419,7 +425,7 @@ body_features = get_body_features()
 DNN_BODY_CONTEXT_FEATURES_RESOLVED = body_features.copy()
 DNN_BODY_MOTION_RESOLVED = (
     body_features[:, :, :3]
-    if INPUT_FEATURES == 9
+    if BASE_INPUT_FEATURES == 9
     else body_features[:, :, 3:6]
 ).copy()
 if body_features.shape[0] < 2:
@@ -636,24 +642,53 @@ if target_source == "geometry_aware_synthetic_teacher":
 # 二重に相殺され、学習が破綻する(推論時に出力が桁違いに爆発する)。
 residual_displacements = (teacher_displacements - resampled_motion).astype(np.float32)
 
+# PKLに保存された全スタイル教師を条件付き学習へ展開する。各軌道は
+# create_skirt_body_context.pyでクリアランス・下向きドレープ・太腿面補正済み。
+style_training_sequences = {"base": teacher_vertices}
+style_presets = {"base": [0.0, 0.0, 0.0]}
+if os.path.isfile(BODY_CONTEXT_PATH):
+    import pickle
+
+    with open(BODY_CONTEXT_PATH, "rb") as file:
+        style_context = pickle.load(file)
+    style_presets.update(style_context.get("style_presets", {}))
+    for style_name, style_vertices in style_context.get(
+        "skirt_style_teacher_vertices", {}
+    ).items():
+        sequence = np.asarray(style_vertices, dtype=np.float32)
+        if sequence.shape != teacher_vertices.shape:
+            raise ValueError(
+                f"スタイル教師 {style_name} の形状が不正です: "
+                f"{sequence.shape} != {teacher_vertices.shape}"
+            )
+        sequence = base_skirt_pc[None, :, :] + sequence - sequence[0:1]
+        sequence[0] = base_skirt_pc
+        style_training_sequences[style_name] = sequence.astype(np.float32)
+
 pose_rows_all = []
 input_rows_all = []
 target_rows_all = []
 frame_indices_all = []
-for frame_index, angle in enumerate(pose_angles):
-    pose = np.repeat(
-        np.asarray([[0.0, float(angle), 0.0]], dtype=np.float32),
-        num_points,
-        axis=0,
-    )
-    rows = np.concatenate(
-        [pose, base_skirt_pc, resampled_body[frame_index]],
-        axis=1,
-    )
-    pose_rows_all.append(pose)
-    input_rows_all.append(rows.astype(np.float32))
-    target_rows_all.append(teacher_displacements[frame_index])
-    frame_indices_all.append(np.full(num_points, frame_index, dtype=np.int64))
+for style_name, style_vertices in style_training_sequences.items():
+    style_vector = np.asarray(style_presets.get(style_name, [0.0, 0.0, 0.0]), dtype=np.float32)
+    if style_vector.shape != (STYLE_LATENT_DIMENSIONS,):
+        raise ValueError(f"スタイルベクトルが不正です: {style_name}={style_vector}")
+    style_displacements = style_vertices - base_skirt_pc[None, :, :]
+    for frame_index, angle in enumerate(pose_angles):
+        pose = np.repeat(
+            np.asarray([[0.0, float(angle), 0.0]], dtype=np.float32),
+            num_points,
+            axis=0,
+        )
+        style_rows = np.repeat(style_vector[None, :], num_points, axis=0)
+        rows = np.concatenate(
+            [pose, base_skirt_pc, resampled_body[frame_index], style_rows],
+            axis=1,
+        )
+        pose_rows_all.append(pose)
+        input_rows_all.append(rows.astype(np.float32))
+        target_rows_all.append(style_displacements[frame_index].astype(np.float32))
+        frame_indices_all.append(np.full(num_points, frame_index, dtype=np.int64))
 
 all_inputs = np.concatenate(input_rows_all, axis=0)
 all_targets = np.concatenate(target_rows_all, axis=0)
@@ -681,7 +716,7 @@ input_scale = np.maximum(input_scale, np.float32(INPUT_SCALE_MIN_EPSILON))
 # 学習・外挿が不安定になる。
 output_scale = float(
     max(
-        np.max(np.linalg.norm(residual_displacements, axis=2)),
+        np.max(np.linalg.norm(all_targets, axis=1)),
         MINIMUM_RESIDUAL_SCALE,
     )
 )
@@ -725,11 +760,11 @@ class SkirtDeformationDNN(nn.Module):
             * normalized_progress
             * (3.0 - 2.0 * normalized_progress)
         )
-        # 入力の末尾3列は常にbody_motion(スカート頂点が追従すべき身体側の
+        # 末尾3列はスタイルzであり、その直前3列がbody_motionである。
         # 実変位)。DNNの出力にそのまま加算するskip接続にすることで、
         # 「まず身体の動きに追従し、その上にDNNが襞の変形(残差)を乗せる」
         # 構造にする。無相関な入力を絶対座標へ直接学習させるより安定する。
-        motion_baseline = inputs[:, -3:]
+        motion_baseline = inputs[:, -6:-3]
         return motion_baseline + eased * residual * self.output_scale
 
 
@@ -843,7 +878,7 @@ torchscript_path = os.path.join(
 metadata_path = os.path.join(OUTPUT_DIR, "skirt_deformation_dnn_metadata.json")
 torch.save(
     {
-        "format_version": 2,
+        "format_version": 3,
         "model_class": "SkirtDeformationDNN",
         "input_feature_count": INPUT_FEATURES,
         "model_state_dict": {
@@ -853,6 +888,8 @@ torch.save(
         "vertex_count": num_points,
         "face_count": num_faces,
         "target_source": target_source,
+        "style_latent_schema": ["length", "tightness", "pleats"],
+        "style_presets": style_presets,
     },
     checkpoint_path,
 )
@@ -868,13 +905,15 @@ model = model_cpu.to(device).eval()
 with open(metadata_path, "w", encoding="utf-8") as file:
     json.dump(
         {
-            "format_version": 2,
+            "format_version": 3,
             "input_feature_count": INPUT_FEATURES,
             "body_feature_schema": (
                 "body_motion"
-                if INPUT_FEATURES == 9
+                if BASE_INPUT_FEATURES == 9
                 else "body_position_and_body_motion"
             ),
+            "style_latent_schema": ["length", "tightness", "pleats"],
+            "style_presets": style_presets,
             "vertex_count": num_points,
             "face_count": num_faces,
             "training_pose_count": frame_count,
@@ -893,7 +932,7 @@ print("身体特徴量付きスカートDNNの学習と保存が完了しまし�
 print(f"入力特徴量数: {INPUT_FEATURES}")
 body_schema = (
     "body_motion"
-    if INPUT_FEATURES == 9
+    if BASE_INPUT_FEATURES == 9
     else "body_position + body_motion"
 )
 print(f"身体特徴量: {body_schema}")

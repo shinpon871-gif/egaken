@@ -127,8 +127,12 @@ type SkirtDeformationMetadata = {
 
 const skirtDeformationMetadata = skirtDeformation as SkirtDeformationMetadata;
 
+// 立位スタイル用の0フレームを含む安全教師アセットのリビジョン
+const SKIRT_ASSET_REVISION = 2;
+
 // スカート変形メタデータから取得したパラメータによるアセットキャッシュ更新用バージョン識別文字列
 const SKIRT_ASSET_VERSION = [
+  SKIRT_ASSET_REVISION,
   skirtDeformationMetadata.progress ?? 0,
   skirtDeformationMetadata.vertex_count ?? 0,
   skirtDeformationMetadata.displacements?.[0]?.[0] ?? 0,
@@ -1891,6 +1895,7 @@ export default function ClothSimulator() {
   const [playTarget, setPlayTarget] = useState<number | null>(null);
   const [colors, setColors] = useState<Record<ColorCategory, string>>(DEFAULT_COLORS);
   const [style, setStyle] = useState<StyleVector>(DEFAULT_STYLE_VECTOR);
+  const canEditStyle = progress <= PROGRESS_STEP && playTarget === null;
 
   const modelBasePosition = MODEL_BASE_POSITION;
   const fbxPath = FBX_MODEL_PATH;
@@ -2049,8 +2054,9 @@ export default function ClothSimulator() {
                   max={STYLE_MAX}
                   step={STYLE_STEP}
                   value={style[key]}
+                  disabled={!canEditStyle}
                   onChange={(event) => setStyle((current) => ({ ...current, [key]: Number(event.target.value) }))}
-                  className="mt-1 w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-700 rounded-lg appearance-none"
+                  className="mt-1 w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-700 rounded-lg appearance-none disabled:cursor-not-allowed disabled:opacity-40"
                   aria-label={label}
                 />
               </label>

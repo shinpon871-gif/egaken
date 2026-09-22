@@ -661,8 +661,10 @@ if os.path.isfile(BODY_CONTEXT_PATH):
                 f"スタイル教師 {style_name} の形状が不正です: "
                 f"{sequence.shape} != {teacher_vertices.shape}"
             )
-        sequence = base_skirt_pc[None, :, :] + sequence - sequence[0:1]
-        sequence[0] = base_skirt_pc
+        if not np.isfinite(sequence).all():
+            raise ValueError(
+                f"スタイル教師 {style_name} にNaNまたはInfがあります"
+            )
         style_training_sequences[style_name] = sequence.astype(np.float32)
 
 pose_rows_all = []

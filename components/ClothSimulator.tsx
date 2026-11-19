@@ -6,6 +6,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, useFBX, useGLTF } from '@react-three/drei';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils';
 import skirtDeformation from '../public/models/skirt_deformation.json';
+import skirtLengthRelease from '../public/models/skirt_length_release.json';
 
 const SUPPRESSED_CONSOLE_PATTERNS = [
   'THREE.Clock: This module has been deprecated. Please use THREE.Timer instead.',
@@ -108,16 +109,26 @@ type AnimatedSkirtGltf = {
 
 interface StyleVector {
   length: number;
-  tightness: number;
-  pleats: number;
 }
 
-interface MorphTargetIndices {
-  base: number;
-  tight: number;
-  long: number;
-  pleats: number;
-}
+type SkirtLengthReleaseManifest = {
+  release_status?: string;
+  image_qa?: { status?: string };
+  candidates?: Record<string, { extension_ratio?: number }>;
+};
+
+const skirtLengthReleaseMetadata = skirtLengthRelease as SkirtLengthReleaseManifest;
+const approvedLengthCandidates = Object.entries(skirtLengthReleaseMetadata.candidates ?? {})
+  .filter(([, candidate]) => Number.isFinite(candidate.extension_ratio) && (candidate.extension_ratio ?? 0) > 0)
+  .sort((left, right) => (left[1].extension_ratio ?? 0) - (right[1].extension_ratio ?? 0));
+const LENGTH_CONTROL_RELEASED =
+  skirtLengthReleaseMetadata.release_status === 'approved' &&
+  skirtLengthReleaseMetadata.image_qa?.status === 'pass' &&
+  approvedLengthCandidates.length > 0;
+const RELEASED_LENGTH_PRESETS = [
+  'base',
+  ...(LENGTH_CONTROL_RELEASED ? approvedLengthCandidates.map(([name]) => name) : []),
+];
 
 type SkirtDeformationMetadata = {
   progress?: number;
@@ -128,7 +139,7 @@ type SkirtDeformationMetadata = {
 const skirtDeformationMetadata = skirtDeformation as SkirtDeformationMetadata;
 
 // 立位スタイル用の0フレームを含む安全教師アセットのリビジョン
-const SKIRT_ASSET_REVISION = 2;
+const SKIRT_ASSET_REVISION = 3;
 
 // スカート変形メタデータから取得したパラメータによるアセットキャッシュ更新用バージョン識別文字列
 const SKIRT_ASSET_VERSION = [
@@ -137,8 +148,10 @@ const SKIRT_ASSET_VERSION = [
   skirtDeformationMetadata.vertex_count ?? 0,
   skirtDeformationMetadata.displacements?.[0]?.[0] ?? 0,
   skirtDeformationMetadata.displacements?.at(-1)?.[2] ?? 0,
+  skirtLengthReleaseMetadata.release_status ?? 'disabled',
+  ...RELEASED_LENGTH_PRESETS,
 ]
-  .map((value) => Number(value).toFixed(4))
+  .map((value) => typeof value === 'number' ? value.toFixed(4) : value)
   .join('_');
 
 // スカートモーフ重みが有効に変化しているかを判定する微小閾値
@@ -214,20 +227,9 @@ const PROGRESS_MAX = 1;
 // 進捗スライダーの最小操作刻み幅 0.001
 const PROGRESS_STEP = 0.001;
 
-// 潜在スタイルベクトル操作の最小値
 const STYLE_MIN = 0;
-
-// 潜在スタイルベクトル操作の最大値
 const STYLE_MAX = 1;
-
-// 潜在スタイルベクトル操作の刻み幅
-const STYLE_STEP = 0.01;
-
-const DEFAULT_STYLE_VECTOR: StyleVector = {
-  length: 0,
-  tightness: 0,
-  pleats: 0,
-};
+const STYLE_STEP = 1 / Math.max(RELEASED_LENGTH_PRESETS.length - 1, 1);
 
 // 立つ座るボタン押下時にポーズを自動シークする1秒あたりの進行速度倍率
 const AUTO_SEEK_SPEED = 1.2;
@@ -1409,20 +1411,6 @@ function applyAnimatedSkirtMaterial(
   });
 }
 
-function getStyleMorphWeights(style: StyleVector): Record<keyof MorphTargetIndices, number> {
-  const length = THREE.MathUtils.clamp(style.length, STYLE_MIN, STYLE_MAX);
-  const tightness = THREE.MathUtils.clamp(style.tightness, STYLE_MIN, STYLE_MAX);
-  const pleats = THREE.MathUtils.clamp(style.pleats, STYLE_MIN, STYLE_MAX);
-  const remainingWithoutPleats = 1 - pleats;
-
-  return {
-    base: (1 - length) * (1 - tightness) * remainingWithoutPleats,
-    tight: tightness * (1 - length) * remainingWithoutPleats,
-    long: length * remainingWithoutPleats,
-    pleats,
-  };
-}
-
 function updateStyleAndPoseMorphs(
   root: THREE.Object3D | null,
   poseProgress: number,
@@ -1430,7 +1418,8 @@ function updateStyleAndPoseMorphs(
 ): void {
   if (!root) return;
 
-  const styleWeights = getStyleMorphWeights(style);
+  const presetIndex = Math.round(THREE.MathUtils.clamp(style.length, STYLE_MIN, STYLE_MAX) * (RELEASED_LENGTH_PRESETS.length - 1));
+  const selectedPreset = RELEASED_LENGTH_PRESETS[Math.min(presetIndex, RELEASED_LENGTH_PRESETS.length - 1)];
   root.traverse((object) => {
     const mesh = object as THREE.Mesh & {
       morphTargetDictionary?: Record<string, number>;
@@ -1439,7 +1428,7 @@ function updateStyleAndPoseMorphs(
     if (!mesh.isMesh || !mesh.morphTargetDictionary || !mesh.morphTargetInfluences) return;
 
     const frameIndices = Object.entries(mesh.morphTargetDictionary)
-      .filter(([name]) => /^Style_(base|tight|long|pleats)_\d+$/.test(name))
+      .filter(([name]) => /^Style_(?:base|length_\d+)_\d+$/.test(name))
       .map(([name]) => Number(name.match(/_(\d+)$/)?.[1] ?? 0));
     const maxFrame = Math.max(...frameIndices, 0);
     if (maxFrame === 0) return;
@@ -1450,7 +1439,7 @@ function updateStyleAndPoseMorphs(
       if (/^Pose_\d+$/.test(name)) {
         mesh.morphTargetInfluences![index] = 0;
       }
-      if (/^Style_(base|tight|long|pleats)_\d+$/.test(name)) {
+      if (/^Style_(?:base|length_\d+)_\d+$/.test(name)) {
         mesh.morphTargetInfluences![index] = 0;
       }
     });
@@ -1461,16 +1450,15 @@ function updateStyleAndPoseMorphs(
     const upperWeight = framePosition - lowerFrame;
     const lowerWeight = 1 - upperWeight;
 
-    (Object.keys(styleWeights) as Array<keyof MorphTargetIndices>).forEach((styleName) => {
-      const styleWeight = styleWeights[styleName];
-      for (const [frame, frameWeight] of [[lowerFrame, lowerWeight], [upperFrame, upperWeight]] as const) {
-        if (frameWeight <= 0 || styleWeight <= 0) continue;
-        const index = mesh.morphTargetDictionary![`Style_${styleName}_${String(frame).padStart(3, '0')}`];
-        if (index !== undefined) {
-          mesh.morphTargetInfluences![index] = styleWeight * frameWeight;
-        }
+    for (const [frame, frameWeight] of [[lowerFrame, lowerWeight], [upperFrame, upperWeight]] as const) {
+      if (frameWeight <= 0) continue;
+      const selectedIndex: number | undefined = mesh.morphTargetDictionary![`Style_${selectedPreset}_${String(frame).padStart(3, '0')}`];
+      const baseIndex: number | undefined = mesh.morphTargetDictionary![`Style_base_${String(frame).padStart(3, '0')}`];
+      const index = selectedIndex ?? baseIndex;
+      if (index !== undefined) {
+        mesh.morphTargetInfluences![index] = frameWeight;
       }
-    });
+    }
   });
 }
 
@@ -1483,6 +1471,7 @@ function SceneWithFBX({
   wireframe,
   playTarget,
   style,
+  onLengthPresetsReady,
   onFinished = () => {},
   colors,
   customMapping,
@@ -1496,6 +1485,7 @@ function SceneWithFBX({
   wireframe: boolean;
   playTarget: number | null;
   style: StyleVector;
+  onLengthPresetsReady: (ready: boolean) => void;
   onFinished?: () => void;
   colors: Record<ColorCategory, string>;
   customMapping: MeshColorMapping;
@@ -1521,6 +1511,42 @@ function SceneWithFBX({
     if (!skirtGltf?.scene) return null;
     return skeletonClone(skirtGltf.scene) as THREE.Group;
   }, [skirtGltf]);
+
+  useEffect(() => {
+    if (!clonedSkirt) {
+      onLengthPresetsReady(false);
+      return;
+    }
+    let hasCompletePresets = true;
+    let checkedStyleMeshes = 0;
+    clonedSkirt.traverse((object) => {
+      const mesh = object as THREE.Mesh & {
+        morphTargetDictionary?: Record<string, number>;
+      };
+      if (!mesh.isMesh || !mesh.morphTargetDictionary) return;
+      const availableNames = Object.keys(mesh.morphTargetDictionary);
+      if (!availableNames.some((name) => name.startsWith('Style_'))) return;
+      checkedStyleMeshes += 1;
+      const frameIndices = RELEASED_LENGTH_PRESETS.map((preset) =>
+        availableNames
+          .filter((name) => name.startsWith(`Style_${preset}_`))
+          .map((name) => Number(name.match(/_(\d+)$/)?.[1]))
+          .sort((left, right) => left - right)
+      );
+      const expectedFrameIndices = frameIndices[0];
+      if (
+        expectedFrameIndices.length === 0 ||
+        frameIndices.some((indices) =>
+          indices.length !== expectedFrameIndices.length ||
+          indices.some((frameIndex, index) => frameIndex !== expectedFrameIndices[index])
+        )
+      ) {
+        hasCompletePresets = false;
+      }
+    });
+    if (checkedStyleMeshes === 0) hasCompletePresets = false;
+    onLengthPresetsReady(hasCompletePresets);
+  }, [clonedSkirt, onLengthPresetsReady]);
 
   const { camera } = useThree();
   const actionRef = useRef<THREE.AnimationAction | null>(null);
@@ -1894,9 +1920,9 @@ export default function ClothSimulator() {
   const [progress, setProgress] = useState(PROGRESS_MIN);
   const [playTarget, setPlayTarget] = useState<number | null>(null);
   const [colors, setColors] = useState<Record<ColorCategory, string>>(DEFAULT_COLORS);
-  const [style, setStyle] = useState<StyleVector>(DEFAULT_STYLE_VECTOR);
-  const canEditStyle = progress <= PROGRESS_STEP && playTarget === null;
-
+  const [style, setStyle] = useState<StyleVector>({ length: 0 });
+  const [lengthPresetsReady, setLengthPresetsReady] = useState(false);
+  const canEditStyle = LENGTH_CONTROL_RELEASED && lengthPresetsReady && progress <= PROGRESS_STEP && playTarget === null;
   const modelBasePosition = MODEL_BASE_POSITION;
   const fbxPath = FBX_MODEL_PATH;
   const skirtGlbPath = `${SKIRT_GLB_PATH}?v=${SKIRT_ASSET_VERSION}`;
@@ -1939,6 +1965,7 @@ export default function ClothSimulator() {
           wireframe={wireframe}
           playTarget={playTarget}
           style={style}
+          onLengthPresetsReady={setLengthPresetsReady}
           onFinished={() => setPlayTarget(null)}
           customMapping={customMapping}
           colors={colors}
@@ -2037,30 +2064,32 @@ export default function ClothSimulator() {
           </div>
 
           <div className="mb-4 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800">
-            <div className="text-xs font-medium text-slate-400 mb-2">Skirt Style</div>
-            {([
-              ['length', 'Length'],
-              ['tightness', 'Tightness'],
-              ['pleats', 'Pleats'],
-            ] as const).map(([key, label]) => (
-              <label key={key} className="mt-2 block text-[11px] text-slate-300">
-                <span className="flex items-center justify-between">
-                  <span>{label}</span>
-                  <span className="font-mono text-slate-400">{Math.round(style[key] * 100)}%</span>
+            <div className="text-xs font-medium text-slate-400 mb-2">Skirt Length</div>
+            <label className="mt-2 block text-[11px] text-slate-300">
+              <span className="flex items-center justify-between">
+                <span>Length</span>
+                <span className="font-mono text-slate-400">
+                  {LENGTH_CONTROL_RELEASED
+                    ? (!lengthPresetsReady
+                      ? 'GLB未一致'
+                      : (RELEASED_LENGTH_PRESETS[Math.round(style.length * (RELEASED_LENGTH_PRESETS.length - 1))] === 'base'
+                        ? 'Base'
+                        : `+${Math.round((approvedLengthCandidates[Math.round(style.length * (RELEASED_LENGTH_PRESETS.length - 1)) - 1]?.[1].extension_ratio ?? 0) * 100)}%`))
+                    : '検証待ち'}
                 </span>
-                <input
-                  type="range"
-                  min={STYLE_MIN}
-                  max={STYLE_MAX}
-                  step={STYLE_STEP}
-                  value={style[key]}
-                  disabled={!canEditStyle}
-                  onChange={(event) => setStyle((current) => ({ ...current, [key]: Number(event.target.value) }))}
-                  className="mt-1 w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-700 rounded-lg appearance-none disabled:cursor-not-allowed disabled:opacity-40"
-                  aria-label={label}
-                />
-              </label>
-            ))}
+              </span>
+              <input
+                type="range"
+                min={STYLE_MIN}
+                max={STYLE_MAX}
+                step={STYLE_STEP}
+                value={style.length}
+                disabled={!canEditStyle}
+                onChange={(event) => setStyle({ length: Number(event.target.value) })}
+                className="mt-1 w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-700 rounded-lg appearance-none disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Length"
+              />
+            </label>
           </div>
 
           {/* 表示オプション */}

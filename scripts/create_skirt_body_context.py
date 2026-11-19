@@ -98,9 +98,6 @@ FEATURE_PROJECTION_EPSILON = 1.0e-12
 # 潜在スタイル空間の代表点。各点は既存の幾何安全補正を通過した教師軌道として保存する。
 STYLE_PRESETS = {
     "base": (0.0, 0.0, 0.0),
-    "tight": (0.0, 1.0, 0.0),
-    "long": (1.0, 0.0, 0.0),
-    "pleats": (0.0, 0.0, 1.0),
 }
 
 
@@ -160,9 +157,6 @@ THIGH_CLOSE_START_PROGRESS = 0.12
 # 潜在スタイル空間の安全教師を生成する代表点
 STYLE_PRESETS = {
     "base": (0.0, 0.0, 0.0),
-    "tight": (0.0, 1.0, 0.0),
-    "long": (1.0, 0.0, 0.0),
-    "pleats": (0.0, 0.0, 1.0),
 }
 
 # 脚閉じ補正が完全適用となるアニメーション進捗比率
@@ -1340,6 +1334,175 @@ skirt_base_vertices = [
      float(body_object.data.vertices[index].co.z)]
     for index in skirt_vertex_indices
 ]
+# ------------------------------------------------------------
+# Length用の裾帯。GLBのモーフターゲットは頂点数を変えられないため、メッシュを
+# 「Bottoms + 裾帯LENGTH_RING_COUNT段」の上位集合にしておく。基準(base)では帯を
+# 裾へ折りたたみ(ごく小さな厚みだけ残す)、各Length候補はその分を展開して表す。
+# ------------------------------------------------------------
+LENGTH_PIPELINE_VERSION = "geometric_length_rings_v3_dense_face_checked"
+LENGTH_RING_COUNT = 8
+LENGTH_RATIOS = tuple(
+    float(value) for value in os.environ.get("SKIRT_LENGTH_RATIOS", "0.25,0.5,0.75").split(",")
+)
+# 折りたたんだ帯1段あたりの厚み。縮退面にならず法線が定義できる最小限の値。
+LENGTH_RING_EPSILON_METERS = 0.0002
+# 帯の各段が重力方向へ向きを揃える強さ(0で表面の延長方向のまま、1で真下)
+LENGTH_STRAND_GRAVITY_BLEND = 0.2
+LENGTH_STRAND_FIRST_GRAVITY_BLEND = 0.1
+
+
+def find_hem_boundary_loop(faces, vertices):
+    # 三角形メッシュの境界ループのうち最も低いものを裾として返す。
+    # 戻り値の向きは既存面の辺と逆向きにし、追加する帯の面の巻き方向を揃える。
+    use_count = {}
+    face_direction = {}
+    for face in faces:
+        for index in range(3):
+            start, end = face[index], face[(index + 1) % 3]
+            edge = (min(start, end), max(start, end))
+            use_count[edge] = use_count.get(edge, 0) + 1
+            face_direction[edge] = (start, end)
+    boundary_edges = [edge for edge, count in use_count.items() if count == 1]
+    if any(count > 2 for count in use_count.values()):
+        raise RuntimeError("Bottomsに非多様体の辺があり、裾帯を作れません。")
+    adjacency_map = {}
+    for start, end in boundary_edges:
+        adjacency_map.setdefault(start, []).append(end)
+        adjacency_map.setdefault(end, []).append(start)
+    if any(len(neighbors) != 2 for neighbors in adjacency_map.values()):
+        raise RuntimeError("Bottomsの境界が単純なループではありません。")
+    visited = set()
+    loops = []
+    for start in adjacency_map:
+        if start in visited:
+            continue
+        loop = [start]
+        visited.add(start)
+        previous = None
+        current = start
+        while True:
+            following = [n for n in adjacency_map[current] if n != previous]
+            next_vertex = following[0]
+            if next_vertex == start:
+                break
+            if next_vertex in visited:
+                raise RuntimeError("Bottomsの境界ループを辿れません。")
+            loop.append(next_vertex)
+            visited.add(next_vertex)
+            previous, current = current, next_vertex
+        loops.append(loop)
+    if not loops:
+        raise RuntimeError("Bottomsに境界ループがありません。")
+    hem = min(
+        loops,
+        key=lambda loop: sum(vertices[i][1] for i in loop) / len(loop),
+    )
+    first_edge = (min(hem[0], hem[1]), max(hem[0], hem[1]))
+    if face_direction[first_edge] != (hem[1], hem[0]):
+        hem = [hem[0], *reversed(hem[1:])]
+    for index, left in enumerate(hem):
+        right = hem[(index + 1) % len(hem)]
+        edge = (min(left, right), max(left, right))
+        if face_direction[edge] != (right, left):
+            raise RuntimeError("Bottoms裾の巻き方向が不揃いです。")
+    return hem
+
+
+def find_vertices_above_hem(faces, vertices, hem):
+    # 裾頂点ごとに、表面を上へ辿る隣接頂点(裾ループ外で最も高い頂点)を返す。
+    hem_set = set(hem)
+    neighbors = {}
+    for face in faces:
+        for index in range(3):
+            start, end = face[index], face[(index + 1) % 3]
+            neighbors.setdefault(start, set()).add(end)
+            neighbors.setdefault(end, set()).add(start)
+    above = []
+    for hem_vertex in hem:
+        candidates = [
+            n for n in neighbors[hem_vertex]
+            if n not in hem_set and vertices[n][1] > vertices[hem_vertex][1]
+        ]
+        if not candidates:
+            candidates = [
+                n for n in neighbors[hem_vertex]
+                if vertices[n][1] > vertices[hem_vertex][1]
+            ]
+        above.append(
+            max(candidates, key=lambda n: vertices[n][1]) if candidates else None
+        )
+    return above
+
+
+def unit_or_down(vector):
+    length = vector_norm(vector)
+    if length <= 1.0e-9:
+        return [0.0, -1.0, 0.0]
+    return [component / length for component in vector]
+
+
+source_skirt_vertex_count = len(skirt_base_vertices)
+length_ring_loop = find_hem_boundary_loop(skirt_faces, skirt_base_vertices)
+length_ring_above = find_vertices_above_hem(
+    skirt_faces, skirt_base_vertices, length_ring_loop,
+)
+length_ring_epsilon = LENGTH_RING_EPSILON_METERS * local_units_per_meter_value
+length_ring_size = len(length_ring_loop)
+
+
+def length_ring_vertex_index(ring, position):
+    # ring=1..LENGTH_RING_COUNT。ring=0は裾そのもの。
+    if ring == 0:
+        return length_ring_loop[position]
+    return source_skirt_vertex_count + (ring - 1) * length_ring_size + position
+
+
+def folded_ring_points(frame_vertices):
+    # frame_verticesは元のBottoms頂点列。折りたたんだ帯の頂点を返す。
+    points = []
+    for ring in range(1, LENGTH_RING_COUNT + 1):
+        for position, hem_vertex in enumerate(length_ring_loop):
+            above_vertex = length_ring_above[position]
+            direction = unit_or_down(
+                vector_sub(frame_vertices[hem_vertex], frame_vertices[above_vertex])
+                if above_vertex is not None else [0.0, -1.0, 0.0]
+            )
+            points.append([
+                frame_vertices[hem_vertex][axis]
+                + direction[axis] * length_ring_epsilon * ring
+                for axis in range(3)
+            ])
+    return points
+
+
+skirt_base_vertices = (
+    skirt_base_vertices + folded_ring_points(skirt_base_vertices)
+)
+previous_ring_indices = list(length_ring_loop)
+for ring in range(1, LENGTH_RING_COUNT + 1):
+    next_ring_indices = [
+        length_ring_vertex_index(ring, position)
+        for position in range(length_ring_size)
+    ]
+    for position in range(length_ring_size):
+        following = (position + 1) % length_ring_size
+        skirt_faces.append([
+            previous_ring_indices[position],
+            previous_ring_indices[following],
+            next_ring_indices[following],
+        ])
+        skirt_faces.append([
+            previous_ring_indices[position],
+            next_ring_indices[following],
+            next_ring_indices[position],
+        ])
+    previous_ring_indices = next_ring_indices
+print(
+    f"[diag] length rings: hem_loop={length_ring_size}, rings={LENGTH_RING_COUNT}, "
+    f"vertices {source_skirt_vertex_count}->{len(skirt_base_vertices)}, "
+    f"faces->{len(skirt_faces)}"
+)
+
 if (
     requested_vertex_count > 0
     and len(body_vertex_indices) != requested_vertex_count
@@ -1357,6 +1520,25 @@ body_base_vertices = [
     for index in body_vertex_indices
 ]
 vertex_count = len(body_vertex_indices)
+thigh_vertex_group_indices = {
+    group.index
+    for group in body_object.vertex_groups
+    if re.search(r"(?:upper.?leg|up.?leg|thigh)", group.name, re.I)
+}
+body_thigh_coverage_mask = [
+    any(
+        membership.group in thigh_vertex_group_indices
+        and membership.weight > 0.0
+        for membership in body_object.data.vertices[source_index].groups
+    )
+    for source_index in body_vertex_indices
+]
+has_thigh_coverage_weights = any(body_thigh_coverage_mask)
+print(
+    f"[diag] body thigh coverage weights: "
+    f"groups={len(thigh_vertex_group_indices)}, "
+    f"vertices={sum(body_thigh_coverage_mask)}"
+)
 
 skin_min, skin_max = bbox_extent(body_base_vertices)
 skirt_min, skirt_max = bbox_extent(skirt_base_vertices)
@@ -1482,6 +1664,7 @@ skinned_vertices = []
 skinned_normals = []
 skirt_skinned_vertices = []
 skirt_skinned_vertices_after_runtime_leg_close = []
+leg_landmark_frames = []
 sampled_body_progresses = []
 sampled_source_frames = []
 progress_log(f"Body/SKIN評価を開始します: frames={frame_count}")
@@ -1563,6 +1746,23 @@ def restore_leg_pose_quaternions(snapshots):
     bpy.context.view_layer.update()
 
 
+def bone_position_in_body_local(bone):
+    world_position = armature_object.matrix_world @ bone.matrix.translation
+    return body_object.matrix_world.inverted() @ world_position
+
+
+def capture_leg_landmarks_in_body_local():
+    required_names = ("hips", "leftThigh", "rightThigh", "leftKnee", "rightKnee")
+    if armature_object is None or any(
+        leg_close_bones.get(name) is None for name in required_names
+    ):
+        return None
+    return {
+        name: list(bone_position_in_body_local(leg_close_bones[name]))
+        for name in required_names
+    }
+
+
 for index in range(frame_count):
     if should_log_progress(index, frame_count):
         progress_log(f"Body/SKIN評価 {index + 1}/{frame_count}")
@@ -1590,6 +1790,7 @@ for index in range(frame_count):
             leg_adduction_calibration,
             progress,
         )
+    leg_landmark_frames.append(capture_leg_landmarks_in_body_local())
 
     # Body/SKINと同じruntime_leg_close後の姿勢系列からBottomsを取得し、
     # 教師スカートとBodyの姿勢基準を一致させる。
@@ -1607,12 +1808,21 @@ for index in range(frame_count):
     else:
         skirt_vertices_after_leg_close = skirt_vertices
 
+    skirt_vertices_before_extension = skirt_vertices
     if len(vertices) != vertex_count:
         raise RuntimeError("評価後Body/SKIN頂点数が一致しません。")
     if len(skirt_vertices) != len(skirt_vertex_indices):
         raise RuntimeError("評価後Body/Bottoms頂点数が一致しません。")
     if len(skirt_vertices_after_leg_close) != len(skirt_vertex_indices):
         raise RuntimeError("脚閉じ後Body/Bottoms頂点数が一致しません。")
+    skirt_vertices = skirt_vertices + folded_ring_points(skirt_vertices)
+    if skirt_vertices_after_leg_close is skirt_vertices_before_extension:
+        skirt_vertices_after_leg_close = skirt_vertices
+    else:
+        skirt_vertices_after_leg_close = (
+            skirt_vertices_after_leg_close
+            + folded_ring_points(skirt_vertices_after_leg_close)
+        )
     skinned_vertices.append(vertices)
     skinned_normals.append(normals)
     skirt_skinned_vertices.append(skirt_vertices)
@@ -1687,6 +1897,7 @@ if truncate_after_motion_peak and peak_index < frame_count - 1:
     skirt_skinned_vertices_after_runtime_leg_close = (
         skirt_skinned_vertices_after_runtime_leg_close[: peak_index + 1]
     )
+    leg_landmark_frames = leg_landmark_frames[: peak_index + 1]
     per_vertex_motion = per_vertex_motion[: peak_index + 1]
     body_motion_preview = body_motion_preview[: peak_index + 1]
     motion_norms = motion_norms[: peak_index + 1]
@@ -2327,119 +2538,398 @@ validate_skirt_geometry(
 )
 progress_log("動的クリアランス高精度教師データの生成が完了しました。")
 
-
-def make_style_seed(vertices, style_vector):
-    # 長さ・タイトさ・プリーツを腰帯以外へ限定して加える。
-    # この結果は保存前に必ず既存のBody距離・太腿面補正を再実行する。
-    length, tightness, pleats = style_vector
-    source = [list(point) for point in vertices]
-    y_values = [point[1] for point in skirt_base_vertices]
-    min_y = min(y_values)
-    max_y = max(y_values)
-    height = max(max_y - min_y, 1.0e-8)
-    center_x = sum(point[0] for point in skirt_base_vertices) / len(skirt_base_vertices)
-    center_z = sum(point[2] for point in skirt_base_vertices) / len(skirt_base_vertices)
-    result = []
-    for index, point in enumerate(source):
-        base = skirt_base_vertices[index]
-        from_waist = max(0.0, min(1.0, (max_y - base[1]) / height))
-        lower_weight = smoothstep01(from_waist)
-        radial_x = base[0] - center_x
-        radial_z = base[2] - center_z
-        radial_length = max(math.sqrt(radial_x * radial_x + radial_z * radial_z), 1.0e-8)
-        # tightness=1 は裾側の周方向半径を縮め、length=1 は裾を下へ延長する。
-        radius_scale = 1.0 - 0.28 * tightness * lower_weight
-        pleat_wave = math.sin(math.atan2(radial_z, radial_x) * 8.0) * pleats * 0.045 * height * lower_weight
-        result.append([
-            center_x + radial_x * radius_scale + radial_x / radial_length * pleat_wave,
-            point[1] - length * 0.45 * height * lower_weight,
-            center_z + radial_z * radius_scale + radial_z / radial_length * pleat_wave,
-        ])
-    return result
-
-
-def enforce_style_safety(style_seed_sequence, style_name):
-    # スタイル変形後に既存と同一の順序で安全制約を再適用する。
-    safe_sequence = []
-    style_nearest_indices = []
-    style_started_at = time.monotonic()
-    total_frames = len(style_seed_sequence)
-    progress_log(
-        f"スタイル安全教師 {style_name} を開始します: "
-        f"frames={total_frames}"
+if STYLE_PRESETS != {"base": (0.0, 0.0, 0.0)}:
+    raise RuntimeError(
+        "Length候補はSTYLE_PRESETSではなくLENGTH_RATIOSから生成します。"
     )
-    for frame_idx, seed in enumerate(style_seed_sequence):
-        if should_log_progress(frame_idx, total_frames):
-            elapsed = time.monotonic() - style_started_at
-            completed = frame_idx + 1
-            eta = elapsed * (total_frames - completed) / completed
-            progress_log(
-                f"スタイル安全教師 {style_name} "
-                f"{frame_idx + 1}/{total_frames} "
-                f"elapsed={format_elapsed(elapsed)} "
-                f"eta={format_elapsed(eta)}"
-            )
-        frame_skirt = [list(point) for point in seed]
+
+style_teacher_vertices = {}
+style_teacher_vertices["base"] = geometric_teacher_vertices
+
+# ------------------------------------------------------------
+# Length教師: 基準教師の裾頂点から、帯の各段を「表面の延長方向から重力方向へ
+# 少しずつ向きを変えながら」伸ばす。段ごとに身体の外側へ投影するので、
+# 脚の上では太腿に沿い、膝より先では下へ垂れる。全フレーム・全頂点を
+# base教師と同じ符号付き面距離で検証し、1つでも不足すれば停止する。
+# ------------------------------------------------------------
+progress_log("Length教師データの生成を開始します。")
+length_rest_height = y_range_base
+
+
+# 立位FBXでは降ろした手がスカート側面に重なる。ランタイムが腕を外へ開いて回避する
+# 箇所なので、帯の面の貫通検査では腕・手に最も近い点を対象外にする
+# (頂点の符号付き面距離検証は腕も含めて全て行う)。
+arm_group_pattern = re.compile(
+    r"(upperarm|lowerarm|forearm|hand|index\d|little\d|middle\d|ring\d|thumb\d|pinky\d)",
+    re.IGNORECASE,
+)
+arm_group_indices = {
+    index for index, group in enumerate(body_object.vertex_groups)
+    if arm_group_pattern.search(group.name)
+}
+body_arm_vertex_mask = []
+for source_index in body_vertex_indices:
+    memberships = body_object.data.vertices[source_index].groups
+    total_weight = sum(item.weight for item in memberships)
+    arm_weight = sum(item.weight for item in memberships if item.group in arm_group_indices)
+    body_arm_vertex_mask.append(total_weight > 0.0 and arm_weight / total_weight > 0.5)
+if not any(body_arm_vertex_mask):
+    raise RuntimeError("Bodyの腕・手の頂点を特定できません。")
+
+
+from mathutils.bvhtree import BVHTree
+
+body_bvh_cache = {}
+
+
+def body_bvh(frame_idx):
+    # Body面への最近接をCで引くための木。符号は最近接面の法線で決めるため、
+    # 頂点・辺の近傍では厳密な角度重み付き法線と僅かに異なる。
+    # 補正の下見と一次検証にだけ使い、採否は厳密な符号付き面距離で決める。
+    if frame_idx not in body_bvh_cache:
+        body_bvh_cache[frame_idx] = BVHTree.FromPolygons(
+            [tuple(point) for point in skinned_vertices[frame_idx]],
+            [tuple(triangle) for triangle in body_skin_triangles],
+        )
+    return body_bvh_cache[frame_idx]
+
+
+def bvh_signed_distance(tree, point):
+    location, normal, _, distance = tree.find_nearest(Vector(point))
+    if location is None:
+        return None, None
+    sign = 1.0 if (Vector(point) - location).dot(normal) >= 0.0 else -1.0
+    return sign * distance, normal
+
+
+# 帯の面が身体を横切らないよう、面上の点(重心・辺の中点)に求める最小の離隔。
+LENGTH_FACE_CLEARANCE = 0.2
+# 面上の検査点の重心座標。重心・辺の中点・各頂点寄りの点。大きな面の中央の
+# 膨らみ(膝など)を拾うため、辺の中点だけでなく面内の点も含める。
+FACE_SAMPLE_WEIGHTS = (
+    (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+    (0.5, 0.5, 0.0), (0.0, 0.5, 0.5), (0.5, 0.0, 0.5),
+    (0.6, 0.2, 0.2), (0.2, 0.6, 0.2), (0.2, 0.2, 0.6),
+    (0.25, 0.25, 0.5), (0.5, 0.25, 0.25), (0.25, 0.5, 0.25),
+)
+LENGTH_FACE_REFINE_PASSES = 12
+# 1回の補正で頂点を動かす上限(局所的な法線の乱れで頂点が飛ぶのを防ぐ)
+LENGTH_FACE_MAX_SHIFT = 1.0
+# BVHの下見で離隔に十分な余裕がある頂点は、厳密な投影計算を省く
+LENGTH_BVH_MARGIN = 0.3
+# 一次検証で離隔がこの値未満の点だけ、厳密な符号付き面距離で再計算する
+LENGTH_MEASURE_EXACT_BELOW = 0.8
+
+
+def refine_ring_faces(frame_vertices, active_rings, body_points, kd_tree, tree):
+    # 頂点が全て身体の外でも、長い三角形(襞の隣り合う裾頂点など)は太腿や膝の
+    # 曲面を横切る。面上の点が不足していれば、不足分をその法線方向へ動かせる頂点
+    # (裾そのものは動かさない)を押し出す。全面が足りるまで繰り返す。
+    first_face = len(skirt_faces) - 2 * LENGTH_RING_COUNT * length_ring_size
+    last_face = first_face + 2 * active_rings * length_ring_size
+    for _ in range(LENGTH_FACE_REFINE_PASSES):
+        moved = False
+        for face in skirt_faces[first_face:last_face]:
+            movable = [index >= source_skirt_vertex_count for index in face]
+            if not any(movable):
+                continue
+            corners = [frame_vertices[index] for index in face]
+            samples = [
+                (
+                    [sum(weight * corner[axis] for weight, corner in zip(weights, corners))
+                     for axis in range(3)],
+                    list(weights),
+                )
+                for weights in FACE_SAMPLE_WEIGHTS
+            ]
+            for sample, weights in samples:
+                signed, normal = bvh_signed_distance(tree, sample)
+                if signed is None or signed >= LENGTH_MEASURE_EXACT_BELOW:
+                    continue
+                nearest = nearest_body_index(sample, body_points, kd_tree)
+                if body_arm_vertex_mask[nearest]:
+                    continue
+                # 下見の符号は凹部で厳密な判定とずれるため、身体に近い点は
+                # 検証と同じ厳密な符号付き面距離とその法線で判定する。
+                signed, _, normal = signed_surface_distance(
+                    sample, body_points, body_skin_triangles,
+                    body_vertex_triangle_neighbors[nearest],
+                )
+                if signed is None or normal is None or signed >= LENGTH_FACE_CLEARANCE:
+                    continue
+                deficit = LENGTH_FACE_CLEARANCE - signed
+                movable_weight = sum(w for w, m in zip(weights, movable) if m)
+                if deficit <= 0.0 or movable_weight <= 1.0e-6:
+                    continue
+                shift = min(deficit / movable_weight + 0.02, LENGTH_FACE_MAX_SHIFT)
+                for index, can_move in zip(face, movable):
+                    if can_move:
+                        frame_vertices[index] = [
+                            frame_vertices[index][axis] + normal[axis] * shift
+                            for axis in range(3)
+                        ]
+                moved = True
+                corners = [frame_vertices[index] for index in face]
+        if not moved:
+            return
+    # 収束しなければ、検証側(measure_length_teacher)が数値で止める。
+
+
+def build_length_teacher(extension_ratio):
+    active_rings = max(1, int(math.ceil(extension_ratio * LENGTH_RING_COUNT - 1.0e-9)))
+    step_length = length_rest_height * extension_ratio / active_rings
+    sequence = []
+    for frame_idx in range(frame_count):
+        frame_vertices = [list(point) for point in geometric_teacher_vertices[frame_idx]]
         frame_body_pts = skinned_vertices[frame_idx]
         frame_body_norms = skinned_normals[frame_idx]
         frame_kd_tree = body_kd_trees[frame_idx]
-        # スタイル変形は一度平滑化してから最終形状へ投影する。
-        # 中間形状の反復投影は安全ゲートを強めず、同じ面距離探索を重複させる。
-        frame_skirt = smooth_skirt_displacement(
-            frame_skirt, seed, adjacency, fixed_vertices,
-        )
-        apply_thigh_surface_offset(
-            frame_skirt, frame_body_pts, thigh_region_mask,
-            kd_tree=frame_kd_tree, frame_index=frame_idx,
-        )
-        # 太腿投影後の最終形状へ、非太腿領域も一度だけ面距離投影する。
-        for index in range(len(frame_skirt)):
-            if not thigh_region_mask[index]:
-                frame_skirt[index] = push_outside_body_surface(
-                    frame_skirt[index], frame_body_pts, frame_body_norms,
-                    skirt_clearance[index], kd_tree=frame_kd_tree,
+        strand_directions = []
+        for position, hem_vertex in enumerate(length_ring_loop):
+            above_vertex = length_ring_above[position]
+            hem_point = frame_vertices[hem_vertex]
+            surface_direction = unit_or_down(
+                vector_sub(hem_point, frame_vertices[above_vertex])
+                if above_vertex is not None else [0.0, -1.0, 0.0]
+            )
+            direction = unit_or_down([
+                surface_direction[axis] * (1.0 - LENGTH_STRAND_FIRST_GRAVITY_BLEND)
+                + (-1.0 if axis == 1 else 0.0) * LENGTH_STRAND_FIRST_GRAVITY_BLEND
+                for axis in range(3)
+            ])
+            previous_point = hem_point
+            for ring in range(1, active_rings + 1):
+                vertex_index = length_ring_vertex_index(ring, position)
+                direction = unit_or_down([
+                    direction[axis] * (1.0 - LENGTH_STRAND_GRAVITY_BLEND)
+                    + (-1.0 if axis == 1 else 0.0) * LENGTH_STRAND_GRAVITY_BLEND
+                    for axis in range(3)
+                ])
+                candidate = [
+                    previous_point[axis] + direction[axis] * step_length
+                    for axis in range(3)
+                ]
+                if frame_idx > 0:
+                    candidate = push_outside_body_surface(
+                        candidate,
+                        frame_body_pts,
+                        frame_body_norms,
+                        teacher_clearances[vertex_index],
+                        kd_tree=frame_kd_tree,
+                    )
+                direction = unit_or_down(vector_sub(candidate, previous_point))
+                frame_vertices[vertex_index] = candidate
+                previous_point = candidate
+            strand_directions.append(direction)
+        if frame_idx > 0:
+            # 面の補正は頂点を動かすので、頂点クリアランスの再確保と交互に収束させる。
+            for _ in range(LENGTH_FACE_REFINE_PASSES):
+                refine_ring_faces(frame_vertices, active_rings, frame_body_pts, frame_kd_tree, body_bvh(frame_idx))
+                vertex_moved = False
+                for position in range(length_ring_size):
+                    for ring in range(1, active_rings + 1):
+                        vertex_index = length_ring_vertex_index(ring, position)
+                        bvh_distance, _ = bvh_signed_distance(
+                            body_bvh(frame_idx), frame_vertices[vertex_index],
+                        )
+                        if bvh_distance is not None and bvh_distance >= (
+                            teacher_clearances[vertex_index] + LENGTH_BVH_MARGIN
+                        ):
+                            continue
+                        pushed = push_outside_body_surface(
+                            frame_vertices[vertex_index],
+                            frame_body_pts,
+                            frame_body_norms,
+                            teacher_clearances[vertex_index],
+                            kd_tree=frame_kd_tree,
+                        )
+                        if pushed != frame_vertices[vertex_index]:
+                            frame_vertices[vertex_index] = pushed
+                            vertex_moved = True
+                if not vertex_moved:
+                    break
+        # 使わない段は、最後に使った段の外向き法線へ微小な厚みだけ離して折りたたむ。
+        for position in range(length_ring_size):
+            last_point = frame_vertices[length_ring_vertex_index(active_rings, position)]
+            outward = strand_directions[position]
+            if frame_idx > 0:
+                signed, _, normal = signed_surface_distance(
+                    last_point, frame_body_pts, body_skin_triangles,
+                    body_vertex_triangle_neighbors[
+                        nearest_body_index(last_point, frame_body_pts, frame_kd_tree)
+                    ],
                 )
-        safe_sequence.append(frame_skirt)
-        style_nearest_indices.append([
-            nearest_body_index(point, frame_body_pts, frame_kd_tree)
-            for point in frame_skirt
-        ])
-    progress_log(f"スタイル安全教師 {style_name} の全フレーム検証を開始します")
+                if signed is not None and normal is not None:
+                    outward = normal
+            for ring in range(active_rings + 1, LENGTH_RING_COUNT + 1):
+                frame_vertices[length_ring_vertex_index(ring, position)] = [
+                    last_point[axis] + outward[axis] * length_ring_epsilon * (ring - active_rings)
+                    for axis in range(3)
+                ]
+        if frame_idx > 0 and active_rings < LENGTH_RING_COUNT:
+            # 折りたたんだ段の面(最後の段と同じ位置にある長い面)も同じ基準で整える。
+            for _ in range(LENGTH_FACE_REFINE_PASSES):
+                refine_ring_faces(frame_vertices, LENGTH_RING_COUNT, frame_body_pts, frame_kd_tree, body_bvh(frame_idx))
+                vertex_moved = False
+                for position in range(length_ring_size):
+                    for ring in range(1, LENGTH_RING_COUNT + 1):
+                        vertex_index = length_ring_vertex_index(ring, position)
+                        bvh_distance, _ = bvh_signed_distance(
+                            body_bvh(frame_idx), frame_vertices[vertex_index],
+                        )
+                        if bvh_distance is not None and bvh_distance >= (
+                            teacher_clearances[vertex_index] + LENGTH_BVH_MARGIN
+                        ):
+                            continue
+                        pushed = push_outside_body_surface(
+                            frame_vertices[vertex_index],
+                            frame_body_pts,
+                            frame_body_norms,
+                            teacher_clearances[vertex_index],
+                            kd_tree=frame_kd_tree,
+                        )
+                        if pushed != frame_vertices[vertex_index]:
+                            frame_vertices[vertex_index] = pushed
+                            vertex_moved = True
+                if not vertex_moved:
+                    break
+        if active_rings < LENGTH_RING_COUNT:
+            # 面の補正で折りたたんだ段同士が重なると面積ゼロの縮退面になる。
+            # 隣り合う段が微小な厚み(length_ring_epsilon)を保つよう直す。
+            for position in range(length_ring_size):
+                for ring in range(active_rings + 1, LENGTH_RING_COUNT + 1):
+                    previous_vertex = frame_vertices[length_ring_vertex_index(ring - 1, position)]
+                    current_index = length_ring_vertex_index(ring, position)
+                    gap = vector_sub(frame_vertices[current_index], previous_vertex)
+                    if vector_norm(gap) >= length_ring_epsilon * 0.5:
+                        continue
+                    outward = strand_directions[position]
+                    if frame_idx > 0:
+                        _, normal = bvh_signed_distance(body_bvh(frame_idx), previous_vertex)
+                        if normal is not None:
+                            outward = list(normal)
+                    frame_vertices[current_index] = [
+                        previous_vertex[axis] + outward[axis] * length_ring_epsilon
+                        for axis in range(3)
+                    ]
+        sequence.append(frame_vertices)
+    return sequence
+
+
+def measure_length_teacher(sequence):
+    # 各候補の数値QA。validate_skirt_geometryで例外が出なかった結果の記録用。
+    minimum_distance = 1.0e30
+    minimum_face_distance = 1.0e30
+    worst_face = None
+    maximum_edge_ratio = 0.0
+    first_ring_face = len(skirt_faces) - 2 * LENGTH_RING_COUNT * length_ring_size
+    for frame_idx in range(1, len(sequence)):
+        frame_body_pts = skinned_vertices[frame_idx]
+        frame_kd_tree = body_kd_trees[frame_idx]
+
+        frame_tree = body_bvh(frame_idx)
+
+        def surface_distance_at(point):
+            approximate, _ = bvh_signed_distance(frame_tree, point)
+            if approximate is not None and approximate >= LENGTH_MEASURE_EXACT_BELOW:
+                return approximate
+            signed, _, _ = signed_surface_distance(
+                point,
+                frame_body_pts,
+                body_skin_triangles,
+                body_vertex_triangle_neighbors[
+                    nearest_body_index(point, frame_body_pts, frame_kd_tree)
+                ],
+            )
+            return signed
+
+        for vertex_index in range(source_skirt_vertex_count, len(sequence[frame_idx])):
+            minimum_distance = min(
+                minimum_distance, surface_distance_at(sequence[frame_idx][vertex_index]),
+            )
+        # 頂点が全て身体の外でも、長い三角形が膝などを横切ることがある。
+        # 帯の面について重心と辺の中点も身体の外にあることを確認する。
+        for face_offset, face in enumerate(skirt_faces[first_ring_face:]):
+            corners = [sequence[frame_idx][index] for index in face]
+            samples = [
+                [sum(weight * corner[axis] for weight, corner in zip(weights, corners))
+                 for axis in range(3)]
+                for weights in FACE_SAMPLE_WEIGHTS
+            ]
+            for sample in samples:
+                if body_arm_vertex_mask[
+                    nearest_body_index(sample, frame_body_pts, frame_kd_tree)
+                ]:
+                    continue
+                sample_distance = surface_distance_at(sample)
+                if sample_distance < minimum_face_distance:
+                    minimum_face_distance = sample_distance
+                    worst_face = (
+                        frame_idx, face_offset, [round(v, 2) for v in sample],
+                        [[round(v, 2) for v in corner] for corner in corners],
+                        [round(surface_distance_at(corner), 3) for corner in corners],
+                    )
+    if minimum_face_distance < 0.0:
+        frame_idx, face_offset, sample, worst_corners, worst_corner_distances = worst_face
+        raise RuntimeError(
+            "Length教師の帯の面が身体を横切っています: "
+            f"min_face_distance={minimum_face_distance:.6f}, frame={frame_idx}, "
+            f"ring={face_offset // (2 * length_ring_size) + 1}, "
+            f"strand={(face_offset % (2 * length_ring_size)) // 2}, point={sample}, "
+            f"corners={worst_corners}, corner_distances={worst_corner_distances}"
+        )
+    for frame_idx in range(1, len(sequence)):
+        for left, right in edge_pairs:
+            reference = vector_norm(vector_sub(sequence[0][left], sequence[0][right]))
+            if reference <= LOCAL_SCALE_EPSILON:
+                continue
+            ratio = vector_norm(vector_sub(
+                sequence[frame_idx][left], sequence[frame_idx][right],
+            )) / reference
+            maximum_edge_ratio = max(maximum_edge_ratio, ratio)
+    return minimum_distance, minimum_face_distance, maximum_edge_ratio
+
+
+length_teacher_vertices = {}
+length_candidates = {}
+for extension_ratio in LENGTH_RATIOS:
+    length_name = f"length_{int(round(extension_ratio * 100)):03d}"
+    length_sequence = build_length_teacher(extension_ratio)
     validate_skirt_geometry(
-        safe_sequence, skirt_faces, skinned_vertices, teacher_clearances,
-        fixed_vertices, f"style_teacher_{style_name}",
-        reference_sequence=style_seed_sequence,
-        nearest_indices_sequence=style_nearest_indices,
+        length_sequence,
+        skirt_faces,
+        skinned_vertices,
+        teacher_clearances,
+        fixed_vertices,
+        length_name,
+        reference_sequence=[length_sequence[0]] * len(length_sequence),
+        nearest_indices_sequence=[
+            [nearest_body_index(point, skinned_vertices[frame_idx], body_kd_trees[frame_idx])
+             for point in frame_points]
+            for frame_idx, frame_points in enumerate(length_sequence)
+        ],
         surface_triangles=body_skin_triangles,
         surface_mask=None,
         surface_triangle_candidates=body_vertex_triangle_neighbors,
         body_kd_trees=body_kd_trees,
     )
-    progress_log(
-        f"スタイル安全教師 {style_name} が完了しました: "
-        f"elapsed={format_elapsed(time.monotonic() - style_started_at)}"
+    minimum_distance, minimum_face_distance, maximum_edge_ratio = measure_length_teacher(length_sequence)
+    length_teacher_vertices[length_name] = length_sequence
+    length_candidates[length_name] = {
+        "extension_ratio": extension_ratio,
+        "active_rings": max(1, int(math.ceil(extension_ratio * LENGTH_RING_COUNT - 1.0e-9))),
+        "frame_count": len(length_sequence),
+        "numeric_qa": "pass",
+        "minimum_signed_distance": minimum_distance,
+        "minimum_face_sample_distance": minimum_face_distance,
+        "maximum_edge_ratio": maximum_edge_ratio,
+    }
+    print(
+        f"[diag] {length_name}: min_signed_distance={minimum_distance:.6f}, "
+        f"min_face_sample_distance={minimum_face_distance:.6f}, "
+        f"max_edge_ratio={maximum_edge_ratio:.4f}"
     )
-    return safe_sequence
-
-
-style_teacher_vertices = {}
-styles_started_at = time.monotonic()
-for style_name, style_vector in STYLE_PRESETS.items():
-    if style_name == "base":
-        style_teacher_vertices[style_name] = geometric_teacher_vertices
-        continue
-    progress_log(f"スタイル安全教師を生成します: {style_name}")
-    style_seed_sequence = [
-        make_style_seed(frame_vertices, style_vector)
-        for frame_vertices in geometric_teacher_vertices
-    ]
-    style_teacher_vertices[style_name] = enforce_style_safety(
-        style_seed_sequence, style_name,
-    )
-progress_log(
-    "全スタイル安全教師の生成が完了しました: "
-    f"elapsed={format_elapsed(time.monotonic() - styles_started_at)}"
-)
+progress_log("Length教師データの生成が完了しました。")
 
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 progress_log(f"身体特徴量PKLを書き込みます: {output_path}")
@@ -2455,6 +2945,9 @@ with open(output_path, "wb") as file:
                 for indices in body_vertex_triangle_neighbors
             ],
             "thigh_region_mask": thigh_region_mask,
+            "body_thigh_coverage_mask": body_thigh_coverage_mask,
+            "has_thigh_coverage_weights": has_thigh_coverage_weights,
+            "leg_landmark_frames": leg_landmark_frames,
             "skinned_vertices": skinned_vertices,
             "skinned_normals": skinned_normals,
             "skirt_skinned_vertices": skirt_skinned_vertices,
@@ -2477,7 +2970,15 @@ with open(output_path, "wb") as file:
             "skirt_geometric_teacher_vertices": geometric_teacher_vertices,
             # style名 -> (frames, vertices, 3)。全て既存と同じ安全補正済み教師。
             "skirt_style_teacher_vertices": style_teacher_vertices,
+            # Length候補ごとの教師。baseと同じ頂点数・面で、裾帯を展開した形状。
+            "skirt_length_teacher_vertices": length_teacher_vertices,
+            "skirt_length_candidates": length_candidates,
+            "skirt_length_ring_loop": length_ring_loop,
+            "skirt_length_ring_count": LENGTH_RING_COUNT,
+            "skirt_source_vertex_count": source_skirt_vertex_count,
             "style_latent_schema": ["length", "tightness", "pleats"],
+            "style_controls": [],
+            "length_release_status": "disabled_pending_cloth_bake_coverage_and_image_qa",
             "style_presets": {
                 name: list(vector)
                 for name, vector in STYLE_PRESETS.items()
@@ -2488,7 +2989,9 @@ with open(output_path, "wb") as file:
             ),
             "thigh_surface_min_distances": thigh_surface_min_distances,
             "skirt_base_vertices": skirt_base_vertices,
+            "skirt_waistband_mask": is_waistband,
             "skirt_faces": skirt_faces,
+            "local_units_per_meter": local_units_per_meter_value,
             "skirt_vertex_indices": skirt_vertex_indices,
             "animation_start": animation_start,
             "animation_end": animation_end,
@@ -2527,6 +3030,39 @@ validate_skirt_geometry(
     body_kd_trees=body_kd_trees,
 )
 progress_log("身体特徴量PKLの書き込みが完了しました。")
+
+# Length候補の数値QA結果を、PKLのSHA-256に結び付けて保存する。
+# 公開(release_status=approved)は6視点の画像QAを人が承認するまで行わない。
+import hashlib
+import json
+
+with open(output_path, "rb") as file:
+    written_context_sha256 = hashlib.sha256(file.read()).hexdigest()
+candidate_manifest_path = os.path.join(
+    os.path.dirname(output_path),
+    "skirt_length_release_manifest.json",
+)
+with open(candidate_manifest_path, "w", encoding="utf-8") as file:
+    json.dump(
+        {
+            "schema_version": 2,
+            "source": "geometric_teacher_length_rings",
+            "pipeline_version": LENGTH_PIPELINE_VERSION,
+            "context_sha256": written_context_sha256,
+            "ring_count": LENGTH_RING_COUNT,
+            "candidates": {
+                name: {**info, "image_qa": "pending_manual_review"}
+                for name, info in length_candidates.items()
+            },
+            "image_qa": {"status": "pending_manual_review", "views_per_candidate": 6},
+            "approved_by": None,
+            "release_status": "blocked",
+        },
+        file,
+        indent=2,
+        ensure_ascii=False,
+    )
+progress_log(f"Length候補マニフェストを書き込みました: {candidate_manifest_path}")
 print("身体特徴量を保存しました: " + output_path)
 '''
 

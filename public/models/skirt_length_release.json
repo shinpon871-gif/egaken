@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "release_status": "approved",
+  "image_qa": {
+    "status": "pass",
+    "reviewer": "Yanai-SHIN",
+    "comparison": "sha256 exact PNG equality against visually approved references",
+    "views_per_candidate": 6
+  },
+  "approved_by": "Yanai-SHIN",
+  "context_sha256": "39a9012007f0e6213534931235375665977d66b88ee7c1430bc63d4d22cbabe4",
+  "candidates": {
+    "length_025": {
+      "extension_ratio": 0.25
+    },
+    "length_050": {
+      "extension_ratio": 0.5
+    },
+    "length_075": {
+      "extension_ratio": 0.75
+    }
+  }
+}

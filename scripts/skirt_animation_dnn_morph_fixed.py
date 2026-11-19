@@ -26,6 +26,7 @@ Colab環境でBlender付属Pythonから実行することを想定している
     4 生成された skirt_mesh_sitting_animation.glb を Three.js 等のビューアで確認
 """
 
+import hashlib
 import json
 import os
 import pickle
@@ -159,9 +160,25 @@ if input_features not in (12, 15):
 
 style_latent_dimensions = 3
 base_input_features = input_features - style_latent_dimensions
+allowed_style_presets = {"base"}
+length_release_blocked_status = "disabled_pending_cloth_bake_coverage_and_image_qa"
+length_release_manifest_path = os.path.join(
+    output_dir,
+    "skirt_length_release_manifest.json",
+)
 
 with open(body_context_path, "rb") as file:
     context = pickle.load(file)
+with open(body_context_path, "rb") as file:
+    context_sha256 = hashlib.sha256(file.read()).hexdigest()
+if (
+    context.get("length_release_status") != length_release_blocked_status
+    or context.get("style_controls") != []
+):
+    raise RuntimeError(
+        "Length release gate metadataが未設定または未承認です。"
+        " create_skirt_body_context.pyでbase-only contextを再生成してください。"
+    )
 # この処理は何をするか
 # メッシュ間の縮尺不一致を検出し スケール違いによる変位爆発を防止する
 #
@@ -693,7 +710,6 @@ def resolve_animation_vertices(progresses, style_name="base"):
     # 注意点
     # 衝突フリーな2つの姿勢を線形補間しても中間フレームで衝突フリー性は保証されないため
     # 教師フレーム数とアニメーションフレーム数が一致しない場合は補間推測せず停止させる
-    style_teachers = context.get("skirt_style_teacher_vertices", {})
     teacher = style_teachers.get(style_name)
     if teacher is None:
         teacher = context.get("skirt_geometric_teacher_vertices")
@@ -732,15 +748,92 @@ def resolve_animation_vertices(progresses, style_name="base"):
 
 progresses = np.linspace(0.0, 1.0, num_animation_frames, dtype=np.float32)
 style_presets = context.get("style_presets", {"base": [0.0, 0.0, 0.0]})
+style_teachers = context.get("skirt_style_teacher_vertices", {})
+release_manifest = None
+length_teachers = context.get("skirt_length_teacher_vertices", {})
+if os.path.isfile(length_release_manifest_path):
+    with open(length_release_manifest_path, "r", encoding="utf-8") as file:
+        candidate_manifest = json.load(file)
+    if candidate_manifest.get("release_status") == "approved":
+        # Length候補はcontext PKLの教師データそのもの(基準と同じ頂点数・面)。
+        # 公開には、そのPKLに対する6視点画像QAの承認が必須。
+        if candidate_manifest.get("image_qa", {}).get("status") != "pass":
+            raise RuntimeError("Length manifest is approved without passing image QA.")
+        if not candidate_manifest.get("approved_by"):
+            raise RuntimeError("Length manifest has no reviewer approval.")
+        if candidate_manifest.get("context_sha256") != context_sha256:
+            raise RuntimeError(
+                "Length manifest was approved for a different body context. "
+                "Re-run render_skirt_length_views.py and approve_skirt_length_release.py."
+            )
+        if candidate_manifest.get("source") != "geometric_teacher_length_rings":
+            raise RuntimeError("Length manifest was not produced from geometric teachers.")
+        if candidate_manifest.get("image_qa", {}).get("views_per_candidate") != 6:
+            raise RuntimeError("Length image QA must cover all six required views.")
+        approved_candidates = candidate_manifest.get("candidates", {})
+        if not approved_candidates or set(approved_candidates) != set(length_teachers):
+            raise RuntimeError("Approved Length candidates and context teachers do not match.")
+        allowed_style_presets.update(approved_candidates)
+        for candidate_name, candidate_info in approved_candidates.items():
+            if candidate_info.get("numeric_qa") != "pass" or candidate_info.get("image_qa") != "pass":
+                raise RuntimeError(f"Length candidate did not pass both QA gates: {candidate_name}")
+            extension_ratio = float(candidate_info.get("extension_ratio", float("nan")))
+            if not np.isfinite(extension_ratio) or not 0.0 < extension_ratio <= 1.0:
+                raise RuntimeError(f"Invalid Length extension ratio: {candidate_name}")
+            trajectory = np.asarray(length_teachers[candidate_name], dtype=np.float32)
+            if trajectory.shape != (len(body_motion), len(base_vertices), 3):
+                raise RuntimeError(
+                    f"Length teacher has wrong shape: {candidate_name} {trajectory.shape}"
+                )
+            if not np.isfinite(trajectory).all():
+                raise RuntimeError(f"Length teacher contains non-finite vertices: {candidate_name}")
+            style_presets[candidate_name] = [extension_ratio, 0.0, 0.0]
+            style_teachers[candidate_name] = trajectory
+        release_manifest = candidate_manifest
+
+unexpected_presets = set(style_presets) - allowed_style_presets
+if unexpected_presets or "base" not in style_presets or "base" not in style_teachers:
+    raise RuntimeError(
+        "Unapproved style trajectories are present in the body context. "
+        "Regenerate a base-only context and use the approved Length bake manifest."
+    )
+if any(
+    len(vector) != style_latent_dimensions
+    or abs(float(vector[1])) > FLOAT_EPSILON
+    or abs(float(vector[2])) > FLOAT_EPSILON
+    for vector in style_presets.values()
+):
+    raise RuntimeError("Only the approved Length latent axis may be exported.")
 style_vertices = {
     style_name: resolve_animation_vertices(progresses, style_name)
     for style_name in style_presets
 }
 vertices = style_vertices["base"]
 vertices[0] = base_vertices
-if not np.isfinite(vertices).all():
-    raise RuntimeError("DNN出力にNaNまたはInfがあります。")
-validate_generated_geometry(vertices, faces, context)
+for style_name, style_sequence in style_vertices.items():
+    if not np.isfinite(style_sequence).all():
+        raise RuntimeError(f"Length教師にNaNまたはInfがあります: {style_name}")
+    validate_generated_geometry(style_sequence, faces, context)
+
+public_release_manifest = {
+    "schema_version": 1,
+    "release_status": "approved" if release_manifest else "disabled",
+    "image_qa": release_manifest.get("image_qa") if release_manifest else {"status": "pending"},
+    "approved_by": release_manifest.get("approved_by") if release_manifest else None,
+    "context_sha256": context_sha256,
+    "candidates": (
+        {
+            name: {"extension_ratio": info["extension_ratio"]}
+            for name, info in release_manifest["candidates"].items()
+        }
+        if release_manifest
+        else {}
+    ),
+}
+current_length_release_status = (
+    "approved" if release_manifest else length_release_blocked_status
+)
+os.makedirs(output_dir, exist_ok=True)
 
 source_body_progresses = np.asarray(
     context.get("source_body_progresses", []),
@@ -798,6 +891,8 @@ with open(mapping_path, "w", encoding="utf-8") as file:
                 else "skirt_skinned_vertices"
             ),
             "style_latent_schema": ["length", "tightness", "pleats"],
+            "style_controls": ["length"] if release_manifest else [],
+            "length_release_status": current_length_release_status,
             "style_presets": style_presets,
             "body_context_motion_norm_peak_index": context.get(
                 "motion_norm_peak_index",
@@ -851,7 +946,18 @@ with open(mapping_path, "w", encoding="utf-8") as file:
 # 異常変位が含まれるとThree.js側でバウンディングボックスが極端に膨張し モデルが画面外に消える原因となる
 # 古いモデルによる学習データ不整合が疑われる場合は z-score を用いて再学習の必要性を診断する
 base_extent = float(np.linalg.norm(base_vertices.max(axis=0) - base_vertices.min(axis=0)))
-displacement_norms = np.linalg.norm(vertices - base_vertices[None, :, :], axis=2)
+displacement_norms_by_style = {
+    style_name: np.linalg.norm(
+        style_sequence - base_vertices[None, :, :],
+        axis=2,
+    )
+    for style_name, style_sequence in style_vertices.items()
+}
+worst_style_name = max(
+    displacement_norms_by_style,
+    key=lambda style_name: float(displacement_norms_by_style[style_name].max()),
+)
+displacement_norms = displacement_norms_by_style[worst_style_name]
 max_displacement = float(displacement_norms.max())
 max_displacement_ratio = max_displacement / max(base_extent, BODY_DISTANCE_EPSILON)
 if max_displacement_ratio > MAX_DISPLACEMENT_RATIO_LIMIT:
@@ -869,7 +975,15 @@ if max_displacement_ratio > MAX_DISPLACEMENT_RATIO_LIMIT:
         )
         worst_motion = interpolate(body_motion, worst_progress)
         worst_position = base_vertices + worst_motion
-        worst_style = np.zeros((len(base_vertices), style_latent_dimensions), dtype=np.float32)
+        worst_style_vector = np.asarray(
+            style_presets[worst_style_name],
+            dtype=np.float32,
+        )
+        worst_style = np.repeat(
+            worst_style_vector[None, :],
+            len(base_vertices),
+            axis=0,
+        )
         if base_input_features == 9:
             worst_inputs = np.concatenate([worst_pose, base_vertices, worst_motion, worst_style], axis=1)
         else:
@@ -890,6 +1004,7 @@ if max_displacement_ratio > MAX_DISPLACEMENT_RATIO_LIMIT:
         "DNN出力の変位が異常に大きく、GLBのバウンディングボックスが破綻します。\n"
         f"基準メッシュの対角長: {base_extent:.6f}\n"
         f"最大変位: {max_displacement:.6f} (フレーム {worst_frame})\n"
+        f"Length candidate: {worst_style_name}\n"
         f"変位/対角長の比: {max_displacement_ratio:.2f}倍\n"
         "モデルの学習データ・入力スケール・body_motionの変換係数を見直してください。"
         f"{stale_model_hint}"
@@ -1112,6 +1227,8 @@ if result.returncode != 0:
     )
 if not os.path.isfile(glb_path) or os.path.getsize(glb_path) == 0:
     raise RuntimeError(f"GLBが生成されませんでした: {glb_path}")
+with open(os.path.join(output_dir, "skirt_length_release.json"), "w", encoding="utf-8") as file:
+    json.dump(public_release_manifest, file, indent=2, ensure_ascii=False)
 print(f"スカートGLBを保存しました: {glb_path}")
 print(f"姿勢対応情報を保存しました: {mapping_path}")
 print(f"頂点数: {len(base_vertices):,}, 面数: {len(faces):,}, フレーム数: {num_animation_frames}")

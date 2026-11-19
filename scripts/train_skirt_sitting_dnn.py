@@ -51,6 +51,10 @@ INPUT_FEATURES = int(globals().get("DNN_INPUT_FEATURES", 12))
 # 潜在スタイルベクトル [length, tightness, pleats] の次元数
 STYLE_LATENT_DIMENSIONS = 3
 
+# 学習時に許可するのはLengthだけを変えた安全教師プリセット。
+ALLOWED_STYLE_PRESETS = {"base"}
+LENGTH_RELEASE_BLOCKED_STATUS = "disabled_pending_cloth_bake_coverage_and_image_qa"
+
 # スタイルzを除く従来の入力次元 9 または 12
 BASE_INPUT_FEATURES = INPUT_FEATURES - STYLE_LATENT_DIMENSIONS
 
@@ -66,7 +70,7 @@ NUM_POSE_SAMPLES = int(globals().get("DNN_NUM_POSE_SAMPLES", 61))
 HIDDEN_SIZE = int(globals().get("DNN_HIDDEN_SIZE", 192))
 
 # 最適化アルゴリズムの学習率
-LEARNING_RATE = float(globals().get("DNN_LEARNING_RATE", 1.0e-3))
+LEARNING_RATE = float(globals().get("DNN_LEARNING_RATE", 1.0e-2))
 
 # 最適化時の重み減衰係数
 WEIGHT_DECAY = float(globals().get("DNN_WEIGHT_DECAY", 1.0e-6))
@@ -107,7 +111,7 @@ MINIMUM_RESIDUAL_SCALE = 1.0e-6
 DEFAULT_TRAIN_STEPS_CUDA = 3000
 
 # CPU環境における既定の学習ステップ数
-DEFAULT_TRAIN_STEPS_CPU = 1800
+DEFAULT_TRAIN_STEPS_CPU = 6000
 
 # GPU環境における既定のバッチサイズ
 DEFAULT_BATCH_SIZE_CUDA = 8192
@@ -147,6 +151,9 @@ TRAINING_LOSS_WEIGHT_MSE = 0.2
 
 # 幾何エッジ拘束損失の合成重み
 EDGE_CONSTRAINT_WEIGHT = 0.05
+
+# 学習率の最終値を初期値に対する比率で指定する
+LEARNING_RATE_FINAL_RATIO = float(globals().get("DNN_LEARNING_RATE_FINAL_RATIO", 0.02))
 
 # 勾配クリッピングの最大ノルム閾値
 GRADIENT_CLIP_NORM = 5.0
@@ -651,10 +658,45 @@ if os.path.isfile(BODY_CONTEXT_PATH):
 
     with open(BODY_CONTEXT_PATH, "rb") as file:
         style_context = pickle.load(file)
+    if (
+        style_context.get("length_release_status") != LENGTH_RELEASE_BLOCKED_STATUS
+        or style_context.get("style_controls") != []
+    ):
+        raise RuntimeError(
+            "Length release gate metadataが未設定または未承認です。"
+            " create_skirt_body_context.pyでbase-only contextを再生成してください。"
+        )
     style_presets.update(style_context.get("style_presets", {}))
-    for style_name, style_vertices in style_context.get(
-        "skirt_style_teacher_vertices", {}
-    ).items():
+    style_teacher_sequences = style_context.get("skirt_style_teacher_vertices", {})
+    if set(style_teacher_sequences) != ALLOWED_STYLE_PRESETS:
+        raise RuntimeError(
+            "未検証Style軌道が含まれるかbase教師がありません。"
+            " create_skirt_body_context.pyを再実行してください。"
+        )
+    unexpected_presets = set(style_presets) - ALLOWED_STYLE_PRESETS
+    if unexpected_presets:
+        raise RuntimeError(
+            "旧Style軸を含むbody_contextです。"
+            f" create_skirt_body_context.pyを再実行してください: {sorted(unexpected_presets)}"
+        )
+    if set(style_presets) != ALLOWED_STYLE_PRESETS:
+        raise RuntimeError(
+            "検証済みbase以外のStyleは学習できません。"
+            " create_skirt_body_context.pyを再実行してください。"
+        )
+    if any(
+        len(vector) != STYLE_LATENT_DIMENSIONS
+        or abs(float(vector[1])) > FLOAT_EPSILON
+        or abs(float(vector[2])) > FLOAT_EPSILON
+        for vector in style_presets.values()
+    ):
+        raise RuntimeError("Style潜在値はLength軸だけを使用できます。")
+    for style_name, style_vertices in style_teacher_sequences.items():
+        if style_name not in ALLOWED_STYLE_PRESETS:
+            raise RuntimeError(
+                f"未対応のStyle教師です: {style_name}。"
+                " body_contextを再生成してください。"
+            )
         sequence = np.asarray(style_vertices, dtype=np.float32)
         if sequence.shape != teacher_vertices.shape:
             raise ValueError(
@@ -790,6 +832,12 @@ optimizer = torch.optim.AdamW(
     lr=LEARNING_RATE,
     weight_decay=WEIGHT_DECAY,
 )
+# 学習率を終盤に向けて下げ、一定学習率で見られた損失の振動を抑える
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer,
+    T_max=train_steps,
+    eta_min=LEARNING_RATE * LEARNING_RATE_FINAL_RATIO,
+)
 
 # メッシュ幾何拘束用のエッジリストと初期エッジ長を構築
 edge_set = set()
@@ -843,6 +891,7 @@ for step in range(1, train_steps + 1):
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), GRADIENT_CLIP_NORM)
     optimizer.step()
+    scheduler.step()
 
     if step == 1 or step == train_steps or step % PRINT_INTERVAL == 0:
         model.eval()
@@ -891,6 +940,8 @@ torch.save(
         "face_count": num_faces,
         "target_source": target_source,
         "style_latent_schema": ["length", "tightness", "pleats"],
+        "style_controls": [],
+        "length_release_status": LENGTH_RELEASE_BLOCKED_STATUS,
         "style_presets": style_presets,
     },
     checkpoint_path,
@@ -915,6 +966,8 @@ with open(metadata_path, "w", encoding="utf-8") as file:
                 else "body_position_and_body_motion"
             ),
             "style_latent_schema": ["length", "tightness", "pleats"],
+            "style_controls": [],
+            "length_release_status": LENGTH_RELEASE_BLOCKED_STATUS,
             "style_presets": style_presets,
             "vertex_count": num_points,
             "face_count": num_faces,

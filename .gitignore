@@ -43,3 +43,6 @@ next-env.d.ts
 egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.json
 egaken-b4a7e-firebase-adminsdk-fbsvc-5ca1f7bfac.txt
 egaken-b4a7e-firebase-adminsdk-fbsvc-dacdaab784.json
+
+# スカートLengthの画像QA(作業用。renderステップで再生成できる)
+/docs/skirt_length_qa/
